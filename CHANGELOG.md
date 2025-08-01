@@ -1,3 +1,10 @@
+# [1.1.0](https://github.com/kriss-u/py-ast/compare/v1.0.0...v1.1.0) (2025-08-01)
+
+
+### Features
+
+* remove type comments and type ignore from the parser ([4c37baa](https://github.com/kriss-u/py-ast/commit/4c37baa476c3fdb8ad9031034d122a1b007bd668))
+
 # 1.0.0 (2025-08-01)
 
 
