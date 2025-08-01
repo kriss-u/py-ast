@@ -1,4 +1,4 @@
-import { parseExpression, assertNodeType } from "./test-helpers.js";
+import { assertNodeType, parseExpression } from "./test-helpers.js";
 
 describe("Binary Operations", () => {
 	test("arithmetic operators", () => {

@@ -1,4 +1,4 @@
-import { parseStatement, assertNodeType } from "./test-helpers.js";
+import { assertNodeType, parseStatement } from "./test-helpers.js";
 
 describe("Assignment Statements", () => {
 	test("simple assignment", () => {

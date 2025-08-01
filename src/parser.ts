@@ -3,31 +3,31 @@
  * Based on the Python ASDL grammar specification
  */
 
-import { Lexer, Token, TokenType } from "./lexer.js";
-import {
-	ASTNode,
-	Module,
-	StmtNode,
-	ExprNode,
-	OperatorNode,
-	UnaryOpNode,
-	CmpOpNode,
-	Arguments,
+import { Lexer, type Token, TokenType } from "./lexer.js";
+import type {
 	Arg,
-	Keyword,
-	WithItem,
+	Arguments,
+	ASTNode,
+	CmpOpNode,
 	Comprehension,
 	ExceptHandler,
-	TypeIgnore,
-	TypeParamNode,
-	PatternNode,
-	MatchCase,
-	Load,
-	Store,
-	JoinedStr,
+	ExprNode,
 	FormattedValue,
+	JoinedStr,
+	Keyword,
+	Load,
+	MatchCase,
+	Module,
+	OperatorNode,
+	PatternNode,
+	StmtNode,
+	Store,
 	Try,
 	TryStar,
+	TypeIgnore,
+	TypeParamNode,
+	UnaryOpNode,
+	WithItem,
 } from "./types.js";
 
 export interface ParseOptions {
@@ -261,8 +261,7 @@ export class Parser {
 				let name = this.consume(TokenType.NAME, "Expected module name").value;
 				// Handle dotted names like 'os.path'
 				while (this.match(TokenType.DOT)) {
-					name +=
-						"." + this.consume(TokenType.NAME, "Expected name after '.'").value;
+					name += `.${this.consume(TokenType.NAME, "Expected name after '.'").value}`;
 				}
 
 				let asname: string | undefined;
@@ -308,8 +307,7 @@ export class Parser {
 				module = this.advance().value;
 				// Handle dotted module names
 				while (this.match(TokenType.DOT)) {
-					module +=
-						"." + this.consume(TokenType.NAME, "Expected name after '.'").value;
+					module += `.${this.consume(TokenType.NAME, "Expected name after '.'").value}`;
 				}
 			}
 
@@ -891,6 +889,7 @@ export class Parser {
 
 	private parseAsyncStmt(start: Token): StmtNode {
 		if (this.match(TokenType.DEF)) {
+			// biome-ignore lint/suspicious/noExplicitAny: Type assertion needed for object spreading
 			const funcDef = this.parseFunctionDef(this.previous()) as any;
 			return {
 				...funcDef,
@@ -899,6 +898,7 @@ export class Parser {
 				col_offset: start.col_offset,
 			};
 		} else if (this.match(TokenType.FOR)) {
+			// biome-ignore lint/suspicious/noExplicitAny: Type assertion needed for object spreading
 			const forStmt = this.parseForStmt(this.previous()) as any;
 			return {
 				...forStmt,
@@ -907,6 +907,7 @@ export class Parser {
 				col_offset: start.col_offset,
 			};
 		} else if (this.match(TokenType.WITH)) {
+			// biome-ignore lint/suspicious/noExplicitAny: Type assertion needed for object spreading
 			const withStmt = this.parseWithStmt(this.previous()) as any;
 			return {
 				...withStmt,
@@ -1029,6 +1030,7 @@ export class Parser {
 			)
 		) {
 			const token = this.previous();
+			// biome-ignore lint/suspicious/noExplicitAny: Value can be string, number, boolean, or null
 			let value: any;
 
 			switch (token.type) {
@@ -1198,7 +1200,7 @@ export class Parser {
 			};
 		}
 
-		let expr = this.parseAndTest();
+		const expr = this.parseAndTest();
 
 		if (this.match(TokenType.OR)) {
 			const values = [expr];
@@ -1220,7 +1222,7 @@ export class Parser {
 	}
 
 	private parseAndTest(): ExprNode {
-		let expr = this.parseNotTest();
+		const expr = this.parseNotTest();
 
 		// Check for named expression (walrus operator :=)
 		if (this.match(TokenType.COLONEQUAL)) {
@@ -1271,7 +1273,7 @@ export class Parser {
 	}
 
 	private parseComparison(): ExprNode {
-		let expr = this.parseExpr();
+		const expr = this.parseExpr();
 
 		if (this.matchComparison()) {
 			const ops: CmpOpNode[] = [];
@@ -1852,7 +1854,6 @@ export class Parser {
 					// Move all current args to posonlyargs
 					posonlyargs.push(...args);
 					args.length = 0;
-					continue;
 				} else if (this.match(TokenType.STAR)) {
 					seenStar = true;
 					if (this.check(TokenType.NAME)) {
@@ -2630,7 +2631,7 @@ export class Parser {
 			const expr = tempParser.parseExpr();
 
 			return expr;
-		} catch (error) {
+		} catch (_error) {
 			// Fallback: treat as a simple name if parsing fails
 			return {
 				nodeType: "Name",
@@ -2835,6 +2836,7 @@ export function parseFile(
 
 // ==== Additional utility functions ====
 
+// biome-ignore lint/suspicious/noExplicitAny: Function evaluates Python literals which can be any type
 export function literalEval(source: string): any {
 	// For literal evaluation, we just parse the source and evaluate the first expression
 	const ast = parse(source);
@@ -2849,6 +2851,7 @@ export function literalEval(source: string): any {
 	throw new Error("No expression found to evaluate");
 }
 
+// biome-ignore lint/suspicious/noExplicitAny: Function evaluates Python literals which can be any type
 function evaluateLiteral(node: ExprNode): any {
 	switch (node.nodeType) {
 		case "Constant":
@@ -2857,7 +2860,8 @@ function evaluateLiteral(node: ExprNode): any {
 			return node.elts.map(evaluateLiteral);
 		case "Tuple":
 			return node.elts.map(evaluateLiteral);
-		case "Dict":
+		case "Dict": {
+			// biome-ignore lint/suspicious/noExplicitAny: Dictionary values can be any type
 			const result: Record<string, any> = {};
 			for (let i = 0; i < node.keys.length; i++) {
 				const key = node.keys[i];
@@ -2869,6 +2873,7 @@ function evaluateLiteral(node: ExprNode): any {
 				result[keyValue] = value;
 			}
 			return result;
+		}
 		case "Set":
 			return new Set(node.elts.map(evaluateLiteral));
 		case "UnaryOp":
@@ -2900,6 +2905,7 @@ export function copyLocation(newNode: ASTNode, oldNode: ASTNode): ASTNode {
 
 export function fixMissingLocations(node: ASTNode): ASTNode {
 	function fix(
+		// biome-ignore lint/suspicious/noExplicitAny: Supposed to be any
 		node: any,
 		parentLineno = 1,
 		parentColOffset = 0,
@@ -2951,6 +2957,7 @@ export function fixMissingLocations(node: ASTNode): ASTNode {
 }
 
 export function incrementLineno(node: ASTNode, n: number = 1): ASTNode {
+	// biome-ignore lint/suspicious/noExplicitAny: Function needs to traverse any AST node structure
 	function increment(node: any): void {
 		if (!node || typeof node !== "object") return;
 

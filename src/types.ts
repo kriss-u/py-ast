@@ -417,6 +417,7 @@ export interface JoinedStr extends Located {
 
 export interface Constant extends Located {
 	nodeType: "Constant";
+	// biome-ignore lint/suspicious/noExplicitAny: could be any type
 	value: any; // string, number, boolean, null, etc.
 	kind?: string;
 }
@@ -718,6 +719,7 @@ export interface MatchValue extends Located {
 
 export interface MatchSingleton extends Located {
 	nodeType: "MatchSingleton";
+	// biome-ignore lint/suspicious/noExplicitAny: could be None, True, False
 	value: any; // None, True, False
 }
 

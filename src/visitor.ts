@@ -3,7 +3,7 @@
  * Provides visitor pattern for traversing Python AST nodes
  */
 
-import { ASTNodeUnion } from "./types.js";
+import type { ASTNodeUnion } from "./types.js";
 
 /**
  * Generic visitor that can traverse any AST node
@@ -38,11 +38,13 @@ export class NodeVisitor {
 	/**
 	 * Visit a node - dispatches to specific visit method
 	 */
+	// biome-ignore lint/suspicious/noExplicitAny: Visitor pattern requires dynamic return types
 	visit(node: ASTNodeUnion): any {
 		const methodName = `visit${node.nodeType}`;
 		const methodNameUnderscore = `visit_${node.nodeType}`;
 
 		const method =
+			// biome-ignore lint/suspicious/noExplicitAny: Dynamic method lookup requires any
 			(this as any)[methodName] || (this as any)[methodNameUnderscore];
 
 		if (method && typeof method === "function") {
@@ -80,12 +82,14 @@ export class NodeTransformer extends NodeVisitor {
 	 * Called if no explicit visitor function exists for a node
 	 */
 	genericVisit(node: ASTNodeUnion): ASTNodeUnion {
+		// biome-ignore lint/suspicious/noExplicitAny: Generic node cloning requires any for dynamic properties
 		const newNode = { ...node } as any;
 
 		for (const [key, value] of Object.entries(node)) {
 			if (key === "nodeType") continue;
 
 			if (Array.isArray(value)) {
+				// biome-ignore lint/suspicious/noExplicitAny: Array can contain various AST node types
 				const newArray: any[] = [];
 				for (const item of value) {
 					if (item && typeof item === "object" && "nodeType" in item) {

@@ -1,4 +1,4 @@
-import { parseCode, testRoundtrip, countNodeTypes } from "./test-helpers.js";
+import { countNodeTypes, parseCode, testRoundtrip } from "./test-helpers.js";
 
 describe("Parser Integration Tests", () => {
 	test("comprehensive Python syntax coverage", () => {

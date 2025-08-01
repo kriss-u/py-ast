@@ -1,4 +1,4 @@
-import { parseCode, parseExpression, assertNodeType } from "./test-helpers.js";
+import { assertNodeType, parseCode, parseExpression } from "./test-helpers.js";
 
 describe("Error Handling and Edge Cases", () => {
 	test("handles empty input", () => {

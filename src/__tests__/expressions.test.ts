@@ -1,4 +1,4 @@
-import { parseExpression, assertNodeType } from "./test-helpers.js";
+import { assertNodeType, parseExpression } from "./test-helpers.js";
 
 describe("Basic Python Literals", () => {
 	test("integer literals", () => {

@@ -5,16 +5,15 @@
  * Allows interactive exploration of Python AST parsing
  */
 
-import { promises as fs } from "fs";
-import { createInterface } from "readline";
+import { promises as fs } from "node:fs";
+import { createInterface } from "node:readline";
 import {
-	parse,
-	walk,
-	NodeVisitor,
-	unparse,
 	getDocstring,
-	iterFields,
 	iterChildNodes,
+	iterFields,
+	parse,
+	unparse,
+	walk,
 } from "../dist/index.esm.js";
 
 class InteractiveExplorer {
@@ -153,7 +152,7 @@ class InteractiveExplorer {
 
 			// Quick stats
 			let nodeCount = 0;
-			for (const node of walk(this.currentAST)) {
+			for (const _node of walk(this.currentAST)) {
 				nodeCount++;
 			}
 			console.log(`🌳 Total nodes: ${nodeCount}`);
@@ -184,7 +183,7 @@ class InteractiveExplorer {
 			// Show file stats
 			const lines = code.split("\n").length;
 			let nodeCount = 0;
-			for (const node of walk(this.currentAST)) {
+			for (const _node of walk(this.currentAST)) {
 				nodeCount++;
 			}
 
@@ -476,7 +475,7 @@ class InteractiveExplorer {
 			} else {
 				valueDesc = JSON.stringify(value);
 				if (valueDesc.length > 50) {
-					valueDesc = valueDesc.slice(0, 47) + "...";
+					valueDesc = `${valueDesc.slice(0, 47)}...`;
 				}
 			}
 			console.log(`  ${name}: ${valueDesc}`);

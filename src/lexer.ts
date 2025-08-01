@@ -827,7 +827,6 @@ export class Lexer {
 						`Unexpected character '${c}' at line ${this.position.line}, column ${this.position.column}`,
 					);
 				}
-				break;
 			default:
 				throw new Error(
 					`Unexpected character '${c}' at line ${this.position.line}, column ${this.position.column}`,

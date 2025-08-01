@@ -1,4 +1,4 @@
-import { ASTNodeUnion, ExprNode, StmtNode } from "./types.js";
+import type { ASTNodeUnion, ExprNode, StmtNode } from "./types.js";
 
 /**
  * Get the docstring from a function, class, or module node
@@ -30,6 +30,7 @@ export function getDocstring(node: ASTNodeUnion): string | null {
 /**
  * Iterate over all fields of a node
  */
+// biome-ignore lint/suspicious/noExplicitAny: Generator yields node field values which can be any type
 export function* iterFields(node: ASTNodeUnion): Generator<[string, any]> {
 	for (const [key, value] of Object.entries(node)) {
 		if (
@@ -64,6 +65,7 @@ export function* iterChildNodes(node: ASTNodeUnion): Generator<ASTNodeUnion> {
 /**
  * Check if a value is an AST node
  */
+// biome-ignore lint/suspicious/noExplicitAny: Type guard function needs to accept any value
 export function isASTNode(value: any): value is ASTNodeUnion {
 	return value && typeof value === "object" && "nodeType" in value;
 }
@@ -151,6 +153,7 @@ export const ast = {
 	 * Create a Constant node
 	 */
 	Constant(
+		// biome-ignore lint/suspicious/noExplicitAny: Constant values can be of any type (string, number, boolean, null, etc.)
 		value: any,
 		kind?: string,
 	): Extract<ExprNode, { nodeType: "Constant" }> {
@@ -190,6 +193,7 @@ export const ast = {
 		right: ExprNode,
 	): Extract<ExprNode, { nodeType: "BinOp" }> {
 		// Handle string operator shorthand
+		// biome-ignore lint/suspicious/noExplicitAny: String operator names need to be cast to operator node type
 		const operatorNode = typeof op === "string" ? { nodeType: op as any } : op;
 
 		return {

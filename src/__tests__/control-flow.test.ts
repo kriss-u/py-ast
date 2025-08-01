@@ -1,4 +1,4 @@
-import { parseStatement, assertNodeType } from "./test-helpers.js";
+import { assertNodeType, parseStatement } from "./test-helpers.js";
 
 describe("If Statements", () => {
 	test("simple if", () => {

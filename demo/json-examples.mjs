@@ -39,14 +39,14 @@ try {
 	console.log("-".repeat(40));
 	const basicJSON = JSON.stringify(ast);
 	console.log(`Compact JSON (${basicJSON.length} chars):`);
-	console.log(basicJSON.slice(0, 200) + "...");
+	console.log(`${basicJSON.slice(0, 200)}...`);
 
 	// Method 2: Pretty-printed JSON
 	console.log("\n📋 Method 2: Pretty-printed JSON");
 	console.log("-".repeat(40));
 	const prettyJSON = JSON.stringify(ast, null, 2);
 	console.log(`Pretty JSON (${prettyJSON.length} chars):`);
-	console.log(prettyJSON.split("\n").slice(0, 20).join("\n") + "\n...");
+	console.log(`${prettyJSON.split("\n").slice(0, 20).join("\n")}\n...`);
 
 	// Method 3: Filtered JSON (only specific node types)
 	console.log("\n📋 Method 3: Filtered JSON (Functions only)");
@@ -88,7 +88,7 @@ try {
 
 	const cleanJSON = JSON.stringify(ast, customReplacer, 2);
 	console.log(`Clean JSON (${cleanJSON.length} chars, positions removed):`);
-	console.log(cleanJSON.split("\n").slice(0, 15).join("\n") + "\n...");
+	console.log(`${cleanJSON.split("\n").slice(0, 15).join("\n")}\n...`);
 
 	// Method 5: Node type statistics as JSON
 	console.log("\n📋 Method 5: Node Statistics as JSON");

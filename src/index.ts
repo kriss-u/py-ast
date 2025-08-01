@@ -1,40 +1,36 @@
 // Export all types
-export * from "./types.js";
 
 // Export lexer
 export { Lexer, TokenType } from "./lexer.js";
-
-// Export visitor classes and utilities
-export { NodeVisitor, NodeTransformer, walk } from "./visitor.js";
-
 // Export parser functions
 export {
-	parse,
-	parseFile,
-	literalEval,
 	copyLocation,
 	fixMissingLocations,
 	incrementLineno,
+	literalEval,
 	type ParseOptions,
+	parse,
+	parseFile,
 } from "./parser.js";
-
+export * from "./types.js";
 // Export unparser function
 export { unparse } from "./unparser.js";
-
 // Export utilities
 export {
-	getDocstring,
-	iterFields,
-	iterChildNodes,
-	isASTNode,
-	getSourceSegment,
 	ast,
+	getDocstring,
+	getSourceSegment,
+	isASTNode,
+	iterChildNodes,
+	iterFields,
 } from "./utils.js";
+// Export visitor classes and utilities
+export { NodeTransformer, NodeVisitor, walk } from "./visitor.js";
 
 // Convenience functions similar to Python's ast module
 import { parse } from "./parser.js";
+import type { ASTNodeUnion } from "./types.js";
 import { unparse } from "./unparser.js";
-import { ASTNodeUnion } from "./types.js";
 
 /**
  * Parse Python source code and return an AST (simplified API)
@@ -85,6 +81,7 @@ export function dump(
 		showEmpty = false,
 	} = options;
 
+	// biome-ignore lint/suspicious/noExplicitAny: Supposed to be any
 	function formatNode(node: any, level: number = 0): string {
 		if (!node || typeof node !== "object") {
 			return JSON.stringify(node);

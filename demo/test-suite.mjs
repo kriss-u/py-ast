@@ -4,13 +4,12 @@
  */
 
 import {
+	getDocstring,
+	iterChildNodes,
+	iterFields,
+	NodeVisitor,
 	parse,
 	walk,
-	NodeVisitor,
-	unparse,
-	getDocstring,
-	iterFields,
-	iterChildNodes,
 } from "../dist/index.esm.js";
 
 /**
@@ -356,7 +355,7 @@ class ExampleClass:
 
 		// Test walk function
 		let nodeCount = 0;
-		for (const node of walk(ast)) {
+		for (const _node of walk(ast)) {
 			nodeCount++;
 			if (nodeCount > 5) break; // Just test first few nodes
 		}
@@ -416,7 +415,7 @@ function testErrorHandling() {
 				`⚠️  ${testCase.name}: Unexpectedly succeeded (${ast.nodeType})`,
 			);
 			unexpectedSuccesses++;
-		} catch (error) {
+		} catch (_error) {
 			console.log(`✅ ${testCase.name}: Correctly caught error`);
 			errorsHandled++;
 		}
@@ -456,7 +455,7 @@ function testPerformance() {
 			const time = end - start;
 
 			let nodeCount = 0;
-			for (const node of walk(ast)) {
+			for (const _node of walk(ast)) {
 				nodeCount++;
 			}
 

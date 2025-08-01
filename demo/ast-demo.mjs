@@ -5,21 +5,18 @@
  * Demonstrates the Python AST parser capabilities
  */
 
-import { promises as fs } from "fs";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
+import { promises as fs } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
-	parse,
-	parsePython,
-	walk,
-	NodeVisitor,
-	NodeTransformer,
-	unparse,
 	getDocstring,
-	iterFields,
-	iterChildNodes,
 	isASTNode,
-	ast,
+	iterFields,
+	NodeTransformer,
+	NodeVisitor,
+	parse,
+	unparse,
+	walk,
 } from "../dist/index.esm.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -378,7 +375,7 @@ finally:
 
 			// Count nodes
 			let nodeCount = 0;
-			for (const node of walk(ast)) {
+			for (const _node of walk(ast)) {
 				nodeCount++;
 			}
 			console.log(`📊 Total nodes: ${nodeCount}`);
@@ -487,7 +484,7 @@ if __name__ == "__main__":
 		for (let i = 0; i < iterations; i++) {
 			const start = Date.now();
 			try {
-				const ast = parse(testCase.code);
+				const _ast = parse(testCase.code);
 				const end = Date.now();
 				times.push(end - start);
 			} catch (error) {

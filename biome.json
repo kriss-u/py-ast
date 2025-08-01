@@ -6,7 +6,17 @@
 		"useIgnoreFile": false
 	},
 	"files": {
-		"ignoreUnknown": false
+		"ignoreUnknown": false,
+		"includes": [
+			"src/**/*.ts",
+			"src/**/*.js",
+			"*.ts",
+			"*.js",
+			"!src/__tests__",
+			"!src/**/*.test.*",
+			"!dist",
+			"demo/**/*.mjs"
+		]
 	},
 	"formatter": {
 		"enabled": true,

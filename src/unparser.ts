@@ -1,14 +1,14 @@
-import {
-	ASTNodeUnion,
-	ModuleNode,
-	StmtNode,
-	ExprNode,
+import type {
 	Arg,
-	Keyword,
 	Arguments,
-	OperatorNode,
-	UnaryOpNode,
+	ASTNodeUnion,
 	CmpOpNode,
+	ExprNode,
+	Keyword,
+	ModuleNode,
+	OperatorNode,
+	StmtNode,
+	UnaryOpNode,
 } from "./types.js";
 import { NodeVisitor } from "./visitor.js";
 
@@ -856,6 +856,7 @@ class Unparser extends NodeVisitor {
 		this.write(this.formatConstant(node.value));
 	}
 
+	// biome-ignore lint/suspicious/noExplicitAny: Could be of any type
 	private formatConstant(value: any): string {
 		if (value === null) return "None";
 		if (value === true) return "True";
@@ -1056,7 +1057,10 @@ class Unparser extends NodeVisitor {
 				this.visit(node.kwonlyargs[i]);
 				if (i < node.kw_defaults.length && node.kw_defaults[i]) {
 					this.write("=");
-					this.visit(node.kw_defaults[i]!);
+					const defaultValue = node.kw_defaults[i];
+					if (defaultValue) {
+						this.visit(defaultValue);
+					}
 				}
 			}
 		}

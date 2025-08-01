@@ -1,4 +1,4 @@
-import { parseExpression, assertNodeType } from "./test-helpers.js";
+import { assertNodeType, parseExpression } from "./test-helpers.js";
 
 describe("Function Calls", () => {
 	test("simple function call", () => {

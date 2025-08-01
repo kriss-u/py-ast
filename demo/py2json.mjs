@@ -5,7 +5,7 @@
  * Converts Python source files to JSON AST format
  */
 
-import { promises as fs } from "fs";
+import { promises as fs } from "node:fs";
 import { parse } from "../dist/index.esm.js";
 
 async function convertToJSON(inputFile, outputFile, options = {}) {
@@ -102,7 +102,7 @@ async function main() {
 		console.log(`  Parse time: ${result.parseTime}ms`);
 		console.log(`  JSON size: ${result.jsonSize} chars`);
 		console.log(`  Root node: ${result.nodeType}`);
-	} catch (error) {
+	} catch (_error) {
 		console.error("\n❌ Conversion failed");
 		process.exit(1);
 	}
