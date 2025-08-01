@@ -1,0 +1,15 @@
+{
+  "name": "@your-scope/python-ast-parser",
+  "version": "1.0.0",
+  "exports": "./dist/index.js",
+  "publish": {
+    "exclude": [
+      "src/",
+      "*.test.ts",
+      "tsconfig.json",
+      "rollup.config.js",
+      "jest.config.js",
+      ".eslintrc.js"
+    ]
+  }
+}
