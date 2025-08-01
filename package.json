@@ -25,7 +25,7 @@
     "lint:fix": "eslint src/**/*.ts --fix",
     "type-check": "tsc --noEmit",
     "clean": "rimraf dist",
-    "prepare": "npm run build",
+    "prepare": "husky",
     "demo": "node demo/ast-demo.mjs",
     "demo:test": "node demo/test-suite.mjs",
     "demo:interactive": "node demo/interactive.mjs",
