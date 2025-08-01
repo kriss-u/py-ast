@@ -50,7 +50,7 @@ jobs:
       - name: Sync JSR version
         if: success()
         run: npm run jsr:sync
-
+        
       - name: Commit JSR version sync
         if: success()
         run: |
