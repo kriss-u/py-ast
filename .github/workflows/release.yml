@@ -56,9 +56,9 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add jsr.json
-          git diff --staged --quiet || git commit -m "chore: [skip ci] sync JSR version"
+          git add jsr.json package-lock.json
+          git diff --staged --quiet || git commit -m "chore: sync JSR version [skip ci]"
 
       - name: Publish to JSR
         if: success()
-        run: npx jsr publish
+        run: npx jsr publish --allow-dirty
