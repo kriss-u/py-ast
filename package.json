@@ -43,6 +43,8 @@
   "author": "Your Name",
   "license": "MIT",
   "devDependencies": {
+    "@commitlint/cli": "^19.8.1",
+    "@commitlint/config-conventional": "^19.8.1",
     "@rollup/plugin-commonjs": "^25.0.0",
     "@rollup/plugin-node-resolve": "^15.0.0",
     "@rollup/plugin-typescript": "^11.0.0",
@@ -58,6 +60,5 @@
     "ts-jest": "^29.0.0",
     "tslib": "^2.6.0",
     "typescript": "^5.0.0"
-  },
-  "dependencies": {}
+  }
 }
