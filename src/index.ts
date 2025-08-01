@@ -9,13 +9,13 @@ export { NodeVisitor, NodeTransformer, walk } from "./visitor.js";
 
 // Export parser functions
 export {
-  parse,
-  parseFile,
-  literalEval,
-  copyLocation,
-  fixMissingLocations,
-  incrementLineno,
-  type ParseOptions,
+	parse,
+	parseFile,
+	literalEval,
+	copyLocation,
+	fixMissingLocations,
+	incrementLineno,
+	type ParseOptions,
 } from "./parser.js";
 
 // Export unparser function
@@ -23,12 +23,12 @@ export { unparse } from "./unparser.js";
 
 // Export utilities
 export {
-  getDocstring,
-  iterFields,
-  iterChildNodes,
-  isASTNode,
-  getSourceSegment,
-  ast,
+	getDocstring,
+	iterFields,
+	iterChildNodes,
+	isASTNode,
+	getSourceSegment,
+	ast,
 } from "./utils.js";
 
 // Convenience functions similar to Python's ast module
@@ -42,10 +42,10 @@ import { ASTNodeUnion } from "./types.js";
  * @param options Optional parsing options
  */
 export function parsePython(
-  source: string,
-  options?: { filename?: string; type_comments?: boolean }
+	source: string,
+	options?: { filename?: string; type_comments?: boolean },
 ) {
-  return parse(source, options);
+	return parse(source, options);
 }
 
 /**
@@ -54,7 +54,7 @@ export function parsePython(
  * @param filename The filename (optional, defaults to '<unknown>')
  */
 export function parseModule(source: string, filename?: string) {
-  return parse(source, { filename });
+	return parse(source, { filename });
 }
 
 /**
@@ -63,102 +63,102 @@ export function parseModule(source: string, filename?: string) {
  * @param indent The indentation string (default: 4 spaces)
  */
 export function toSource(node: ASTNodeUnion, indent: string = "    "): string {
-  return unparse(node, { indent });
+	return unparse(node, { indent });
 }
 
 /**
  * Dump an AST node to a formatted string for debugging
  */
 export function dump(
-  node: ASTNodeUnion,
-  options: {
-    annotateFields?: boolean;
-    includeAttributes?: boolean;
-    indent?: string | number;
-    showEmpty?: boolean;
-  } = {}
+	node: ASTNodeUnion,
+	options: {
+		annotateFields?: boolean;
+		includeAttributes?: boolean;
+		indent?: string | number;
+		showEmpty?: boolean;
+	} = {},
 ): string {
-  const {
-    annotateFields = true,
-    includeAttributes = false,
-    indent = null,
-    showEmpty = false,
-  } = options;
+	const {
+		annotateFields = true,
+		includeAttributes = false,
+		indent = null,
+		showEmpty = false,
+	} = options;
 
-  function formatNode(node: any, level: number = 0): string {
-    if (!node || typeof node !== "object") {
-      return JSON.stringify(node);
-    }
+	function formatNode(node: any, level: number = 0): string {
+		if (!node || typeof node !== "object") {
+			return JSON.stringify(node);
+		}
 
-    if (Array.isArray(node)) {
-      if (node.length === 0 && !showEmpty) {
-        return "[]";
-      }
-      const items = node.map((item) => formatNode(item, level + 1));
-      if (indent !== null) {
-        const indentStr =
-          typeof indent === "string" ? indent : " ".repeat(indent);
-        const currentIndent = indentStr.repeat(level + 1);
-        const parentIndent = indentStr.repeat(level);
-        return `[\n${currentIndent}${items.join(
-          `,\n${currentIndent}`
-        )}\n${parentIndent}]`;
-      }
-      return `[${items.join(", ")}]`;
-    }
+		if (Array.isArray(node)) {
+			if (node.length === 0 && !showEmpty) {
+				return "[]";
+			}
+			const items = node.map((item) => formatNode(item, level + 1));
+			if (indent !== null) {
+				const indentStr =
+					typeof indent === "string" ? indent : " ".repeat(indent);
+				const currentIndent = indentStr.repeat(level + 1);
+				const parentIndent = indentStr.repeat(level);
+				return `[\n${currentIndent}${items.join(
+					`,\n${currentIndent}`,
+				)}\n${parentIndent}]`;
+			}
+			return `[${items.join(", ")}]`;
+		}
 
-    if (!("nodeType" in node)) {
-      return JSON.stringify(node);
-    }
+		if (!("nodeType" in node)) {
+			return JSON.stringify(node);
+		}
 
-    const fields: string[] = [];
-    const nodeType = node.nodeType;
+		const fields: string[] = [];
+		const nodeType = node.nodeType;
 
-    for (const [key, value] of Object.entries(node)) {
-      if (key === "nodeType") continue;
+		for (const [key, value] of Object.entries(node)) {
+			if (key === "nodeType") continue;
 
-      if (
-        !includeAttributes &&
-        (key === "lineno" ||
-          key === "col_offset" ||
-          key === "end_lineno" ||
-          key === "end_col_offset")
-      ) {
-        continue;
-      }
+			if (
+				!includeAttributes &&
+				(key === "lineno" ||
+					key === "col_offset" ||
+					key === "end_lineno" ||
+					key === "end_col_offset")
+			) {
+				continue;
+			}
 
-      if (
-        !showEmpty &&
-        (value === null ||
-          value === undefined ||
-          (Array.isArray(value) && value.length === 0))
-      ) {
-        continue;
-      }
+			if (
+				!showEmpty &&
+				(value === null ||
+					value === undefined ||
+					(Array.isArray(value) && value.length === 0))
+			) {
+				continue;
+			}
 
-      const formattedValue = formatNode(value, level + 1);
-      if (annotateFields) {
-        fields.push(`${key}=${formattedValue}`);
-      } else {
-        fields.push(formattedValue);
-      }
-    }
+			const formattedValue = formatNode(value, level + 1);
+			if (annotateFields) {
+				fields.push(`${key}=${formattedValue}`);
+			} else {
+				fields.push(formattedValue);
+			}
+		}
 
-    const fieldsStr = fields.join(", ");
-    if (indent !== null && fields.length > 1) {
-      const indentStr =
-        typeof indent === "string" ? indent : " ".repeat(indent);
-      const currentIndent = indentStr.repeat(level + 1);
-      const parentIndent = indentStr.repeat(level);
-      return `${nodeType}(\n${currentIndent}${fields.join(
-        `,\n${currentIndent}`
-      )}\n${parentIndent})`;
-    }
+		const fieldsStr = fields.join(", ");
+		if (indent !== null && fields.length > 1) {
+			const indentStr =
+				typeof indent === "string" ? indent : " ".repeat(indent);
+			const currentIndent = indentStr.repeat(level + 1);
+			const parentIndent = indentStr.repeat(level);
+			return `${nodeType}(\n${currentIndent}${fields.join(
+				`,\n${currentIndent}`,
+			)}\n${parentIndent})`;
+		}
 
-    return `${nodeType}(${fieldsStr})`;
-  }
+		return `${nodeType}(${fieldsStr})`;
+	}
 
-  return formatNode(node);
+	return formatNode(node);
 }
 
 // Version information

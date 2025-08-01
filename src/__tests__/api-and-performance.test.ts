@@ -2,108 +2,108 @@ import { parse, unparse } from "../index.js";
 import { countNodeTypes } from "./test-helpers.js";
 
 describe("Public API Tests", () => {
-  test("parse function", () => {
-    const code = "x = 1 + 2";
-    const ast = parse(code);
+	test("parse function", () => {
+		const code = "x = 1 + 2";
+		const ast = parse(code);
 
-    expect(ast.nodeType).toBe("Module");
-    expect(ast.body).toHaveLength(1);
-    expect(ast.body[0].nodeType).toBe("Assign");
-  });
+		expect(ast.nodeType).toBe("Module");
+		expect(ast.body).toHaveLength(1);
+		expect(ast.body[0].nodeType).toBe("Assign");
+	});
 
-  test("parse with options", () => {
-    const simpleCode = "x = 1";
+	test("parse with options", () => {
+		const simpleCode = "x = 1";
 
-    // Without type comments - simple case should work
-    const ast1 = parse(simpleCode, { type_comments: false });
-    expect(ast1.nodeType).toBe("Module");
+		// Without type comments - simple case should work
+		const ast1 = parse(simpleCode, { type_comments: false });
+		expect(ast1.nodeType).toBe("Module");
 
-    // With type comments - simple case should work
-    const ast2 = parse(simpleCode, { type_comments: true });
-    expect(ast2.nodeType).toBe("Module");
+		// With type comments - simple case should work
+		const ast2 = parse(simpleCode, { type_comments: true });
+		expect(ast2.nodeType).toBe("Module");
 
-    // Test actual comment parsing now that it works
-    const codeWithComment = "x = 1  # this is a comment";
-    const ast3 = parse(codeWithComment, { type_comments: true });
-    expect(ast3.nodeType).toBe("Module");
-    expect(ast3.body).toHaveLength(1);
+		// Test actual comment parsing now that it works
+		const codeWithComment = "x = 1  # this is a comment";
+		const ast3 = parse(codeWithComment, { type_comments: true });
+		expect(ast3.nodeType).toBe("Module");
+		expect(ast3.body).toHaveLength(1);
 
-    // Test type comment parsing
-    const codeWithTypeComment = "x = 1  # type: int";
-    const ast4 = parse(codeWithTypeComment, { type_comments: true });
-    expect(ast4.nodeType).toBe("Module");
-    expect(ast4.body).toHaveLength(1);
-  });
+		// Test type comment parsing
+		const codeWithTypeComment = "x = 1  # type: int";
+		const ast4 = parse(codeWithTypeComment, { type_comments: true });
+		expect(ast4.nodeType).toBe("Module");
+		expect(ast4.body).toHaveLength(1);
+	});
 
-  test("unparse function", () => {
-    // Test basic functionality
-    const simpleCode = "x = 1";
-    const ast = parse(simpleCode);
-    const unparsed = unparse(ast);
+	test("unparse function", () => {
+		// Test basic functionality
+		const simpleCode = "x = 1";
+		const ast = parse(simpleCode);
+		const unparsed = unparse(ast);
 
-    expect(typeof unparsed).toBe("string");
-    expect(unparsed.trim()).toBe("x = 1");
+		expect(typeof unparsed).toBe("string");
+		expect(unparsed.trim()).toBe("x = 1");
 
-    // Test that unparsed code can be reparsed
-    const reparsed = parse(unparsed);
-    expect(reparsed.nodeType).toBe("Module");
-    expect(reparsed.body).toHaveLength(1);
-    expect(reparsed.body[0].nodeType).toBe("Assign");
+		// Test that unparsed code can be reparsed
+		const reparsed = parse(unparsed);
+		expect(reparsed.nodeType).toBe("Module");
+		expect(reparsed.body).toHaveLength(1);
+		expect(reparsed.body[0].nodeType).toBe("Assign");
 
-    // Test with more complex code
-    const complexCode = "def func(x, y=42):\n    return x + y";
-    const complexAst = parse(complexCode);
-    const complexUnparsed = unparse(complexAst);
-    expect(complexUnparsed.length).toBeGreaterThan(0);
+		// Test with more complex code
+		const complexCode = "def func(x, y=42):\n    return x + y";
+		const complexAst = parse(complexCode);
+		const complexUnparsed = unparse(complexAst);
+		expect(complexUnparsed.length).toBeGreaterThan(0);
 
-    // Should be able to reparse
-    const complexReparsed = parse(complexUnparsed);
-    expect(complexReparsed.nodeType).toBe("Module");
-    expect(complexReparsed.body[0].nodeType).toBe("FunctionDef");
+		// Should be able to reparse
+		const complexReparsed = parse(complexUnparsed);
+		expect(complexReparsed.nodeType).toBe("Module");
+		expect(complexReparsed.body[0].nodeType).toBe("FunctionDef");
 
-    // Test with custom indentation
-    const customIndent = unparse(complexAst, { indent: "  " });
-    expect(customIndent).toContain("  return");
-  });
+		// Test with custom indentation
+		const customIndent = unparse(complexAst, { indent: "  " });
+		expect(customIndent).toContain("  return");
+	});
 });
 
 describe("Performance Tests", () => {
-  test("large file parsing performance", () => {
-    // Generate a large Python file
-    const lines: string[] = [];
-    for (let i = 0; i < 1000; i++) {
-      lines.push(`var_${i} = ${i} * 2 + 1`);
-    }
-    const largeCode = lines.join("\n");
+	test("large file parsing performance", () => {
+		// Generate a large Python file
+		const lines: string[] = [];
+		for (let i = 0; i < 1000; i++) {
+			lines.push(`var_${i} = ${i} * 2 + 1`);
+		}
+		const largeCode = lines.join("\n");
 
-    const startTime = Date.now();
-    const ast = parse(largeCode);
-    const endTime = Date.now();
+		const startTime = Date.now();
+		const ast = parse(largeCode);
+		const endTime = Date.now();
 
-    expect(ast.body).toHaveLength(1000);
-    expect(endTime - startTime).toBeLessThan(5000); // Should parse in less than 5 seconds
-  });
+		expect(ast.body).toHaveLength(1000);
+		expect(endTime - startTime).toBeLessThan(5000); // Should parse in less than 5 seconds
+	});
 
-  test("deeply nested structure performance", () => {
-    // Create deeply nested function calls
-    let nested = "base()";
-    for (let i = 0; i < 100; i++) {
-      nested = `wrapper_${i}(${nested})`;
-    }
-    const code = `result = ${nested}`;
+	test("deeply nested structure performance", () => {
+		// Create deeply nested function calls
+		let nested = "base()";
+		for (let i = 0; i < 100; i++) {
+			nested = `wrapper_${i}(${nested})`;
+		}
+		const code = `result = ${nested}`;
 
-    const startTime = Date.now();
-    const ast = parse(code);
-    const endTime = Date.now();
+		const startTime = Date.now();
+		const ast = parse(code);
+		const endTime = Date.now();
 
-    expect(ast.body).toHaveLength(1);
-    expect(endTime - startTime).toBeLessThan(1000); // Should parse in less than 1 second
-  });
+		expect(ast.body).toHaveLength(1);
+		expect(endTime - startTime).toBeLessThan(1000); // Should parse in less than 1 second
+	});
 });
 
 describe("Memory Usage Tests", () => {
-  test("multiple parse calls don't leak memory", () => {
-    const code = `
+	test("multiple parse calls don't leak memory", () => {
+		const code = `
 def fibonacci(n):
     if n <= 1:
         return n
@@ -112,22 +112,22 @@ def fibonacci(n):
 result = fibonacci(10)
 `;
 
-    // Parse the same code multiple times
-    for (let i = 0; i < 100; i++) {
-      const ast = parse(code);
-      expect(ast.nodeType).toBe("Module");
-    }
+		// Parse the same code multiple times
+		for (let i = 0; i < 100; i++) {
+			const ast = parse(code);
+			expect(ast.nodeType).toBe("Module");
+		}
 
-    // If we get here without running out of memory, the test passes
-    expect(true).toBe(true);
-  });
+		// If we get here without running out of memory, the test passes
+		expect(true).toBe(true);
+	});
 });
 
 describe("Compatibility Tests", () => {
-  test("Python standard library patterns", () => {
-    const standardLibPatterns = [
-      // Collections
-      `
+	test("Python standard library patterns", () => {
+		const standardLibPatterns = [
+			// Collections
+			`
 from collections import defaultdict, Counter
 from collections.abc import Mapping
 
@@ -135,8 +135,8 @@ data = defaultdict(list)
 counter = Counter(items)
 `,
 
-      // Typing
-      `
+			// Typing
+			`
 from typing import List, Dict, Optional, Union, TypeVar
 from typing_extensions import Literal
 
@@ -146,8 +146,8 @@ def process(items: List[T]) -> Dict[str, T]:
     return {str(i): item for i, item in enumerate(items)}
 `,
 
-      // Dataclasses
-      `
+			// Dataclasses
+			`
 from dataclasses import dataclass, field
 from typing import List
 
@@ -158,8 +158,8 @@ class Person:
     hobbies: List[str] = field(default_factory=list)
 `,
 
-      // Context managers
-      `
+			// Context managers
+			`
 import contextlib
 from pathlib import Path
 
@@ -171,21 +171,21 @@ def temporary_file():
     finally:
         temp.unlink(missing_ok=True)
 `,
-    ];
+		];
 
-    standardLibPatterns.forEach((pattern) => {
-      expect(() => {
-        const ast = parse(pattern);
-        expect(ast.nodeType).toBe("Module");
-        expect(ast.body.length).toBeGreaterThan(0);
-      }).not.toThrow();
-    });
-  });
+		standardLibPatterns.forEach((pattern) => {
+			expect(() => {
+				const ast = parse(pattern);
+				expect(ast.nodeType).toBe("Module");
+				expect(ast.body.length).toBeGreaterThan(0);
+			}).not.toThrow();
+		});
+	});
 });
 
 describe("AST Node Coverage", () => {
-  test("comprehensive node type coverage", () => {
-    const comprehensiveCode = `
+	test("comprehensive node type coverage", () => {
+		const comprehensiveCode = `
 # All major Python constructs in one file
 
 # Imports
@@ -316,98 +316,98 @@ async with async_manager:
     pass
 `;
 
-    const ast = parse(comprehensiveCode);
-    const nodeCounts = countNodeTypes(ast);
+		const ast = parse(comprehensiveCode);
+		const nodeCounts = countNodeTypes(ast);
 
-    // Essential statement types
-    const essentialStatements = [
-      "Module",
-      "Import",
-      "ImportFrom",
-      "FunctionDef",
-      "AsyncFunctionDef",
-      "ClassDef",
-      "If",
-      "While",
-      "For",
-      "Try",
-      "With",
-      "AsyncWith",
-      "Assign",
-      "AnnAssign",
-      "AugAssign",
-      "Delete",
-      "Pass",
-      "Break",
-      "Continue",
-      "Return",
-      "Raise",
-      "Assert",
-      "Global",
-      "Nonlocal",
-      "Expr",
-    ];
+		// Essential statement types
+		const essentialStatements = [
+			"Module",
+			"Import",
+			"ImportFrom",
+			"FunctionDef",
+			"AsyncFunctionDef",
+			"ClassDef",
+			"If",
+			"While",
+			"For",
+			"Try",
+			"With",
+			"AsyncWith",
+			"Assign",
+			"AnnAssign",
+			"AugAssign",
+			"Delete",
+			"Pass",
+			"Break",
+			"Continue",
+			"Return",
+			"Raise",
+			"Assert",
+			"Global",
+			"Nonlocal",
+			"Expr",
+		];
 
-    // Essential expression types
-    const essentialExpressions = [
-      "Name",
-      "Constant",
-      "BinOp",
-      "UnaryOp",
-      "BoolOp",
-      "Compare",
-      "Call",
-      "Attribute",
-      "Subscript",
-      "List",
-      "Tuple",
-      "Set",
-      "Dict",
-      "ListComp",
-      "DictComp",
-      "SetComp",
-      "GeneratorExp",
-      "Lambda",
-      "IfExp",
-      "JoinedStr",
-      "FormattedValue",
-    ];
+		// Essential expression types
+		const essentialExpressions = [
+			"Name",
+			"Constant",
+			"BinOp",
+			"UnaryOp",
+			"BoolOp",
+			"Compare",
+			"Call",
+			"Attribute",
+			"Subscript",
+			"List",
+			"Tuple",
+			"Set",
+			"Dict",
+			"ListComp",
+			"DictComp",
+			"SetComp",
+			"GeneratorExp",
+			"Lambda",
+			"IfExp",
+			"JoinedStr",
+			"FormattedValue",
+		];
 
-    console.log("Node coverage report:");
-    console.log("Statements:");
-    essentialStatements.forEach((nodeType) => {
-      const count = nodeCounts[nodeType] || 0;
-      console.log(`  ${nodeType}: ${count}`);
-      if (count === 0) {
-        console.warn(`  ⚠️  Missing: ${nodeType}`);
-      }
-    });
+		console.log("Node coverage report:");
+		console.log("Statements:");
+		essentialStatements.forEach((nodeType) => {
+			const count = nodeCounts[nodeType] || 0;
+			console.log(`  ${nodeType}: ${count}`);
+			if (count === 0) {
+				console.warn(`  ⚠️  Missing: ${nodeType}`);
+			}
+		});
 
-    console.log("Expressions:");
-    essentialExpressions.forEach((nodeType) => {
-      const count = nodeCounts[nodeType] || 0;
-      console.log(`  ${nodeType}: ${count}`);
-      if (count === 0) {
-        console.warn(`  ⚠️  Missing: ${nodeType}`);
-      }
-    });
+		console.log("Expressions:");
+		essentialExpressions.forEach((nodeType) => {
+			const count = nodeCounts[nodeType] || 0;
+			console.log(`  ${nodeType}: ${count}`);
+			if (count === 0) {
+				console.warn(`  ⚠️  Missing: ${nodeType}`);
+			}
+		});
 
-    // Check that we have good coverage
-    const totalEssential =
-      essentialStatements.length + essentialExpressions.length;
-    const coveredEssential = [
-      ...essentialStatements,
-      ...essentialExpressions,
-    ].filter((nodeType) => (nodeCounts[nodeType] || 0) > 0).length;
+		// Check that we have good coverage
+		const totalEssential =
+			essentialStatements.length + essentialExpressions.length;
+		const coveredEssential = [
+			...essentialStatements,
+			...essentialExpressions,
+		].filter((nodeType) => (nodeCounts[nodeType] || 0) > 0).length;
 
-    const coverage = (coveredEssential / totalEssential) * 100;
-    console.log(
-      `\nOverall coverage: ${coverage.toFixed(
-        1
-      )}% (${coveredEssential}/${totalEssential})`
-    );
+		const coverage = (coveredEssential / totalEssential) * 100;
+		console.log(
+			`\nOverall coverage: ${coverage.toFixed(
+				1,
+			)}% (${coveredEssential}/${totalEssential})`,
+		);
 
-    // We should have good coverage of essential Python constructs
-    expect(coverage).toBeGreaterThan(70); // At least 70% coverage
-  });
+		// We should have good coverage of essential Python constructs
+		expect(coverage).toBeGreaterThan(70); // At least 70% coverage
+	});
 });
