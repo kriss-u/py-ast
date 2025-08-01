@@ -1,15 +1,17 @@
 {
-	"name": "@your-scope/python-ast-parser",
+	"name": "@kriss-u/py-ast",
 	"version": "1.0.0",
-	"exports": "./dist/index.js",
+	"exports": "./src/index.ts",
 	"publish": {
 		"exclude": [
-			"src/",
+			"dist/",
+			"node_modules/",
+			"tests/",
+			"demo/",
 			"*.test.ts",
-			"tsconfig.json",
-			"rollup.config.js",
-			"jest.config.js",
-			".eslintrc.js"
+			"*.config.*",
+			".github/",
+			"scripts/"
 		]
 	}
 }
