@@ -12,7 +12,46 @@ export {
 	parse,
 	parseFile,
 } from "./parser.js";
-export * from "./types.js";
+// Export essential types only (not the massive union)
+export type {
+	Alias,
+	Arg,
+	// Helper types
+	Arguments,
+	// Core interfaces
+	ASTNode,
+	// Main union types
+	ASTNodeUnion,
+	Assign,
+	Attribute,
+	BoolOpNode,
+	Call,
+	ClassDef,
+	CmpOpNode,
+	Comment,
+	Comprehension,
+	// Commonly used specific types
+	Constant,
+	ExceptHandler,
+	// Context and operators
+	ExprContextNode,
+	Expression,
+	ExprNode,
+	FunctionDef,
+	FunctionType,
+	Interactive,
+	Keyword,
+	Load,
+	Located,
+	// Module types
+	Module,
+	Name,
+	OperatorNode,
+	StmtNode,
+	Store,
+	UnaryOpNode,
+	WithItem,
+} from "./types.js";
 // Export unparser function
 export { unparse } from "./unparser.js";
 // Export utilities
@@ -29,7 +68,7 @@ export { NodeTransformer, NodeVisitor, walk } from "./visitor.js";
 
 // Convenience functions similar to Python's ast module
 import { parse } from "./parser.js";
-import type { ASTNodeUnion } from "./types.js";
+import type { ASTNodeUnion, Module } from "./types.js";
 import { unparse } from "./unparser.js";
 
 /**
@@ -40,7 +79,7 @@ import { unparse } from "./unparser.js";
 export function parsePython(
 	source: string,
 	options?: { filename?: string; comments?: boolean },
-) {
+): Module {
 	return parse(source, options);
 }
 
@@ -49,7 +88,7 @@ export function parsePython(
  * @param source The Python source code to parse
  * @param filename The filename (optional, defaults to '<unknown>')
  */
-export function parseModule(source: string, filename?: string) {
+export function parseModule(source: string, filename?: string): Module {
 	return parse(source, { filename });
 }
 

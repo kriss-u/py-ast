@@ -130,15 +130,96 @@ export function getSourceSegment(
 }
 
 /**
+ * Type for expression context values
+ */
+type ContextType = "Load" | "Store" | "Del";
+
+/**
+ * Type for constant values
+ */
+type ConstantValue = string | number | boolean | null;
+
+/**
+ * AST factory function types
+ */
+interface ASTFactory {
+	Name(id: string, ctx?: ContextType): Extract<ExprNode, { nodeType: "Name" }>;
+	Constant(
+		value: ConstantValue,
+		kind?: string,
+	): Extract<ExprNode, { nodeType: "Constant" }>;
+	Call(
+		func: ExprNode,
+		args?: ExprNode[],
+		keywords?: import("./types.js").Keyword[],
+	): Extract<ExprNode, { nodeType: "Call" }>;
+	BinOp(
+		left: ExprNode,
+		op: import("./types.js").Operator | string,
+		right: ExprNode,
+	): Extract<ExprNode, { nodeType: "BinOp" }>;
+	Assign(
+		targets: ExprNode[],
+		value: ExprNode,
+		type_comment?: string,
+	): Extract<StmtNode, { nodeType: "Assign" }>;
+	Expr(value: ExprNode): Extract<StmtNode, { nodeType: "Expr" }>;
+	List(
+		elts: ExprNode[],
+		ctx?: ContextType,
+	): Extract<ExprNode, { nodeType: "List" }>;
+	Tuple(
+		elts: ExprNode[],
+		ctx?: ContextType,
+	): Extract<ExprNode, { nodeType: "Tuple" }>;
+	Attribute(
+		value: ExprNode,
+		attr: string,
+		ctx?: ContextType,
+	): Extract<ExprNode, { nodeType: "Attribute" }>;
+	Dict(
+		keys: (ExprNode | null)[],
+		values: ExprNode[],
+	): Extract<ExprNode, { nodeType: "Dict" }>;
+	NamedExpr(
+		target: ExprNode,
+		value: ExprNode,
+	): Extract<ExprNode, { nodeType: "NamedExpr" }>;
+	Lambda(
+		args: import("./types.js").Arguments,
+		body: ExprNode,
+	): Extract<ExprNode, { nodeType: "Lambda" }>;
+	IfExp(
+		test: ExprNode,
+		body: ExprNode,
+		orelse: ExprNode,
+	): Extract<ExprNode, { nodeType: "IfExp" }>;
+	Await(value: ExprNode): Extract<ExprNode, { nodeType: "Await" }>;
+	Yield(value?: ExprNode): Extract<ExprNode, { nodeType: "Yield" }>;
+	YieldFrom(value: ExprNode): Extract<ExprNode, { nodeType: "YieldFrom" }>;
+	Starred(
+		value: ExprNode,
+		ctx?: ContextType,
+	): Extract<ExprNode, { nodeType: "Starred" }>;
+	Slice(
+		lower?: ExprNode,
+		upper?: ExprNode,
+		step?: ExprNode,
+	): Extract<ExprNode, { nodeType: "Slice" }>;
+	Delete(targets: ExprNode[]): Extract<StmtNode, { nodeType: "Delete" }>;
+	Nonlocal(names: string[]): Extract<StmtNode, { nodeType: "Nonlocal" }>;
+}
+
+/**
  * Node factory functions for creating AST nodes
  */
-export const ast = {
+export const ast: ASTFactory = {
 	/**
 	 * Create a Name node
 	 */
 	Name(
 		id: string,
-		ctx: "Load" | "Store" | "Del" = "Load",
+		ctx: ContextType = "Load",
 	): Extract<ExprNode, { nodeType: "Name" }> {
 		return {
 			nodeType: "Name",
@@ -153,8 +234,7 @@ export const ast = {
 	 * Create a Constant node
 	 */
 	Constant(
-		// biome-ignore lint/suspicious/noExplicitAny: Constant values can be of any type (string, number, boolean, null, etc.)
-		value: any,
+		value: ConstantValue,
 		kind?: string,
 	): Extract<ExprNode, { nodeType: "Constant" }> {
 		return {
@@ -241,7 +321,7 @@ export const ast = {
 	 */
 	List(
 		elts: ExprNode[],
-		ctx: "Load" | "Store" | "Del" = "Load",
+		ctx: ContextType = "Load",
 	): Extract<ExprNode, { nodeType: "List" }> {
 		return {
 			nodeType: "List",
@@ -257,7 +337,7 @@ export const ast = {
 	 */
 	Tuple(
 		elts: ExprNode[],
-		ctx: "Load" | "Store" | "Del" = "Load",
+		ctx: ContextType = "Load",
 	): Extract<ExprNode, { nodeType: "Tuple" }> {
 		return {
 			nodeType: "Tuple",
@@ -274,7 +354,7 @@ export const ast = {
 	Attribute(
 		value: ExprNode,
 		attr: string,
-		ctx: "Load" | "Store" | "Del" = "Load",
+		ctx: ContextType = "Load",
 	): Extract<ExprNode, { nodeType: "Attribute" }> {
 		return {
 			nodeType: "Attribute",
@@ -393,7 +473,7 @@ export const ast = {
 	 */
 	Starred(
 		value: ExprNode,
-		ctx: "Load" | "Store" | "Del" = "Load",
+		ctx: ContextType = "Load",
 	): Extract<ExprNode, { nodeType: "Starred" }> {
 		return {
 			nodeType: "Starred",
