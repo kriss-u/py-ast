@@ -10,13 +10,13 @@
 		"includes": [
 			"src/**/*.ts",
 			"src/**/*.js",
+			"*.md",
+			"*.json",
 			"*.ts",
 			"*.js",
 			"!dist",
 			"!scripts",
-			"demo/**/*.mjs",
-			"*.json",
-			"*.md"
+			"demo/**/*.mjs"
 		]
 	},
 	"formatter": {

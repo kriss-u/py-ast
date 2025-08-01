@@ -16,10 +16,12 @@ A comprehensive TypeScript-based Python source code parser that generates Abstra
 ## Installation
 
 ```bash
-npm install python-ast-parser
+npm install py-ast
 ```
 
 ## Quick Start
+
+### Basic Parsing and Code Generation
 
 ```typescript
 import {
@@ -28,7 +30,7 @@ import {
   unparse,
   walk,
   NodeVisitor,
-} from "python-ast-parser";
+} from "py-ast";
 
 // Parse Python source code - that's it! No mode selection needed.
 const pythonCode = `
@@ -49,34 +51,347 @@ console.log(ast.nodeType); // "Module"
 const regeneratedCode = unparse(ast);
 console.log(regeneratedCode);
 // Output: Properly formatted Python code equivalent to the original
+```
 
-// Alternative: use the more explicit function name
-const ast2 = parsePython(pythonCode, { filename: "fib.py" });
+### Parsing Different Python Constructs
 
-// Optional configuration
-const astWithComments = parse(pythonCode, {
+```typescript
+import { parse, unparse } from "py-ast";
+
+// 1. Simple expressions
+const expr = parse("x + y * 2");
+console.log(expr.nodeType); // "Module"
+console.log(unparse(expr)); // "x + y * 2"
+
+// 2. Function definitions
+const funcCode = `
+def greet(name, greeting="Hello"):
+    return f"{greeting}, {name}!"
+`;
+const funcAst = parse(funcCode);
+console.log(unparse(funcAst));
+
+// 3. Class definitions with methods
+const classCode = `
+class Calculator:
+    def __init__(self, precision=2):
+        self.precision = precision
+    
+    def add(self, a, b):
+        return round(a + b, self.precision)
+    
+    @staticmethod
+    def multiply(x, y):
+        return x * y
+`;
+const classAst = parse(classCode);
+console.log(unparse(classAst));
+
+// 4. Complex expressions with comprehensions
+const complexExpr = parse(`
+result = [x**2 for x in range(10) if x % 2 == 0]
+data = {key: value for key, value in items.items() if value > 0}
+`);
+console.log(unparse(complexExpr));
+
+// 5. Async/await patterns
+const asyncCode = `
+async def fetch_data(urls):
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch_url(session, url) for url in urls]
+        return await asyncio.gather(*tasks)
+`;
+const asyncAst = parse(asyncCode);
+console.log(unparse(asyncAst));
+```
+
+### Working with Parse Options
+
+```typescript
+import { parse, parsePython } from "py-ast";
+
+// Basic parsing with filename for better error reporting
+const ast1 = parse(pythonCode, { filename: "fibonacci.py" });
+
+// Enable type comments parsing
+const codeWithTypes = `
+def process_data(items):
+    # type: (List[int]) -> List[int]
+    return [x * 2 for x in items]
+`;
+const astWithComments = parse(codeWithTypes, {
   type_comments: true,
-  filename: "fibonacci.py",
+  filename: "typed_code.py",
 });
 
-// Walk all nodes
+// Alternative explicit function name
+const ast2 = parsePython(pythonCode, { filename: "fib.py" });
+```
+
+### AST Traversal and Analysis
+
+```typescript
+import { parse, walk, NodeVisitor } from "py-ast";
+
+const code = `
+class DataProcessor:
+    def __init__(self, config):
+        self.config = config
+    
+    def process_file(self, filename):
+        with open(filename, 'r') as f:
+            data = f.read()
+        return self.transform_data(data)
+    
+    def transform_data(self, data):
+        if self.config.uppercase:
+            return data.upper()
+        return data.lower()
+
+processor = DataProcessor({'uppercase': True})
+result = processor.process_file('input.txt')
+`;
+
+const ast = parse(code);
+
+// 1. Walk all nodes in the AST
+console.log("=== Walking all nodes ===");
 for (const node of walk(ast)) {
-  console.log(node.nodeType);
+  console.log(`${node.nodeType} at line ${node.lineno || 'unknown'}`);
 }
 
-// Custom visitor
-class FunctionVisitor extends NodeVisitor {
+// 2. Custom visitor to analyze code structure
+class CodeAnalyzer extends NodeVisitor {
   functions: string[] = [];
+  classes: string[] = [];
+  variables: string[] = [];
+  imports: string[] = [];
 
   visitFunctionDef(node: any) {
     this.functions.push(node.name);
+    this.genericVisit(node); // Continue visiting child nodes
+  }
+
+  visitClassDef(node: any) {
+    this.classes.push(node.name);
+    this.genericVisit(node);
+  }
+
+  visitAssign(node: any) {
+    // Extract variable names from assignments
+    for (const target of node.targets) {
+      if (target.nodeType === "Name") {
+        this.variables.push(target.id);
+      }
+    }
+    this.genericVisit(node);
+  }
+
+  visitImport(node: any) {
+    for (const alias of node.names) {
+      this.imports.push(alias.name);
+    }
+    this.genericVisit(node);
+  }
+
+  visitImportFrom(node: any) {
+    const module = node.module || '';
+    for (const alias of node.names) {
+      this.imports.push(`${module}.${alias.name}`);
+    }
     this.genericVisit(node);
   }
 }
 
-const visitor = new FunctionVisitor();
-visitor.visit(ast);
-console.log(visitor.functions); // ["fibonacci"]
+const analyzer = new CodeAnalyzer();
+analyzer.visit(ast);
+
+console.log("=== Code Analysis Results ===");
+console.log("Functions:", analyzer.functions);
+console.log("Classes:", analyzer.classes);
+console.log("Variables:", analyzer.variables);
+console.log("Imports:", analyzer.imports);
+```
+
+### Safe Literal Evaluation
+
+```typescript
+import { literalEval } from "py-ast";
+
+// Safely evaluate Python literals
+console.log(literalEval("42"));              // 42
+console.log(literalEval('"hello world"'));   // "hello world"
+console.log(literalEval("[1, 2, 3, 4]"));    // [1, 2, 3, 4]
+console.log(literalEval('{"a": 1, "b": 2}')); // {a: 1, b: 2}
+console.log(literalEval("(1, 2, 3)"));       // [1, 2, 3] (tuple as array)
+console.log(literalEval("{1, 2, 3}"));       // [1, 2, 3] (set as array)
+console.log(literalEval("True"));            // true
+console.log(literalEval("None"));            // null
+
+// Complex nested structures
+const complexLiteral = `{
+    "config": {
+        "debug": True,
+        "max_items": 100,
+        "allowed_types": ["string", "number", "boolean"]
+    },
+    "data": [1, 2.5, "test", None]
+}`;
+console.log(literalEval(complexLiteral));
+```
+
+### Code Transformation and Generation
+
+```typescript
+import { parse, unparse, NodeTransformer } from "py-ast";
+
+const originalCode = `
+def calculate_total(items, tax_rate):
+    subtotal = sum(item.price for item in items)
+    tax = subtotal * tax_rate
+    total = subtotal + tax
+    return total
+
+def process_order(order):
+    total = calculate_total(order.items, 0.08)
+    if total > 100:
+        total *= 0.9  # 10% discount for orders over $100
+    return total
+`;
+
+const ast = parse(originalCode);
+
+// Transform the AST - rename functions and variables
+class CodeRefactorer extends NodeTransformer {
+  visitFunctionDef(node: any) {
+    // Rename functions with a prefix
+    if (node.name === "calculate_total") {
+      return { ...node, name: "compute_order_total" };
+    }
+    if (node.name === "process_order") {
+      return { ...node, name: "handle_order_processing" };
+    }
+    return this.genericVisit(node);
+  }
+
+  visitName(node: any) {
+    // Rename variables
+    const renames = {
+      "subtotal": "base_amount",
+      "tax_rate": "tax_percentage",
+      "total": "final_amount"
+    };
+    
+    if (renames[node.id]) {
+      return { ...node, id: renames[node.id] };
+    }
+    return node;
+  }
+
+  visitCall(node: any) {
+    // Update function calls to match renamed functions
+    if (node.func.nodeType === "Name" && node.func.id === "calculate_total") {
+      return {
+        ...node,
+        func: { ...node.func, id: "compute_order_total" }
+      };
+    }
+    return this.genericVisit(node);
+  }
+}
+
+const transformer = new CodeRefactorer();
+const transformedAst = transformer.visit(ast);
+
+// Generate the refactored code
+const refactoredCode = unparse(transformedAst);
+console.log("=== Refactored Code ===");
+console.log(refactoredCode);
+
+// Custom indentation
+const compactCode = unparse(transformedAst, { indent: "  " });
+console.log("=== Compact Version ===");
+console.log(compactCode);
+```
+
+### Advanced Usage: JSON Serialization and Analysis
+
+```typescript
+import { parse, walk } from "py-ast";
+
+const pythonCode = `
+import asyncio
+from dataclasses import dataclass
+from typing import List, Optional
+
+@dataclass
+class User:
+    id: int
+    name: str
+    email: Optional[str] = None
+
+class UserService:
+    def __init__(self, database_url: str):
+        self.db_url = database_url
+        self.users: List[User] = []
+    
+    async def fetch_user(self, user_id: int) -> Optional[User]:
+        # Simulate async database call
+        await asyncio.sleep(0.1)
+        return next((u for u in self.users if u.id == user_id), None)
+    
+    def add_user(self, user: User) -> None:
+        self.users.append(user)
+
+# Usage
+service = UserService("postgresql://localhost/mydb")
+user = User(1, "John Doe", "john@example.com")
+service.add_user(user)
+`;
+
+const ast = parse(pythonCode);
+
+// Serialize AST to JSON for analysis or storage
+const astJson = JSON.stringify(ast, null, 2);
+console.log("AST JSON size:", astJson.length, "characters");
+
+// Analyze AST structure
+const nodeStats = new Map<string, number>();
+for (const node of walk(ast)) {
+  const count = nodeStats.get(node.nodeType) || 0;
+  nodeStats.set(node.nodeType, count + 1);
+}
+
+console.log("=== AST Node Statistics ===");
+console.log(Object.fromEntries(
+  Array.from(nodeStats.entries()).sort((a, b) => b[1] - a[1])
+));
+
+// Extract specific information
+class ImportAnalyzer extends NodeVisitor {
+  imports: Array<{type: string, module: string, names: string[]}> = [];
+
+  visitImport(node: any) {
+    this.imports.push({
+      type: 'import',
+      module: '',
+      names: node.names.map((alias: any) => alias.name)
+    });
+  }
+
+  visitImportFrom(node: any) {
+    this.imports.push({
+      type: 'from_import',
+      module: node.module || '',
+      names: node.names.map((alias: any) => alias.name)
+    });
+  }
+}
+
+const importAnalyzer = new ImportAnalyzer();
+importAnalyzer.visit(ast);
+console.log("=== Import Analysis ===");
+console.log(importAnalyzer.imports);
 ```
 
 ## API Reference
@@ -141,7 +456,7 @@ Converts an AST node back to Python source code. This is the reverse operation o
 **Returns:** `string` - The generated Python source code
 
 ```typescript
-import { parse, unparse } from "python-ast-parser";
+import { parse, unparse } from "py-ast";
 
 // Basic roundtrip: parse then unparse
 const originalCode = "def greet(name):\n    return f'Hello, {name}!'";
@@ -197,7 +512,7 @@ for (const node of walk(ast)) {
 Alternative name for `parse()` that makes the intent clearer.
 
 ```typescript
-import { parsePython } from "python-ast-parser";
+import { parsePython } from "py-ast";
 
 const ast = parsePython("x = 42", { filename: "script.py" });
 ```
@@ -207,7 +522,7 @@ const ast = parsePython("x = 42", { filename: "script.py" });
 Legacy convenience function for parsing with just a filename.
 
 ```typescript
-import { parseModule } from "python-ast-parser";
+import { parseModule } from "py-ast";
 
 const ast = parseModule("def hello(): pass", "hello.py");
 ```
@@ -219,7 +534,7 @@ const ast = parseModule("def hello(): pass", "hello.py");
 Low-level tokenizer for Python source code.
 
 ```typescript
-import { Lexer, TokenType } from "python-ast-parser";
+import { Lexer, TokenType } from "py-ast";
 
 const lexer = new Lexer("x = 42 + 3.14");
 const tokens = lexer.tokenize();
@@ -291,7 +606,7 @@ The library provides TypeScript interfaces for all Python AST nodes based on the
 ### Parse and Analyze Python Code
 
 ```typescript
-import { parse, walk, NodeVisitor } from "python-ast-parser";
+import { parse, walk, NodeVisitor } from "py-ast";
 
 const code = `
 class Calculator:
@@ -351,7 +666,7 @@ console.log(finder.functions); // ['sync_function', 'async_function']
 ### Code Generation and Transformation
 
 ```typescript
-import { parse, unparse, NodeTransformer } from "python-ast-parser";
+import { parse, unparse, NodeTransformer } from "py-ast";
 
 // Parse, modify, and regenerate Python code
 const originalCode = `
