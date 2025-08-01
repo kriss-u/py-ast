@@ -66,8 +66,7 @@ Analyzing: demo/python-files/basic-operations.py
 JSON Structure Preview:
 {
   "type": "Module",
-  "body": [...],
-  "type_ignores": []
+  "body": [...]
 }
 ```
 
@@ -136,8 +135,7 @@ Available files:
 > json
 {
   "type": "Module",
-  "body": [...],
-  "type_ignores": []
+  "body": [...]
 }
 
 > save output.json

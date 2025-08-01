@@ -14,23 +14,23 @@ describe("Public API Tests", () => {
 	test("parse with options", () => {
 		const simpleCode = "x = 1";
 
-		// Without type comments - simple case should work
-		const ast1 = parse(simpleCode, { type_comments: false });
+		// Without comments - simple case should work
+		const ast1 = parse(simpleCode, { comments: false });
 		expect(ast1.nodeType).toBe("Module");
 
-		// With type comments - simple case should work
-		const ast2 = parse(simpleCode, { type_comments: true });
+		// With comments - simple case should work
+		const ast2 = parse(simpleCode, { comments: true });
 		expect(ast2.nodeType).toBe("Module");
 
 		// Test actual comment parsing now that it works
 		const codeWithComment = "x = 1  # this is a comment";
-		const ast3 = parse(codeWithComment, { type_comments: true });
+		const ast3 = parse(codeWithComment, { comments: true });
 		expect(ast3.nodeType).toBe("Module");
 		expect(ast3.body).toHaveLength(1);
 
-		// Test type comment parsing
-		const codeWithTypeComment = "x = 1  # type: int";
-		const ast4 = parse(codeWithTypeComment, { type_comments: true });
+		// Test hash comment parsing
+		const codeWithHashComment = "x = 1  # this is a hash comment";
+		const ast4 = parse(codeWithHashComment, { comments: true });
 		expect(ast4.nodeType).toBe("Module");
 		expect(ast4.body).toHaveLength(1);
 	});

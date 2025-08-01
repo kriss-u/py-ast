@@ -9,6 +9,7 @@ import type {
 	Arguments,
 	ASTNode,
 	CmpOpNode,
+	Comment,
 	Comprehension,
 	ExceptHandler,
 	ExprNode,
@@ -24,7 +25,6 @@ import type {
 	Store,
 	Try,
 	TryStar,
-	TypeIgnore,
 	TypeParamNode,
 	UnaryOpNode,
 	WithItem,
@@ -32,7 +32,7 @@ import type {
 
 export interface ParseOptions {
 	filename?: string;
-	type_comments?: boolean;
+	comments?: boolean;
 	feature_version?: number;
 }
 
@@ -46,13 +46,15 @@ export interface ParseError extends Error {
 export class Parser {
 	private tokens: Token[];
 	private current = 0;
+	private includeComments: boolean;
 
 	constructor(source: string, options: ParseOptions = {}) {
 		const lexer = new Lexer(source);
 		this.tokens = lexer.tokenize();
+		this.includeComments = options.comments ?? false;
 
 		// Filter out comments unless needed
-		if (!options.type_comments) {
+		if (!this.includeComments) {
 			this.tokens = this.tokens.filter(
 				(token) => token.type !== TokenType.COMMENT,
 			);
@@ -68,7 +70,7 @@ export class Parser {
 
 	private parseFileInput(): Module {
 		const body: StmtNode[] = [];
-		const type_ignores: TypeIgnore[] = [];
+		const comments: Comment[] = [];
 
 		// Skip leading newlines
 		while (this.match(TokenType.NEWLINE)) {
@@ -86,13 +88,23 @@ export class Parser {
 			}
 		}
 
-		return {
+		// Collect comments if enabled
+		if (this.includeComments) {
+			this.collectComments(comments);
+		}
+
+		const result: Module = {
 			nodeType: "Module",
 			body,
-			type_ignores,
 			lineno: 1,
 			col_offset: 0,
 		};
+
+		if (this.includeComments && comments.length > 0) {
+			result.comments = comments;
+		}
+
+		return result;
 	}
 
 	// ==== Statement parsers ====
@@ -1686,9 +1698,13 @@ export class Parser {
 				return this.parseFString(token);
 			}
 
+			// Determine the quote style from the original token
+			const quoteStyle = this.getStringQuoteStyle(token.value);
+
 			return {
 				nodeType: "Constant",
 				value,
+				kind: quoteStyle,
 				lineno: token.lineno,
 				col_offset: token.col_offset,
 			};
@@ -2483,6 +2499,27 @@ export class Parser {
 		return content;
 	}
 
+	private getStringQuoteStyle(tokenValue: string): string {
+		// Extract any prefix (f, r, b, u, etc.)
+		const prefixMatch = tokenValue.match(/^([fFrRbBuU]*)/);
+		const prefix = prefixMatch ? prefixMatch[1] : "";
+		const withoutPrefix = tokenValue.slice(prefix.length);
+
+		// Determine quote style
+		if (withoutPrefix.startsWith('"""')) {
+			return `${prefix}"""`;
+		} else if (withoutPrefix.startsWith("'''")) {
+			return `${prefix}'''`;
+		} else if (withoutPrefix.startsWith('"')) {
+			return `${prefix}"`;
+		} else if (withoutPrefix.startsWith("'")) {
+			return `${prefix}'`;
+		}
+
+		// Default fallback to double quotes
+		return `${prefix}"`;
+	}
+
 	private parseFString(token: Token): JoinedStr {
 		// Extract the content inside the f-string quotes
 		let content = token.value;
@@ -2648,6 +2685,10 @@ export class Parser {
 	private match(...types: TokenType[]): boolean {
 		for (const type of types) {
 			if (this.check(type)) {
+				// Skip comments if we're including comments, then advance to the actual token
+				if (this.includeComments) {
+					this.skipComments();
+				}
 				this.advance();
 				return true;
 			}
@@ -2657,7 +2698,10 @@ export class Parser {
 
 	private check(type: TokenType): boolean {
 		if (this.isAtEnd()) return false;
-		return this.peek().type === type;
+		// Use peekNonComment when comments are included to skip over comment tokens
+		// for most parsing operations, but allow comments to be processed when needed
+		const token = this.includeComments ? this.peekNonComment() : this.peek();
+		return token.type === type;
 	}
 
 	private checkNext(type: TokenType): boolean {
@@ -2666,11 +2710,42 @@ export class Parser {
 	}
 
 	private isAtEnd(): boolean {
-		return this.peek().type === TokenType.EOF;
+		// Use peekNonComment when comments are included to check for EOF properly
+		const token = this.includeComments ? this.peekNonComment() : this.peek();
+		return token.type === TokenType.EOF;
 	}
 
 	private peek(): Token {
-		// Skip comment tokens unless we're specifically looking for them
+		if (this.current >= this.tokens.length) {
+			// Return EOF token if we've gone past the end
+			return {
+				type: TokenType.EOF,
+				value: "",
+				lineno: this.tokens[this.tokens.length - 1]?.lineno || 1,
+				col_offset: this.tokens[this.tokens.length - 1]?.col_offset || 0,
+				end_lineno: this.tokens[this.tokens.length - 1]?.end_lineno || 1,
+				end_col_offset:
+					this.tokens[this.tokens.length - 1]?.end_col_offset || 0,
+			};
+		}
+
+		return this.tokens[this.current];
+	}
+
+	private advance(): Token {
+		if (!this.isAtEnd()) {
+			this.current++;
+		}
+		return this.previous();
+	}
+
+	private skipComments(): void {
+		while (this.check(TokenType.COMMENT)) {
+			this.advance();
+		}
+	}
+
+	private peekNonComment(): Token {
 		let idx = this.current;
 		while (
 			idx < this.tokens.length &&
@@ -2695,19 +2770,21 @@ export class Parser {
 		return this.tokens[idx];
 	}
 
-	private advance(): Token {
-		// Skip comment tokens when advancing
-		if (!this.isAtEnd()) {
-			this.current++;
-			// Skip any comment tokens
-			while (
-				this.current < this.tokens.length &&
-				this.tokens[this.current].type === TokenType.COMMENT
-			) {
-				this.current++;
+	private collectComments(comments: Comment[]): void {
+		// Iterate through all tokens and collect comment tokens
+		for (let i = 0; i < this.tokens.length; i++) {
+			const token = this.tokens[i];
+			if (token.type === TokenType.COMMENT) {
+				comments.push({
+					nodeType: "Comment",
+					value: token.value,
+					lineno: token.lineno,
+					col_offset: token.col_offset,
+					end_lineno: token.end_lineno,
+					end_col_offset: token.end_col_offset,
+				});
 			}
 		}
-		return this.previous();
 	}
 
 	private previous(): Token {
@@ -2960,12 +3037,6 @@ export function incrementLineno(node: ASTNode, n: number = 1): ASTNode {
 	// biome-ignore lint/suspicious/noExplicitAny: Function needs to traverse any AST node structure
 	function increment(node: any): void {
 		if (!node || typeof node !== "object") return;
-
-		// Special case for TypeIgnore which has lineno as a field, not an attribute
-		if (node.nodeType === "TypeIgnore") {
-			node.lineno += n;
-			return;
-		}
 
 		// Increment line numbers
 		if (typeof node.lineno === "number") {

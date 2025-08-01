@@ -853,21 +853,60 @@ class Unparser extends NodeVisitor {
 	}
 
 	visit_Constant(node: Extract<ExprNode, { nodeType: "Constant" }>): void {
-		this.write(this.formatConstant(node.value));
+		this.write(this.formatConstant(node.value, node.kind));
 	}
 
 	// biome-ignore lint/suspicious/noExplicitAny: Could be of any type
-	private formatConstant(value: any): string {
+	private formatConstant(value: any, kind?: string): string {
 		if (value === null) return "None";
 		if (value === true) return "True";
 		if (value === false) return "False";
 		if (typeof value === "string") {
-			return JSON.stringify(value).replace(/"/g, "'");
+			return this.formatString(value, kind);
 		}
 		if (typeof value === "number") {
 			return value.toString();
 		}
 		return String(value);
+	}
+
+	private formatString(value: string, kind?: string): string {
+		// If we have quote style information, use it
+		if (kind) {
+			// Extract prefix and quote info
+			const prefixMatch = kind.match(/^([fFrRbBuU]*)(.*)/);
+			const prefix = prefixMatch ? prefixMatch[1] : "";
+			const quoteStyle = prefixMatch ? prefixMatch[2] : '"""';
+
+			// For multiline strings, preserve triple quotes
+			if (quoteStyle === '"""' || quoteStyle === "'''") {
+				// Check if the string contains newlines
+				if (value.includes("\n")) {
+					return `${prefix}${quoteStyle}${value}${quoteStyle}`;
+				}
+				// If it doesn't have newlines but was originally triple-quoted, preserve that
+				return `${prefix}${quoteStyle}${value}${quoteStyle}`;
+			}
+
+			// For regular strings, use the original quote style
+			if (quoteStyle === '"') {
+				return `${prefix}"${this.escapeString(value, '"')}"`;
+			} else if (quoteStyle === "'") {
+				return `${prefix}'${this.escapeString(value, "'")}'`;
+			}
+		}
+
+		// Default to double quotes if no kind information
+		return `"${this.escapeString(value, '"')}"`;
+	}
+
+	private escapeString(value: string, quote: string): string {
+		return value
+			.replace(/\\/g, "\\\\")
+			.replace(/\n/g, "\\n")
+			.replace(/\r/g, "\\r")
+			.replace(/\t/g, "\\t")
+			.replace(new RegExp(`\\${quote}`, "g"), `\\${quote}`);
 	}
 
 	visit_Name(node: Extract<ExprNode, { nodeType: "Name" }>): void {

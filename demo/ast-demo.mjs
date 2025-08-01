@@ -148,7 +148,7 @@ async function analyzeFile(filePath) {
 		const startTime = Date.now();
 		const astTree = parse(source, {
 			filename: filePath,
-			type_comments: true,
+			comments: true,
 		});
 		const parseTime = Date.now() - startTime;
 
