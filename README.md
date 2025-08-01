@@ -113,15 +113,23 @@ import { parse, parsePython } from "py-ast";
 // Basic parsing with filename for better error reporting
 const ast1 = parse(pythonCode, { filename: "fibonacci.py" });
 
-// Enable type comments parsing
-const codeWithTypes = `
+// Enable comment parsing to include hash comments in AST
+const codeWithComments = `
+# This is a header comment
 def process_data(items):
-    # type: (List[int]) -> List[int]
-    return [x * 2 for x in items]
+    """This is a docstring, not a comment"""
+    # This is an inline comment
+    return [x * 2 for x in items]  # Another comment
 `;
-const astWithComments = parse(codeWithTypes, {
-  type_comments: true,
-  filename: "typed_code.py",
+const astWithComments = parse(codeWithComments, {
+  comments: true,
+  filename: "commented_code.py",
+});
+
+// Comments are now available in the AST
+console.log(astWithComments.comments?.length); // Number of hash comments found
+astWithComments.comments?.forEach(comment => {
+  console.log(`Line ${comment.lineno}: ${comment.value}`);
 });
 
 // Alternative explicit function name
@@ -410,8 +418,10 @@ Parses Python source code and returns an AST. Handles any Python code - expressi
 **ParseOptions:**
 
 - `filename` (string): Source filename for error reporting (default: `'<unknown>'`)
-- `type_comments` (boolean): Include type comments in AST (default: `false`)
+- `comments` (boolean): Include hash comments (`# comment`) in AST (default: `false`)
 - `feature_version` (number): Python feature version
+
+**Note:** Triple-quoted strings (`"""text"""`) are parsed as regular string literals, not comments. Only hash comments (`# comment`) are treated as comments when `comments: true` is enabled.
 
 **Returns:** `Module` - The root AST node containing all parsed statements
 
@@ -424,7 +434,7 @@ const ast3 = parse("class MyClass: pass");
 // With options
 const ast = parse("x + y", {
   filename: "my_script.py",
-  type_comments: true,
+  comments: true,
 });
 ```
 
@@ -493,6 +503,28 @@ class Calculator:
 const complexAst = parse(complexCode);
 const regenerated = unparse(complexAst);
 // regenerated contains valid Python code equivalent to the original
+```
+
+**Quote Style Preservation:**
+
+The unparser automatically preserves the original quote styles used in string literals when parsing with comments enabled:
+
+```typescript
+const codeWithMixedQuotes = `
+name = 'John'
+message = "Hello, world!"
+multiline = '''This is
+a multiline string'''
+`;
+
+const ast = parse(codeWithMixedQuotes, { comments: true });
+const unparsed = unparse(ast);
+console.log(unparsed);
+// Output preserves original quote styles:
+// name = 'John'
+// message = "Hello, world!"  
+// multiline = '''This is
+// a multiline string'''
 ```
 
 #### `walk(node)`

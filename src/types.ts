@@ -24,13 +24,21 @@ export interface Located extends ASTNode {
 	end_col_offset?: number;
 }
 
+/**
+ * Comment node interface
+ */
+export interface Comment extends Located {
+	nodeType: "Comment";
+	value: string;
+}
+
 // ==== Module nodes ====
 export type ModuleNode = Module | Interactive | Expression | FunctionType;
 
 export interface Module extends Located {
 	nodeType: "Module";
 	body: StmtNode[];
-	type_ignores: TypeIgnore[];
+	comments?: Comment[];
 }
 
 export interface Interactive extends Located {
@@ -781,13 +789,6 @@ export interface TypeVarTuple extends Located {
 	default_value?: ExprNode;
 }
 
-// ==== Type ignore comments ====
-export interface TypeIgnore extends ASTNode {
-	nodeType: "TypeIgnore";
-	lineno: number;
-	tag: string;
-}
-
 // ==== Union types for convenience ====
 export type ASTNodeUnion =
 	| ModuleNode
@@ -808,4 +809,4 @@ export type ASTNodeUnion =
 	| Alias
 	| WithItem
 	| MatchCase
-	| TypeIgnore;
+	| Comment;

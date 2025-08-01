@@ -39,7 +39,7 @@ import { unparse } from "./unparser.js";
  */
 export function parsePython(
 	source: string,
-	options?: { filename?: string; type_comments?: boolean },
+	options?: { filename?: string; comments?: boolean },
 ) {
 	return parse(source, options);
 }
