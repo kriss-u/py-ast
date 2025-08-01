@@ -1,6 +1,6 @@
-import { parse } from "../parser.js";
-import type { ExprNode, Module, StmtNode } from "../types.js";
-import { unparse } from "../unparser.js";
+import { parse } from "../src/parser.js";
+import type { ExprNode, Module, StmtNode } from "../src/types.js";
+import { unparse } from "../src/unparser.js";
 
 /**
  * Test helper to parse Python code and return the AST

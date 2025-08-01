@@ -1,4 +1,4 @@
-import { parse } from "../index.js";
+import { parse } from "../src/index.js";
 
 describe("Comment Parsing Debug", () => {
 	test("parse code with inline comment", () => {

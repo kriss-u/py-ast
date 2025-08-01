@@ -1,4 +1,4 @@
-import { parse, unparse } from "../index.js";
+import { parse, unparse } from "../src/index.js";
 import { testRoundtrip, testUnparse } from "./test-helpers.js";
 
 describe("Unparser", () => {

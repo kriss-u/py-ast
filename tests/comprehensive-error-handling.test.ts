@@ -1,4 +1,4 @@
-import { parse } from "../parser.js";
+import { parse } from "../src/parser.js";
 import { assertNodeType } from "./test-helpers.js";
 
 describe("Error Handling and Edge Cases", () => {
@@ -59,7 +59,7 @@ describe("Error Handling and Edge Cases", () => {
 
 		test("inconsistent indentation", () => {
 			expect(() => parse("if True:\n    x = 1\n  y = 2")).toThrow();
-		});
+	});
 
 		test("unexpected indentation should fail", () => {
 			// Python requires consistent indentation

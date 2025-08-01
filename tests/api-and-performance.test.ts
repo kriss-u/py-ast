@@ -1,4 +1,4 @@
-import { parse, unparse } from "../index.js";
+import { parse, unparse } from "../src/index.js";
 import { countNodeTypes } from "./test-helpers.js";
 
 describe("Public API Tests", () => {

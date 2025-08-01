@@ -13,13 +13,9 @@ export default {
 			},
 		],
 	},
-	testMatch: ["**/src/**/__tests__/**/*.test.ts"],
+	testMatch: ["**/tests/**/*.test.ts"],
 	testPathIgnorePatterns: ["/node_modules/", "/dist/"],
-	collectCoverageFrom: [
-		"src/**/*.ts",
-		"!src/**/__tests__/**",
-		"!src/**/*.test.ts",
-	],
+	collectCoverageFrom: ["src/**/*.ts", "!tests/**", "!src/**/*.test.ts"],
 	coverageReporters: ["text", "lcov", "html"],
 	testTimeout: 10000, // 10 seconds for complex parsing tests
 	verbose: true,
