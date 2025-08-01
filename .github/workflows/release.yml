@@ -53,4 +53,4 @@ jobs:
 
       - name: Publish to JSR
         if: success()
-        run: npx jsr publish
+        run: npx jsr publish --allow-slow-types

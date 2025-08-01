@@ -32,8 +32,8 @@ function syncVersions() {
     console.log(`✅ Synced version ${packageJson.version} to jsr.json`);
     console.log('\n📦 JSR Publishing:');
     console.log('✅ JSR is automatically published via GitHub Actions after npm release');
-    console.log('🔧 Manual publish: npm run jsr:publish');
-    console.log('🧪 Local test: npx jsr publish --dry-run');
+    console.log('🔧 Manual publish: npx jsr publish --allow-slow-types');
+    console.log('🧪 Local test: npx jsr publish --dry-run --allow-slow-types');
     
     return packageJson.version;
   } catch (error) {

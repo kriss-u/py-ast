@@ -2,6 +2,7 @@
 	"name": "@kriss-u/py-ast",
 	"version": "1.0.0",
 	"exports": "./src/index.ts",
+	"license": "MIT",
 	"publish": {
 		"exclude": [
 			"dist/",

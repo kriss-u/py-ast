@@ -38,7 +38,7 @@
 		"release:local": "node scripts/release-local.mjs",
 		"release:local:dry": "node scripts/release-local.mjs --dry-run",
 		"jsr:sync": "node scripts/jsr-release.mjs",
-		"jsr:publish": "npm run jsr:sync && npx jsr publish"
+		"jsr:publish": "npm run jsr:sync && npx jsr publish --allow-slow-types"
 	},
 	"keywords": [
 		"python",

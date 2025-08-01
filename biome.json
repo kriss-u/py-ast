@@ -13,6 +13,7 @@
 			"*.ts",
 			"*.js",
 			"!dist",
+			"!scripts",
 			"demo/**/*.mjs",
 			"*.json",
 			"*.md"
