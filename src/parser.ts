@@ -443,11 +443,7 @@ export class Parser {
 			).value;
 
 			// Type parameters (optional)
-			const type_params: TypeParamNode[] = [];
-			if (this.match(TokenType.LSQB)) {
-				// TODO: Parse type parameters properly
-				this.consume(TokenType.RSQB, "Expected ']' after type parameters");
-			}
+			const type_params = this.parseTypeParams();
 
 			this.consume(TokenType.EQUAL, "Expected '=' in type alias");
 			const value = this.parseTest();
@@ -585,10 +581,7 @@ export class Parser {
 			const nameToken = this.advance();
 
 			// Parse type parameters
-			this.consume(TokenType.LSQB, "Expected '[' for type parameters");
-			const type_params: TypeParamNode[] = [];
-			// TODO: Actually parse type parameters properly
-			this.consume(TokenType.RSQB, "Expected ']' after type parameters");
+			const type_params = this.parseTypeParams();
 
 			this.consume(TokenType.EQUAL, "Expected '=' in type alias");
 			const value = this.parseTest();
@@ -701,11 +694,7 @@ export class Parser {
 		const name = this.consume(TokenType.NAME, "Expected function name").value;
 
 		// Type parameters (Python 3.12+)
-		const type_params: TypeParamNode[] = [];
-		if (this.match(TokenType.LSQB)) {
-			// Parse type parameters
-			this.consume(TokenType.RSQB, "Expected ']' after type parameters");
-		}
+		const type_params = this.parseTypeParams();
 
 		this.consume(TokenType.LPAR, "Expected '(' after function name");
 		const args = this.parseParameters();
@@ -739,11 +728,7 @@ export class Parser {
 		const name = this.consume(TokenType.NAME, "Expected function name").value;
 
 		// Type parameters (Python 3.12+)
-		const type_params: TypeParamNode[] = [];
-		if (this.match(TokenType.LSQB)) {
-			// Parse type parameters
-			this.consume(TokenType.RSQB, "Expected ']' after type parameters");
-		}
+		const type_params = this.parseTypeParams();
 
 		this.consume(TokenType.LPAR, "Expected '(' after function name");
 		const args = this.parseParameters();
@@ -774,11 +759,7 @@ export class Parser {
 		const name = this.consume(TokenType.NAME, "Expected class name").value;
 
 		// Type parameters (Python 3.12+)
-		const type_params: TypeParamNode[] = [];
-		if (this.match(TokenType.LSQB)) {
-			// Parse type parameters
-			this.consume(TokenType.RSQB, "Expected ']' after type parameters");
-		}
+		const type_params = this.parseTypeParams();
 
 		const bases: ExprNode[] = [];
 		const keywords: Keyword[] = [];
@@ -2005,7 +1986,7 @@ export class Parser {
 						let annotation: ExprNode | undefined;
 
 						if (this.match(TokenType.COLON)) {
-							annotation = this.parseTest();
+							annotation = this.parseTestOrStarred();
 						}
 
 						vararg = {
@@ -2025,7 +2006,7 @@ export class Parser {
 					let annotation: ExprNode | undefined;
 
 					if (this.match(TokenType.COLON)) {
-						annotation = this.parseTest();
+						annotation = this.parseTestOrStarred();
 					}
 
 					kwarg = {
@@ -2043,7 +2024,7 @@ export class Parser {
 					let annotation: ExprNode | undefined;
 
 					if (this.match(TokenType.COLON)) {
-						annotation = this.parseTest();
+						annotation = this.parseTestOrStarred();
 					}
 
 					let defaultValue: ExprNode | undefined;
@@ -2208,7 +2189,7 @@ export class Parser {
 			};
 		}
 
-		const first = this.parseTest();
+		const first = this.parseTestOrStarred();
 
 		if (this.match(TokenType.COLON)) {
 			// Slice
@@ -3028,6 +3009,92 @@ export class Parser {
 		}
 
 		return expr;
+	}
+
+	// ==== Type parameter parsing ====
+
+	private parseTypeParams(): TypeParamNode[] {
+		const params: TypeParamNode[] = [];
+
+		if (!this.match(TokenType.LSQB)) {
+			return params;
+		}
+
+		do {
+			const start = this.peek();
+
+			// Check for ParamSpec (**P)
+			if (this.match(TokenType.DOUBLESTAR)) {
+				const name = this.consume(
+					TokenType.NAME,
+					"Expected parameter name after '**'",
+				).value;
+				let default_value: ExprNode | undefined;
+
+				if (this.match(TokenType.EQUAL)) {
+					default_value = this.parseTestOrStarred();
+				}
+
+				params.push({
+					nodeType: "ParamSpec",
+					name,
+					default_value,
+					lineno: start.lineno,
+					col_offset: start.col_offset,
+				});
+			}
+			// Check for TypeVarTuple (*Ts)
+			else if (this.match(TokenType.STAR)) {
+				const name = this.consume(
+					TokenType.NAME,
+					"Expected parameter name after '*'",
+				).value;
+				let default_value: ExprNode | undefined;
+
+				if (this.match(TokenType.EQUAL)) {
+					default_value = this.parseTestOrStarred();
+				}
+
+				params.push({
+					nodeType: "TypeVarTuple",
+					name,
+					default_value,
+					lineno: start.lineno,
+					col_offset: start.col_offset,
+				});
+			}
+			// Regular TypeVar (T, T: bound, T = default)
+			else {
+				const name = this.consume(
+					TokenType.NAME,
+					"Expected type parameter name",
+				).value;
+				let bound: ExprNode | undefined;
+				let default_value: ExprNode | undefined;
+
+				// Parse bound (T: SomeBound)
+				if (this.match(TokenType.COLON)) {
+					bound = this.parseTest();
+				}
+
+				// Parse default value (T = SomeDefault)
+				if (this.match(TokenType.EQUAL)) {
+					default_value = this.parseTestOrStarred();
+				}
+
+				params.push({
+					nodeType: "TypeVar",
+					name,
+					bound,
+					default_value,
+					lineno: start.lineno,
+					col_offset: start.col_offset,
+				});
+			}
+		} while (this.match(TokenType.COMMA));
+
+		this.consume(TokenType.RSQB, "Expected ']' after type parameters");
+		return params;
 	}
 }
 

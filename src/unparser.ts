@@ -187,6 +187,7 @@ class Unparser extends NodeVisitor {
 	): void {
 		this.fill("def ");
 		this.write(node.name);
+		this.writeTypeParams(node.type_params);
 		this.write("(");
 		this.visit_arguments(node.args);
 		this.write(")");
@@ -205,6 +206,7 @@ class Unparser extends NodeVisitor {
 	visit_ClassDef(node: Extract<StmtNode, { nodeType: "ClassDef" }>): void {
 		this.fill("class ");
 		this.write(node.name);
+		this.writeTypeParams(node.type_params);
 		if (node.bases.length > 0 || node.keywords.length > 0) {
 			this.write("(");
 			this.interleave(", ", (base) => this.visit(base), node.bases);
@@ -575,6 +577,7 @@ class Unparser extends NodeVisitor {
 	): void {
 		this.fill("async def ");
 		this.write(node.name);
+		this.writeTypeParams(node.type_params);
 		this.write("(");
 		this.visit_arguments(node.args);
 		this.write(")");
@@ -861,6 +864,7 @@ class Unparser extends NodeVisitor {
 		if (value === null) return "None";
 		if (value === true) return "True";
 		if (value === false) return "False";
+		if (value === "...") return "..."; // Handle ellipsis
 		if (typeof value === "string") {
 			return this.formatString(value, kind);
 		}
@@ -921,7 +925,12 @@ class Unparser extends NodeVisitor {
 	visit_Subscript(node: Extract<ExprNode, { nodeType: "Subscript" }>): void {
 		this.visit(node.value);
 		this.write("[");
-		this.visit(node.slice);
+		// Special handling for tuples in subscripts - don't add parentheses
+		if (node.slice.nodeType === "Tuple") {
+			this.interleave(", ", (elt) => this.visit(elt), node.slice.elts);
+		} else {
+			this.visit(node.slice);
+		}
 		this.write("]");
 	}
 
@@ -1212,5 +1221,72 @@ class Unparser extends NodeVisitor {
 		node: Extract<import("./types.js").PatternNode, { nodeType: "MatchOr" }>,
 	): void {
 		this.interleave(" | ", (pattern) => this.visit(pattern), node.patterns);
+	}
+
+	// Helper method for type parameters
+	private writeTypeParams(
+		type_params: import("./types.js").TypeParamNode[],
+	): void {
+		if (type_params && type_params.length > 0) {
+			this.write("[");
+			this.interleave(", ", (param) => this.visit(param), type_params);
+			this.write("]");
+		}
+	}
+
+	// Type parameter visitors
+	visit_TypeVar(
+		node: Extract<import("./types.js").TypeParamNode, { nodeType: "TypeVar" }>,
+	): void {
+		this.write(node.name);
+		if (node.bound) {
+			this.write(": ");
+			this.visit(node.bound);
+		}
+		if (node.default_value) {
+			this.write(" = ");
+			this.visit(node.default_value);
+		}
+	}
+
+	visit_ParamSpec(
+		node: Extract<
+			import("./types.js").TypeParamNode,
+			{ nodeType: "ParamSpec" }
+		>,
+	): void {
+		this.write("**");
+		this.write(node.name);
+		if (node.default_value) {
+			this.write(" = ");
+			this.visit(node.default_value);
+		}
+	}
+
+	visit_TypeVarTuple(
+		node: Extract<
+			import("./types.js").TypeParamNode,
+			{ nodeType: "TypeVarTuple" }
+		>,
+	): void {
+		this.write("*");
+		this.write(node.name);
+		if (node.default_value) {
+			this.write(" = ");
+			this.visit(node.default_value);
+		}
+	}
+
+	// FunctionType module visitor
+	visit_FunctionType(
+		node: Extract<
+			import("./types.js").ModuleNode,
+			{ nodeType: "FunctionType" }
+		>,
+	): void {
+		this.write("(");
+		this.interleave(", ", (arg) => this.visit(arg), node.argtypes);
+		this.write(") -> ");
+		this.visit(node.returns);
 	}
 }
