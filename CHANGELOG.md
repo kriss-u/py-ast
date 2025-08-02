@@ -1,3 +1,15 @@
+# [1.3.0](https://github.com/kriss-u/py-ast/compare/v1.2.0...v1.3.0) (2025-08-02)
+
+
+### Bug Fixes
+
+* resolve semantic-release version conflict ([12d8e52](https://github.com/kriss-u/py-ast/commit/12d8e52f910e7d977db9c7a64d7058fa711ca34d))
+
+
+### Features
+
+* add mock script to force release to 1.3.0 ([a87e13f](https://github.com/kriss-u/py-ast/commit/a87e13f71612d503c63feeb9cb36f6ef315d0e42))
+
 # [1.2.0](https://github.com/kriss-u/py-ast/compare/v1.1.0...v1.2.0) (2025-08-02)
 
 
