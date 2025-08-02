@@ -1,3 +1,15 @@
+# [1.4.0](https://github.com/kriss-u/py-ast/compare/v1.3.0...v1.4.0) (2025-08-02)
+
+
+### Bug Fixes
+
+* properly handle modern python features such as metaclass and parenthesis import ([df08de9](https://github.com/kriss-u/py-ast/commit/df08de9d579d6475fc494f0430ecb4b128f70f73))
+
+
+### Features
+
+* add support for type variables ([44b7922](https://github.com/kriss-u/py-ast/commit/44b7922d6f499741717d95b5414756a988df7621))
+
 # [1.3.0](https://github.com/kriss-u/py-ast/compare/v1.2.0...v1.3.0) (2025-08-02)
 
 
