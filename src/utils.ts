@@ -28,7 +28,7 @@ export function getDocstring(node: ASTNodeUnion): string | null {
 }
 
 /**
- * Iterate over all fields of a node
+ * Iterate over all fields of a node.
  */
 // biome-ignore lint/suspicious/noExplicitAny: Generator yields node field values which can be any type
 export function* iterFields(node: ASTNodeUnion): Generator<[string, any]> {
