@@ -327,10 +327,35 @@ export class Parser {
 
 			const names: { name: string; asname?: string }[] = [];
 
+			// Handle parenthesized import lists
+			const hasParens = this.match(TokenType.LPAR);
+
 			if (this.match(TokenType.STAR)) {
 				names.push({ name: "*" });
 			} else {
-				do {
+				// Parse the first name
+				const firstName = this.consume(TokenType.NAME, "Expected name").value;
+				let firstAsname: string | undefined;
+				if (this.match(TokenType.AS)) {
+					firstAsname = this.consume(
+						TokenType.NAME,
+						"Expected name after 'as'",
+					).value;
+				}
+				names.push({ name: firstName, asname: firstAsname });
+
+				// Parse additional names if there are commas
+				while (this.match(TokenType.COMMA)) {
+					// Skip any newlines after comma (for multiline imports)
+					while (this.match(TokenType.NEWLINE)) {
+						// Skip newlines
+					}
+
+					// Check if we've reached the end (trailing comma case)
+					if (hasParens && this.check(TokenType.RPAR)) break;
+					if (!hasParens && (this.check(TokenType.NEWLINE) || this.isAtEnd()))
+						break;
+
 					const name = this.consume(TokenType.NAME, "Expected name").value;
 					let asname: string | undefined;
 					if (this.match(TokenType.AS)) {
@@ -340,7 +365,11 @@ export class Parser {
 						).value;
 					}
 					names.push({ name, asname });
-				} while (this.match(TokenType.COMMA));
+				}
+			}
+
+			if (hasParens) {
+				this.consume(TokenType.RPAR, "Expected ')' after import list");
 			}
 
 			return {
@@ -367,6 +396,7 @@ export class Parser {
 			if (
 				!this.check(TokenType.NEWLINE) &&
 				!this.check(TokenType.SEMI) &&
+				!this.check(TokenType.DEDENT) &&
 				!this.isAtEnd()
 			) {
 				exc = this.parseTest();
@@ -756,12 +786,33 @@ export class Parser {
 		if (this.match(TokenType.LPAR)) {
 			if (!this.check(TokenType.RPAR)) {
 				// Parse base classes and keyword arguments
-				// Simplified version - just parse as expressions
-				bases.push(this.parseTest());
-				while (this.match(TokenType.COMMA)) {
+				do {
 					if (this.check(TokenType.RPAR)) break;
-					bases.push(this.parseTest());
-				}
+
+					// Check if this is a keyword argument (name=value)
+					const savedPos = this.current;
+					if (this.check(TokenType.NAME)) {
+						const nameToken = this.advance();
+						if (this.match(TokenType.EQUAL)) {
+							// This is a keyword argument
+							const value = this.parseTest();
+							keywords.push({
+								nodeType: "Keyword",
+								arg: nameToken.value,
+								value,
+								lineno: nameToken.lineno,
+								col_offset: nameToken.col_offset,
+							});
+						} else {
+							// This is a base class, rewind and parse as expression
+							this.current = savedPos;
+							bases.push(this.parseTest());
+						}
+					} else {
+						// Not a name, parse as base class expression
+						bases.push(this.parseTest());
+					}
+				} while (this.match(TokenType.COMMA));
 			}
 			this.consume(TokenType.RPAR, "Expected ')' after class bases");
 		}
@@ -1009,24 +1060,101 @@ export class Parser {
 	private parseBasicPattern(): PatternNode {
 		const start = this.peek();
 
-		// Wildcard pattern (_)
-		if (this.match(TokenType.NAME) && this.previous().value === "_") {
+		// Check for expressions that could be class patterns (like int(), str(), etc.)
+		if (this.check(TokenType.NAME)) {
+			const nameToken = this.peek();
+
+			// Look ahead to see if this is a function call pattern
+			if (this.peekNext().type === TokenType.LPAR) {
+				// Parse the class name
+				const className = this.advance(); // consume the name
+				this.advance(); // consume the (
+
+				// For now, we'll only handle empty parentheses like int(), str()
+				// TODO: Add support for patterns with arguments inside parentheses
+				this.consume(TokenType.RPAR, "Expected ')' in class pattern");
+
+				const cls: ExprNode = {
+					nodeType: "Name",
+					id: className.value,
+					ctx: this.createLoad(),
+					lineno: className.lineno,
+					col_offset: className.col_offset,
+				};
+
+				return {
+					nodeType: "MatchClass",
+					cls,
+					patterns: [], // No arguments in the pattern for now
+					kwd_attrs: [],
+					kwd_patterns: [],
+					lineno: start.lineno,
+					col_offset: start.col_offset,
+				};
+			}
+
+			// Wildcard pattern (_)
+			if (nameToken.value === "_") {
+				this.advance(); // consume the _
+				return {
+					nodeType: "MatchAs",
+					pattern: undefined,
+					name: "_",
+					lineno: start.lineno,
+					col_offset: start.col_offset,
+				};
+			}
+
+			// Regular name pattern (variable binding)
+			this.advance(); // consume the name
 			return {
 				nodeType: "MatchAs",
 				pattern: undefined,
-				name: "_",
+				name: nameToken.value,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
 			};
 		}
 
-		// Regular name pattern
-		if (this.match(TokenType.NAME)) {
-			const name = this.previous().value;
+		// List pattern [...]
+		if (this.match(TokenType.LSQB)) {
+			const patterns: PatternNode[] = [];
+
+			if (!this.check(TokenType.RSQB)) {
+				patterns.push(this.parsePattern());
+				while (this.match(TokenType.COMMA)) {
+					if (this.check(TokenType.RSQB)) break;
+					patterns.push(this.parsePattern());
+				}
+			}
+
+			this.consume(TokenType.RSQB, "Expected ']' after list pattern");
+
 			return {
-				nodeType: "MatchAs",
-				pattern: undefined,
-				name,
+				nodeType: "MatchSequence",
+				patterns,
+				lineno: start.lineno,
+				col_offset: start.col_offset,
+			};
+		}
+
+		// Tuple pattern (...)
+		if (this.match(TokenType.LPAR)) {
+			const patterns: PatternNode[] = [];
+
+			if (!this.check(TokenType.RPAR)) {
+				patterns.push(this.parsePattern());
+				while (this.match(TokenType.COMMA)) {
+					if (this.check(TokenType.RPAR)) break;
+					patterns.push(this.parsePattern());
+				}
+			}
+
+			this.consume(TokenType.RPAR, "Expected ')' after tuple pattern");
+
+			return {
+				nodeType: "MatchSequence",
+				patterns,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
 			};
@@ -2730,6 +2858,23 @@ export class Parser {
 		}
 
 		return this.tokens[this.current];
+	}
+
+	private peekNext(): Token {
+		if (this.current + 1 >= this.tokens.length) {
+			// Return EOF token if we've gone past the end
+			return {
+				type: TokenType.EOF,
+				value: "",
+				lineno: this.tokens[this.tokens.length - 1]?.lineno || 1,
+				col_offset: this.tokens[this.tokens.length - 1]?.col_offset || 0,
+				end_lineno: this.tokens[this.tokens.length - 1]?.end_lineno || 1,
+				end_col_offset:
+					this.tokens[this.tokens.length - 1]?.end_col_offset || 0,
+			};
+		}
+
+		return this.tokens[this.current + 1];
 	}
 
 	private advance(): Token {
