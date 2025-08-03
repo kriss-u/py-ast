@@ -1874,8 +1874,75 @@ export class Parser {
 			const expr = this.parseTestOrStarred();
 
 			// Check for generator expression
-			if (this.match(TokenType.FOR)) {
-				const generators = this.parseComprehensionsAfterFor();
+			const isAsyncGenerator =
+				this.check(TokenType.ASYNC) && this.checkNext(TokenType.FOR);
+			const isGenerator = this.check(TokenType.FOR) || isAsyncGenerator;
+
+			if (isGenerator) {
+				let generators: Comprehension[];
+
+				if (isAsyncGenerator) {
+					// Handle async generator: consume ASYNC, then handle like normal but mark first as async
+					this.advance(); // consume ASYNC
+					this.consume(TokenType.FOR, "Expected 'for' after async");
+
+					// Parse first comprehension manually with async=1
+					const target = this.parseExprList();
+					this.consume(TokenType.IN, "Expected 'in' in comprehension");
+					const iter = this.parseOrTest();
+
+					const ifs: ExprNode[] = [];
+					while (this.match(TokenType.IF)) {
+						ifs.push(this.parseOrTest());
+					}
+
+					const firstComprehension = {
+						nodeType: "Comprehension" as const,
+						target,
+						iter,
+						ifs,
+						is_async: 1,
+					};
+
+					// Parse additional comprehensions using existing logic
+					const additionalComprehensions: Comprehension[] = [];
+					while (this.check(TokenType.FOR) || this.check(TokenType.ASYNC)) {
+						let next_is_async = 0;
+						if (this.check(TokenType.ASYNC)) {
+							this.advance(); // consume 'async'
+							next_is_async = 1;
+						}
+
+						if (!this.check(TokenType.FOR)) {
+							break;
+						}
+
+						this.consume(TokenType.FOR, "Expected 'for' in comprehension");
+						const nextTarget = this.parseExprList();
+						this.consume(TokenType.IN, "Expected 'in' in comprehension");
+						const nextIter = this.parseOrTest();
+
+						const nextIfs: ExprNode[] = [];
+						while (this.match(TokenType.IF)) {
+							nextIfs.push(this.parseOrTest());
+						}
+
+						additionalComprehensions.push({
+							nodeType: "Comprehension",
+							target: nextTarget,
+							iter: nextIter,
+							ifs: nextIfs,
+							is_async: next_is_async,
+						});
+					}
+
+					generators = [firstComprehension, ...additionalComprehensions];
+				} else {
+					// Normal generator: consume FOR and use existing method
+					this.advance(); // consume FOR
+					generators = this.parseComprehensionsAfterFor();
+				}
+
 				this.consume(TokenType.RPAR, "Expected ')' after generator expression");
 
 				return {
@@ -2395,9 +2462,40 @@ export class Parser {
 
 	private parseComprehensionsAfterFor(): Comprehension[] {
 		const comprehensions: Comprehension[] = [];
+		let is_async = 0; // First comprehension is not async for now
 
-		do {
-			// Parse first comprehension (FOR already consumed)
+		// Parse first comprehension (FOR already consumed)
+		const target = this.parseExprList();
+		this.consume(TokenType.IN, "Expected 'in' in comprehension");
+		const iter = this.parseOrTest();
+
+		const ifs: ExprNode[] = [];
+		while (this.match(TokenType.IF)) {
+			ifs.push(this.parseOrTest());
+		}
+
+		comprehensions.push({
+			nodeType: "Comprehension",
+			target,
+			iter,
+			ifs,
+			is_async,
+		});
+
+		// Parse additional comprehensions
+		while (this.check(TokenType.FOR) || this.check(TokenType.ASYNC)) {
+			// Check for async comprehensions
+			is_async = 0;
+			if (this.check(TokenType.ASYNC)) {
+				this.advance(); // consume 'async'
+				is_async = 1;
+			}
+
+			if (!this.check(TokenType.FOR)) {
+				break;
+			}
+
+			this.consume(TokenType.FOR, "Expected 'for' in comprehension");
 			const target = this.parseExprList();
 			this.consume(TokenType.IN, "Expected 'in' in comprehension");
 			const iter = this.parseOrTest();
@@ -2412,38 +2510,9 @@ export class Parser {
 				target,
 				iter,
 				ifs,
-				is_async: 0, // First comprehension is not async for now
-			});
-
-			// Check for additional comprehensions
-			let is_async = 0;
-			if (this.check(TokenType.ASYNC)) {
-				this.advance(); // consume 'async'
-				is_async = 1;
-			}
-
-			if (!this.check(TokenType.FOR)) {
-				break;
-			}
-
-			this.consume(TokenType.FOR, "Expected 'for' in comprehension");
-			const nextTarget = this.parseExprList();
-			this.consume(TokenType.IN, "Expected 'in' in comprehension");
-			const nextIter = this.parseOrTest();
-
-			const nextIfs: ExprNode[] = [];
-			while (this.match(TokenType.IF)) {
-				nextIfs.push(this.parseOrTest());
-			}
-
-			comprehensions.push({
-				nodeType: "Comprehension",
-				target: nextTarget,
-				iter: nextIter,
-				ifs: nextIfs,
 				is_async,
 			});
-		} while (this.check(TokenType.FOR) || this.check(TokenType.ASYNC));
+		}
 
 		return comprehensions;
 	}
