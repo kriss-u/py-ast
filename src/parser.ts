@@ -2866,7 +2866,10 @@ export class Parser {
 	}
 
 	private skipComments(): void {
-		while (this.check(TokenType.COMMENT)) {
+		while (
+			this.current < this.tokens.length &&
+			this.tokens[this.current].type === TokenType.COMMENT
+		) {
 			this.advance();
 		}
 	}
@@ -2918,7 +2921,13 @@ export class Parser {
 	}
 
 	private consume(type: TokenType, message: string): Token {
-		if (this.check(type)) return this.advance();
+		if (this.check(type)) {
+			// Skip any comments before advancing to the target token
+			if (this.includeComments) {
+				this.skipComments();
+			}
+			return this.advance();
+		}
 		throw this.error(message);
 	}
 
