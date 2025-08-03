@@ -1,3 +1,10 @@
+## [1.4.2](https://github.com/kriss-u/py-ast/compare/v1.4.1...v1.4.2) (2025-08-03)
+
+
+### Bug Fixes
+
+* remove circular dependency on comments checking ([f9b104f](https://github.com/kriss-u/py-ast/commit/f9b104fd68bae56d996e57c6637e72f80cc36f20))
+
 ## [1.4.1](https://github.com/kriss-u/py-ast/compare/v1.4.0...v1.4.1) (2025-08-03)
 
 
