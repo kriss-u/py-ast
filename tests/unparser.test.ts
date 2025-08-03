@@ -457,6 +457,14 @@ describe("Unparser", () => {
 			testUnparse("(x for x in items if x > 0)", "(x for x in items if x > 0)");
 			testRoundtrip("sum(x for x in range(10))");
 		});
+
+		test("async generator expressions", () => {
+			testUnparse("(x async for x in async_items)", "(x async for x in async_items)");
+			testUnparse("(x async for x in async_items if x > 0)", "(x async for x in async_items if x > 0)");
+			testUnparse("(x for x in items async for y in async_items)", "(x for x in items async for y in async_items)");
+			testUnparse("(x async for x in async_items for y in items)", "(x async for x in async_items for y in items)");
+			testUnparse("(x async for x in async_items async for y in async_items2)", "(x async for x in async_items async for y in async_items2)");
+		});
 	});
 
 	describe("F-strings", () => {

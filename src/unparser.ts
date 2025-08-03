@@ -1036,7 +1036,11 @@ class Unparser extends NodeVisitor {
 			{ nodeType: "Comprehension" }
 		>,
 	): void {
-		this.write(" for ");
+		if (node.is_async) {
+			this.write(" async for ");
+		} else {
+			this.write(" for ");
+		}
 		this.visit(node.target);
 		this.write(" in ");
 		this.visit(node.iter);

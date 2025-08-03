@@ -205,4 +205,84 @@ describe("Complex Generator Expressions", () => {
 			expect(stmt.value.generators).toHaveLength(3);
 		});
 	});
+
+	describe("Async generator expressions", () => {
+		test("simple async generator", () => {
+			const expr = parseExpression("(x async for x in async_items)");
+			assertNodeType(expr, "GeneratorExp");
+			expect(expr.generators).toHaveLength(1);
+			expect(expr.generators[0].is_async).toBe(1);
+			expect((expr.generators[0].target as any).id).toBe("x");
+		});
+
+		test("async generator with condition", () => {
+			const expr = parseExpression("(x async for x in async_items if x > 0)");
+			assertNodeType(expr, "GeneratorExp");
+			expect(expr.generators).toHaveLength(1);
+			expect(expr.generators[0].is_async).toBe(1);
+			expect(expr.generators[0].ifs).toHaveLength(1);
+		});
+
+		test("mixed sync and async generators", () => {
+			const expr = parseExpression("(x for x in items async for y in async_items)");
+			assertNodeType(expr, "GeneratorExp");
+			expect(expr.generators).toHaveLength(2);
+			expect(expr.generators[0].is_async).toBe(0);
+			expect(expr.generators[1].is_async).toBe(1);
+		});
+
+		test("async first then sync", () => {
+			const expr = parseExpression("(x async for x in async_items for y in items)");
+			assertNodeType(expr, "GeneratorExp");
+			expect(expr.generators).toHaveLength(2);
+			expect(expr.generators[0].is_async).toBe(1);
+			expect(expr.generators[1].is_async).toBe(0);
+		});
+
+		test("multiple async generators", () => {
+			const expr = parseExpression("(x async for x in async_items async for y in async_items2)");
+			assertNodeType(expr, "GeneratorExp");
+			expect(expr.generators).toHaveLength(2);
+			expect(expr.generators[0].is_async).toBe(1);
+			expect(expr.generators[1].is_async).toBe(1);
+		});
+
+		test("complex async generator with multiple conditions", () => {
+			const code = `(
+				await process(item)
+				async for batch in async_batches
+				for item in batch
+				if item.is_ready
+				async for result in async_process(item)
+				if await validate(result)
+			)`;
+			
+			const expr = parseExpression(code);
+			assertNodeType(expr, "GeneratorExp");
+			expect(expr.generators).toHaveLength(3);
+			
+			// First generator: async for batch in async_batches
+			expect(expr.generators[0].is_async).toBe(1);
+			expect((expr.generators[0].target as any).id).toBe("batch");
+			expect(expr.generators[0].ifs).toHaveLength(0);
+			
+			// Second generator: for item in batch if item.is_ready
+			expect(expr.generators[1].is_async).toBe(0);
+			expect((expr.generators[1].target as any).id).toBe("item");
+			expect(expr.generators[1].ifs).toHaveLength(1);
+			
+			// Third generator: async for result in async_process(item) if await validate(result)
+			expect(expr.generators[2].is_async).toBe(1);
+			expect((expr.generators[2].target as any).id).toBe("result");
+			expect(expr.generators[2].ifs).toHaveLength(1);
+		});
+
+		test("async generator with await in element", () => {
+			const expr = parseExpression("(await func(x) async for x in async_items)");
+			assertNodeType(expr, "GeneratorExp");
+			expect(expr.elt.nodeType).toBe("Await");
+			expect(expr.generators).toHaveLength(1);
+			expect(expr.generators[0].is_async).toBe(1);
+		});
+	});
 });
