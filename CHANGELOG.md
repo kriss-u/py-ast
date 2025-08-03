@@ -1,3 +1,15 @@
+# [1.5.0](https://github.com/kriss-u/py-ast/compare/v1.4.2...v1.5.0) (2025-08-03)
+
+
+### Bug Fixes
+
+* properly parse and unparse generators ([b7e732b](https://github.com/kriss-u/py-ast/commit/b7e732b2a04a3b2483b61bdb9a24ad8c61cfabac))
+
+
+### Features
+
+* add support for async for ([6a47b28](https://github.com/kriss-u/py-ast/commit/6a47b28245bb485d96308b1b5c0bf244b305756d))
+
 ## [1.4.2](https://github.com/kriss-u/py-ast/compare/v1.4.1...v1.4.2) (2025-08-03)
 
 
