@@ -129,6 +129,20 @@ describe("Match Statements (Python 3.10+)", () => {
 		assertNodeType(stmt, "Match");
 		expect(stmt.cases).toHaveLength(2);
 	});
+
+	test("match with comments between statement and cases (regression test)", () => {
+		// This tests the fix for indentation parsing errors when comments appear 
+		// between the match statement header and the case statements
+		const stmt = parseStatement(`match data:
+    # This is a comment
+    case {
+        'type': 'A'
+    }:
+        print("A")`);
+		assertNodeType(stmt, "Match");
+		expect(stmt.cases).toHaveLength(1);
+		expect(stmt.cases[0].pattern.nodeType).toBe("MatchMapping");
+	});
 });
 
 describe("Type Alias Statements (Python 3.12+)", () => {

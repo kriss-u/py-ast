@@ -970,6 +970,12 @@ export class Parser {
 
 		// Match statements must always be multi-line with proper indentation
 		this.consume(TokenType.NEWLINE, "Expected newline after match:");
+
+		// Skip comment tokens and newlines that might appear before the indent
+		while (this.check(TokenType.COMMENT) || this.check(TokenType.NEWLINE)) {
+			this.advance();
+		}
+
 		this.consume(TokenType.INDENT, "Expected indented block");
 
 		const cases: MatchCase[] = [];
@@ -977,6 +983,11 @@ export class Parser {
 		while (!this.check(TokenType.DEDENT) && !this.isAtEnd()) {
 			if (this.match(TokenType.NEWLINE)) {
 				continue;
+			}
+
+			// Skip comment tokens
+			while (this.check(TokenType.COMMENT)) {
+				this.advance();
 			}
 
 			if (this.match(TokenType.CASE)) {
@@ -2058,6 +2069,15 @@ export class Parser {
 			// Skip any additional newlines before the indent
 			while (this.match(TokenType.NEWLINE)) {
 				// Continue skipping newlines
+			}
+
+			// Skip comment tokens that might appear before the indent
+			while (this.check(TokenType.COMMENT)) {
+				this.advance();
+				// Comments might be followed by newlines, skip those too
+				while (this.match(TokenType.NEWLINE)) {
+					// Continue skipping newlines after comments
+				}
 			}
 
 			// Require proper indentation - must have INDENT token for block structure
