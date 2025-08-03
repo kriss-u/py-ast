@@ -1,3 +1,10 @@
+# [1.6.0](https://github.com/kriss-u/py-ast/compare/v1.5.0...v1.6.0) (2025-08-03)
+
+
+### Features
+
+* add support for match case ([fdb09ee](https://github.com/kriss-u/py-ast/commit/fdb09ee1df6448ca70e3d492aafa74c3391eabe0))
+
 # [1.5.0](https://github.com/kriss-u/py-ast/compare/v1.4.2...v1.5.0) (2025-08-03)
 
 
