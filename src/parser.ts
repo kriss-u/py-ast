@@ -2395,9 +2395,40 @@ export class Parser {
 
 	private parseComprehensionsAfterFor(): Comprehension[] {
 		const comprehensions: Comprehension[] = [];
+		let is_async = 0; // First comprehension is not async for now
 
-		do {
-			// Parse first comprehension (FOR already consumed)
+		// Parse first comprehension (FOR already consumed)
+		const target = this.parseExprList();
+		this.consume(TokenType.IN, "Expected 'in' in comprehension");
+		const iter = this.parseOrTest();
+
+		const ifs: ExprNode[] = [];
+		while (this.match(TokenType.IF)) {
+			ifs.push(this.parseOrTest());
+		}
+
+		comprehensions.push({
+			nodeType: "Comprehension",
+			target,
+			iter,
+			ifs,
+			is_async,
+		});
+
+		// Parse additional comprehensions
+		while (this.check(TokenType.FOR) || this.check(TokenType.ASYNC)) {
+			// Check for async comprehensions
+			is_async = 0;
+			if (this.check(TokenType.ASYNC)) {
+				this.advance(); // consume 'async'
+				is_async = 1;
+			}
+
+			if (!this.check(TokenType.FOR)) {
+				break;
+			}
+
+			this.consume(TokenType.FOR, "Expected 'for' in comprehension");
 			const target = this.parseExprList();
 			this.consume(TokenType.IN, "Expected 'in' in comprehension");
 			const iter = this.parseOrTest();
@@ -2412,38 +2443,9 @@ export class Parser {
 				target,
 				iter,
 				ifs,
-				is_async: 0, // First comprehension is not async for now
-			});
-
-			// Check for additional comprehensions
-			let is_async = 0;
-			if (this.check(TokenType.ASYNC)) {
-				this.advance(); // consume 'async'
-				is_async = 1;
-			}
-
-			if (!this.check(TokenType.FOR)) {
-				break;
-			}
-
-			this.consume(TokenType.FOR, "Expected 'for' in comprehension");
-			const nextTarget = this.parseExprList();
-			this.consume(TokenType.IN, "Expected 'in' in comprehension");
-			const nextIter = this.parseOrTest();
-
-			const nextIfs: ExprNode[] = [];
-			while (this.match(TokenType.IF)) {
-				nextIfs.push(this.parseOrTest());
-			}
-
-			comprehensions.push({
-				nodeType: "Comprehension",
-				target: nextTarget,
-				iter: nextIter,
-				ifs: nextIfs,
 				is_async,
 			});
-		} while (this.check(TokenType.FOR) || this.check(TokenType.ASYNC));
+		}
 
 		return comprehensions;
 	}
