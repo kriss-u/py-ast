@@ -1,4 +1,215 @@
-import { assertNodeType, parseStatement } from "./test-helpers.js";
+import { assertNodeType, parseStatement, parseCode } from "./test-helpers.js";
+import type { StmtNode } from "../src/types.js";
+
+describe("Pattern Matching", () => {
+	describe("Dictionary/Mapping Patterns", () => {
+		test("simple dictionary pattern", () => {
+			const code = `
+match data:
+    case {'name': str(name)}:
+        return name
+`;
+			const ast = parseCode(code);
+			const matchStmt = ast.body[0];
+			assertNodeType(matchStmt, "Match");
+			
+			const caseStmt = (matchStmt as Extract<StmtNode, { nodeType: "Match" }>).cases[0];
+			assertNodeType(caseStmt.pattern, "MatchMapping");
+			const pattern = caseStmt.pattern as Extract<import("../src/types.js").PatternNode, { nodeType: "MatchMapping" }>;
+			expect(pattern.keys).toHaveLength(1);
+			expect(pattern.patterns).toHaveLength(1);
+		});
+
+		test("complex dictionary pattern with multiple keys", () => {
+			const code = `
+match data:
+    case {'type': 'user', 'name': str(name), 'age': int(age)}:
+        return f'{name} is {age} years old'
+`;
+			const ast = parseCode(code);
+			const matchStmt = ast.body[0];
+			assertNodeType(matchStmt, "Match");
+			
+			const caseStmt = (matchStmt as Extract<StmtNode, { nodeType: "Match" }>).cases[0];
+			assertNodeType(caseStmt.pattern, "MatchMapping");
+			const pattern = caseStmt.pattern as Extract<import("../src/types.js").PatternNode, { nodeType: "MatchMapping" }>;
+			expect(pattern.keys).toHaveLength(3);
+			expect(pattern.patterns).toHaveLength(3);
+		});
+
+		test("dictionary pattern with guard", () => {
+			const code = `
+match data:
+    case {'type': 'user', 'name': str(name), 'age': int(age)} if age >= 18:
+        return f'Adult: {name}'
+`;
+			const ast = parseCode(code);
+			const matchStmt = ast.body[0];
+			assertNodeType(matchStmt, "Match");
+			
+			const caseStmt = (matchStmt as Extract<StmtNode, { nodeType: "Match" }>).cases[0];
+			assertNodeType(caseStmt.pattern, "MatchMapping");
+			expect(caseStmt.guard).toBeTruthy();
+			assertNodeType(caseStmt.guard!, "Compare");
+		});
+
+		test("dictionary pattern with rest capture", () => {
+			const code = `
+match data:
+    case {'type': 'admin', **rest}:
+        return rest
+`;
+			const ast = parseCode(code);
+			const matchStmt = ast.body[0];
+			assertNodeType(matchStmt, "Match");
+			
+			const caseStmt = (matchStmt as Extract<StmtNode, { nodeType: "Match" }>).cases[0];
+			assertNodeType(caseStmt.pattern, "MatchMapping");
+			const pattern = caseStmt.pattern as Extract<import("../src/types.js").PatternNode, { nodeType: "MatchMapping" }>;
+			expect(pattern.rest).toBe("rest");
+		});
+	});
+
+	describe("Class Pattern Fixes", () => {
+		test("class pattern with arguments", () => {
+			const code = `
+match value:
+    case str(name):
+        return f'String: {name}'
+`;
+			const ast = parseCode(code);
+			const matchStmt = ast.body[0];
+			assertNodeType(matchStmt, "Match");
+			
+			const caseStmt = (matchStmt as Extract<StmtNode, { nodeType: "Match" }>).cases[0];
+			assertNodeType(caseStmt.pattern, "MatchClass");
+			const pattern = caseStmt.pattern as Extract<import("../src/types.js").PatternNode, { nodeType: "MatchClass" }>;
+			expect(pattern.patterns).toHaveLength(1);
+		});
+
+		test("class pattern with multiple arguments", () => {
+			const code = `
+match point:
+    case Point(int(x), int(y)):
+        return f'Point at ({x}, {y})'
+`;
+			const ast = parseCode(code);
+			const matchStmt = ast.body[0];
+			assertNodeType(matchStmt, "Match");
+			
+			const caseStmt = (matchStmt as Extract<StmtNode, { nodeType: "Match" }>).cases[0];
+			assertNodeType(caseStmt.pattern, "MatchClass");
+			const pattern = caseStmt.pattern as Extract<import("../src/types.js").PatternNode, { nodeType: "MatchClass" }>;
+			expect(pattern.patterns).toHaveLength(2);
+		});
+
+		test("class pattern with keyword arguments", () => {
+			const code = `
+match point:
+    case Point(x=int(x_val), y=int(y_val)):
+        return f'Point at x={x_val}, y={y_val}'
+`;
+			const ast = parseCode(code);
+			const matchStmt = ast.body[0];
+			assertNodeType(matchStmt, "Match");
+			
+			const caseStmt = (matchStmt as Extract<StmtNode, { nodeType: "Match" }>).cases[0];
+			assertNodeType(caseStmt.pattern, "MatchClass");
+			const pattern = caseStmt.pattern as Extract<import("../src/types.js").PatternNode, { nodeType: "MatchClass" }>;
+			expect(pattern.kwd_attrs).toHaveLength(2);
+			expect(pattern.kwd_patterns).toHaveLength(2);
+		});
+
+		test("class pattern with mixed positional and keyword arguments", () => {
+			const code = `
+match data:
+    case Person(str(name), age=int(age)):
+        return f'{name} is {age} years old'
+`;
+			const ast = parseCode(code);
+			const matchStmt = ast.body[0];
+			assertNodeType(matchStmt, "Match");
+			
+			const caseStmt = (matchStmt as Extract<StmtNode, { nodeType: "Match" }>).cases[0];
+			assertNodeType(caseStmt.pattern, "MatchClass");
+			const pattern = caseStmt.pattern as Extract<import("../src/types.js").PatternNode, { nodeType: "MatchClass" }>;
+			expect(pattern.patterns).toHaveLength(1);
+			expect(pattern.kwd_attrs).toHaveLength(1);
+			expect(pattern.kwd_patterns).toHaveLength(1);
+		});
+	});
+
+	test("reject invalid one-line match statements", () => {
+		expect(() => {
+			parseCode("match x: case 1:");
+		}).toThrow();
+	});
+
+	test("accept valid multi-line match statements", () => {
+		const code = `
+match x:
+    case 1:
+        return "one"
+`;
+		const ast = parseCode(code);
+		const matchStmt = ast.body[0];
+		assertNodeType(matchStmt, "Match");
+		expect((matchStmt as any).cases).toHaveLength(1);
+	});
+});
+
+describe("Exception Handling", () => {
+	describe("TryStar (except*) Support", () => {
+		test("simple except* syntax", () => {
+			const code = `
+try:
+    risky_operation()
+except* ValueError as e:
+    handle_value_error(e)
+`;
+			const ast = parseCode(code);
+			const tryStmt = ast.body[0];
+			assertNodeType(tryStmt, "TryStar");
+			
+			expect((tryStmt as any).handlers).toHaveLength(1);
+			const handler = (tryStmt as any).handlers[0];
+			assertNodeType(handler, "ExceptHandler");
+			expect((handler as any).type?.nodeType).toBe("Name");
+			expect((handler as any).type?.id).toBe("ValueError");
+			expect((handler as any).name).toBe("e");
+		});
+
+		test("multiple except* handlers", () => {
+			const code = `
+try:
+    operation()
+except* ValueError as ve:
+    handle_value_error(ve)
+except* TypeError as te:
+    handle_type_error(te)
+`;
+			const ast = parseCode(code);
+			const tryStmt = ast.body[0];
+			assertNodeType(tryStmt, "TryStar");
+			expect((tryStmt as any).handlers).toHaveLength(2);
+		});
+
+		test("except* with finally", () => {
+			const code = `
+try:
+    operation()
+except* Exception as e:
+    handle_exception(e)
+finally:
+    cleanup()
+`;
+			const ast = parseCode(code);
+			const tryStmt = ast.body[0];
+			assertNodeType(tryStmt, "TryStar");
+			expect((tryStmt as any).finalbody).toHaveLength(1);
+		});
+	});
+});
 
 describe("If Statements", () => {
 	test("simple if", () => {

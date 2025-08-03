@@ -968,6 +968,7 @@ export class Parser {
 		const subject = this.parseTest();
 		this.consume(TokenType.COLON, "Expected ':' after match subject");
 
+		// Match statements must always be multi-line with proper indentation
 		this.consume(TokenType.NEWLINE, "Expected newline after match:");
 		this.consume(TokenType.INDENT, "Expected indented block");
 
@@ -1051,8 +1052,29 @@ export class Parser {
 				const className = this.advance(); // consume the name
 				this.advance(); // consume the (
 
-				// For now, we'll only handle empty parentheses like int(), str()
-				// TODO: Add support for patterns with arguments inside parentheses
+				const patterns: PatternNode[] = [];
+				const kwd_attrs: string[] = [];
+				const kwd_patterns: PatternNode[] = [];
+
+				if (!this.check(TokenType.RPAR)) {
+					do {
+						// Check for keyword patterns
+						if (
+							this.check(TokenType.NAME) &&
+							this.peekNext().type === TokenType.EQUAL
+						) {
+							const kwdName = this.advance().value;
+							this.advance(); // consume =
+							const kwdPattern = this.parsePattern();
+							kwd_attrs.push(kwdName);
+							kwd_patterns.push(kwdPattern);
+						} else {
+							// Positional pattern
+							patterns.push(this.parsePattern());
+						}
+					} while (this.match(TokenType.COMMA) && !this.check(TokenType.RPAR));
+				}
+
 				this.consume(TokenType.RPAR, "Expected ')' in class pattern");
 
 				const cls: ExprNode = {
@@ -1066,9 +1088,9 @@ export class Parser {
 				return {
 					nodeType: "MatchClass",
 					cls,
-					patterns: [], // No arguments in the pattern for now
-					kwd_attrs: [],
-					kwd_patterns: [],
+					patterns,
+					kwd_attrs,
+					kwd_patterns,
 					lineno: start.lineno,
 					col_offset: start.col_offset,
 				};
@@ -1136,6 +1158,47 @@ export class Parser {
 			return {
 				nodeType: "MatchSequence",
 				patterns,
+				lineno: start.lineno,
+				col_offset: start.col_offset,
+			};
+		}
+
+		// Dictionary pattern {...}
+		if (this.match(TokenType.LBRACE)) {
+			const keys: ExprNode[] = [];
+			const patterns: PatternNode[] = [];
+			let rest: string | undefined;
+
+			if (!this.check(TokenType.RBRACE)) {
+				do {
+					if (this.match(TokenType.DOUBLESTAR)) {
+						// **rest pattern
+						rest = this.consume(
+							TokenType.NAME,
+							"Expected name after '**'",
+						).value;
+						break;
+					}
+
+					// Parse key expression
+					const key = this.parseTest();
+					this.consume(TokenType.COLON, "Expected ':' in mapping pattern");
+
+					// Parse value pattern
+					const pattern = this.parsePattern();
+
+					keys.push(key);
+					patterns.push(pattern);
+				} while (this.match(TokenType.COMMA) && !this.check(TokenType.RBRACE));
+			}
+
+			this.consume(TokenType.RBRACE, "Expected '}' after mapping pattern");
+
+			return {
+				nodeType: "MatchMapping",
+				keys,
+				patterns,
+				rest,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
 			};

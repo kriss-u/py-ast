@@ -166,8 +166,101 @@ async def complex_func(
     **kwargs: Dict[str, Any]
 ) -> AsyncIterator[str]:
     pass`);
-		assertNodeType(stmt, "AsyncFunctionDef");
-		expect(stmt.decorator_list).toHaveLength(2);
-		expect(stmt.returns?.nodeType).toBe("Subscript");
+                assertNodeType(stmt, "AsyncFunctionDef");
+                expect(stmt.decorator_list).toHaveLength(2);
+                expect(stmt.returns?.nodeType).toBe("Subscript");
+        });
+});
+
+describe("Import with Parentheses", () => {
+	describe("Valid parenthesized imports", () => {
+		test("single name in parentheses", () => {
+			const stmt = parseStatement(`from module import (name)`);
+			assertNodeType(stmt, "ImportFrom");
+			expect(stmt.module).toBe("module");
+			expect(stmt.names).toHaveLength(1);
+			expect(stmt.names[0].name).toBe("name");
+		});
+
+		test("multiple names in parentheses", () => {
+			const stmt = parseStatement(`from some.module import (function_one, function_two, function_three)`);
+			assertNodeType(stmt, "ImportFrom");
+			expect(stmt.module).toBe("some.module");
+			expect(stmt.names).toHaveLength(3);
+			expect(stmt.names[0].name).toBe("function_one");
+			expect(stmt.names[1].name).toBe("function_two");
+			expect(stmt.names[2].name).toBe("function_three");
+		});
+
+		test("multiline parenthesized imports", () => {
+			const stmt = parseStatement(`from pkg import (
+    name1,
+    name2,
+    name3
+)`);
+			assertNodeType(stmt, "ImportFrom");
+			expect(stmt.module).toBe("pkg");
+			expect(stmt.names).toHaveLength(3);
+			expect(stmt.names[0].name).toBe("name1");
+			expect(stmt.names[1].name).toBe("name2");
+			expect(stmt.names[2].name).toBe("name3");
+		});
+
+		test("trailing comma in parentheses", () => {
+			const stmt = parseStatement(`from module import (name,)`);
+			assertNodeType(stmt, "ImportFrom");
+			expect(stmt.module).toBe("module");
+			expect(stmt.names).toHaveLength(1);
+			expect(stmt.names[0].name).toBe("name");
+		});
+
+		test("multiple names with trailing comma", () => {
+			const stmt = parseStatement(`from module import (name1, name2, name3,)`);
+			assertNodeType(stmt, "ImportFrom");
+			expect(stmt.names).toHaveLength(3);
+		});
+
+		test("imports with aliases in parentheses", () => {
+			const stmt = parseStatement(`from module import (name1 as alias1, name2 as alias2)`);
+			assertNodeType(stmt, "ImportFrom");
+			expect(stmt.names).toHaveLength(2);
+			expect(stmt.names[0].name).toBe("name1");
+			expect(stmt.names[0].asname).toBe("alias1");
+			expect(stmt.names[1].name).toBe("name2");
+			expect(stmt.names[1].asname).toBe("alias2");
+		});
+
+		test("star import with parentheses", () => {
+			const stmt = parseStatement(`from module import (*)`);
+			assertNodeType(stmt, "ImportFrom");
+			expect(stmt.names).toHaveLength(1);
+			expect(stmt.names[0].name).toBe("*");
+		});
+	});
+
+	describe("Edge cases with parentheses", () => {
+		test("empty parentheses should fail", () => {
+			expect(() => {
+				parseStatement(`from module import ()`);
+			}).toThrow();
+		});
+
+		test("nested parentheses should fail", () => {
+			expect(() => {
+				parseStatement(`from module import ((name))`);
+			}).toThrow();
+		});
+
+		test("complex multiline imports with comments", () => {
+			const code = `from very.long.module.name import (
+    function_with_very_long_name,  # This function does something
+    another_function,  # This one does something else
+    ClassWithLongName,  # A class
+    CONSTANT_VALUE,  # A constant
+)`;
+			const stmt = parseStatement(code);
+			assertNodeType(stmt, "ImportFrom");
+			expect(stmt.names).toHaveLength(4);
+		});
 	});
 });
