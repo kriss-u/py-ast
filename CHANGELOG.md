@@ -1,3 +1,10 @@
+## [1.4.1](https://github.com/kriss-u/py-ast/compare/v1.4.0...v1.4.1) (2025-08-03)
+
+
+### Bug Fixes
+
+* properly unparse f string ([c3bf9d4](https://github.com/kriss-u/py-ast/commit/c3bf9d4cab9b4a1bfa17c82d008521ecc2b9fe6d))
+
 # [1.4.0](https://github.com/kriss-u/py-ast/compare/v1.3.0...v1.4.0) (2025-08-02)
 
 
