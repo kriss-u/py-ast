@@ -399,9 +399,11 @@ class Unparser extends NodeVisitor {
 		this.fill("match ");
 		this.visit(node.subject);
 		this.write(":");
+		this.context.indent++;
 		for (const case_ of node.cases) {
 			this.visit(case_);
 		}
+		this.context.indent--;
 	}
 
 	visit_MatchCase(
@@ -414,9 +416,11 @@ class Unparser extends NodeVisitor {
 			this.visit(node.guard);
 		}
 		this.write(":");
+		this.context.indent++;
 		for (const stmt of node.body) {
 			this.visit(stmt);
 		}
+		this.context.indent--;
 	}
 
 	visit_Expr(node: Extract<StmtNode, { nodeType: "Expr" }>): void {
@@ -498,7 +502,22 @@ class Unparser extends NodeVisitor {
 		this.context.indent--;
 
 		for (const handler of node.handlers) {
-			this.visit(handler);
+			// Handle except* syntax for TryStar nodes
+			this.fill("except*");
+			if (handler.type) {
+				this.write(" ");
+				this.visit(handler.type);
+				if (handler.name) {
+					this.write(" as ");
+					this.write(handler.name);
+				}
+			}
+			this.write(":");
+			this.context.indent++;
+			for (const stmt of handler.body) {
+				this.visit(stmt);
+			}
+			this.context.indent--;
 		}
 
 		if (node.orelse.length > 0) {
