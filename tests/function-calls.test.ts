@@ -1,4 +1,5 @@
-import { assertNodeType, parseExpression } from "./test-helpers.js";
+import { assertNodeType, parseExpression, parseCode } from "./test-helpers.js";
+import { unparse } from "../src/unparser.js";
 
 describe("Function Calls", () => {
 	test("simple function call", () => {
@@ -135,6 +136,17 @@ describe("F-strings", () => {
 		const formatted = expr.values[1];
 		assertNodeType(formatted, "FormattedValue");
 		expect(formatted.format_spec).toBeDefined();
+	});
+
+	test("f-string format spec round-trip", () => {
+		const source = 'f"Elapsed: {time.time() - self.start:.2f}s"';
+		const ast = parseCode(source);
+		const unparsed = unparse(ast);
+		expect(unparsed).toBe(source);
+		
+		// Ensure it can be parsed again
+		const ast2 = parseCode(unparsed);
+		expect(ast2).toBeDefined();
 	});
 
 	test("f-string with conversion", () => {

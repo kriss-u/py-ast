@@ -773,22 +773,37 @@ class Unparser extends NodeVisitor {
 
 	visit_JoinedStr(node: Extract<ExprNode, { nodeType: "JoinedStr" }>): void {
 		this.write('f"');
+		this.writeJoinedStrContent(node);
+		this.write('"');
+	}
+
+	private writeJoinedStrContent(
+		node: Extract<ExprNode, { nodeType: "JoinedStr" }>,
+	): void {
 		for (const value of node.values) {
 			if (value.nodeType === "Constant") {
 				this.write(String(value.value));
 			} else if (value.nodeType === "FormattedValue") {
 				this.write("{");
 				this.visit(value.value);
+				if (value.conversion !== -1) {
+					if (value.conversion === 115) this.write("!s");
+					else if (value.conversion === 114) this.write("!r");
+					else if (value.conversion === 97) this.write("!a");
+				}
 				if (value.format_spec) {
 					this.write(":");
-					this.visit(value.format_spec);
+					if (value.format_spec.nodeType === "JoinedStr") {
+						this.writeJoinedStrContent(value.format_spec);
+					} else {
+						this.visit(value.format_spec);
+					}
 				}
 				this.write("}");
 			} else {
 				this.visit(value);
 			}
 		}
-		this.write('"');
 	}
 
 	visit_FormattedValue(
@@ -803,7 +818,11 @@ class Unparser extends NodeVisitor {
 		}
 		if (node.format_spec) {
 			this.write(":");
-			this.visit(node.format_spec);
+			if (node.format_spec.nodeType === "JoinedStr") {
+				this.writeJoinedStrContent(node.format_spec);
+			} else {
+				this.visit(node.format_spec);
+			}
 		}
 		this.write("}");
 	}
