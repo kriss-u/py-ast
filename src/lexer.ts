@@ -252,8 +252,19 @@ export class Lexer {
 			return;
 		}
 
-		// Identifiers and keywords
+		// Identifiers and keywords - check for f-strings first
 		if (this.isAlpha(c) || c === "_") {
+			// Check for f-string
+			if (
+				c.toLowerCase() === "f" &&
+				this.position.index + 1 < this.source.length
+			) {
+				const nextChar = this.peekNext();
+				if (nextChar === '"' || nextChar === "'") {
+					this.scanFString();
+					return;
+				}
+			}
 			this.scanIdentifier();
 			return;
 		}
@@ -426,6 +437,108 @@ export class Lexer {
 				);
 			} else {
 				throw new Error(`Unterminated string literal at line ${start.line}`);
+			}
+		}
+
+		this.addTokenAt(TokenType.STRING, value, start);
+	}
+
+	private scanFString(): void {
+		const start = { ...this.position }; // Create a copy
+
+		// Consume 'f'
+		let value = this.peek();
+		this.advance();
+
+		// Get the quote character
+		const quote = this.peek();
+		value += quote;
+		this.advance();
+
+		// Check for triple quotes
+		const isTripleQuote = this.peek() === quote && this.peekNext() === quote;
+		if (isTripleQuote) {
+			value += quote + quote;
+			this.advance(); // consume second quote
+			this.advance(); // consume third quote
+		}
+
+		let braceLevel = 0;
+		let stringClosed = false;
+
+		while (this.position.index < this.source.length) {
+			const c = this.peek();
+
+			// Handle escape sequences
+			if (c === "\\") {
+				value += c;
+				this.advance();
+				if (this.position.index < this.source.length) {
+					value += this.peek();
+					this.advance();
+				}
+				continue;
+			}
+
+			// Track braces to handle nested expressions
+			if (c === "{") {
+				braceLevel++;
+				value += c;
+				this.advance();
+				continue;
+			}
+
+			if (c === "}") {
+				if (braceLevel > 0) {
+					braceLevel--;
+				}
+				value += c;
+				this.advance();
+				continue;
+			}
+
+			// Check for closing quote only when not inside braces
+			if (braceLevel === 0) {
+				if (isTripleQuote) {
+					if (
+						c === quote &&
+						this.peekNext() === quote &&
+						this.peek(2) === quote
+					) {
+						value += quote + quote + quote;
+						this.advance(); // consume first quote
+						this.advance(); // consume second quote
+						this.advance(); // consume third quote
+						stringClosed = true;
+						break;
+					}
+				} else {
+					if (c === quote) {
+						value += quote;
+						this.advance();
+						stringClosed = true;
+						break;
+					}
+					if (c === "\n") {
+						throw new Error(
+							`Unterminated f-string literal at line ${this.position.line}`,
+						);
+					}
+				}
+			}
+
+			value += c;
+			this.advance();
+		}
+
+		// If we reached end of source without closing the f-string, it's an error
+		if (!stringClosed) {
+			if (isTripleQuote) {
+				throw new Error(
+					`Unterminated triple-quoted f-string literal at line ${start.line}`,
+				);
+			} else {
+				throw new Error(`Unterminated f-string literal at line ${start.line}`);
 			}
 		}
 
