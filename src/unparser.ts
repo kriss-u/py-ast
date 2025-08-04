@@ -46,17 +46,77 @@ interface UnparseContext {
 }
 
 /**
+ * Detect indentation style from the AST by looking at function/class definitions
+ */
+function detectIndentStyle(node: ASTNodeUnion): string {
+	// Default to 4 spaces if we can't detect
+	let detectedIndent = "    ";
+
+	// biome-ignore lint/suspicious/noExplicitAny: AST traversal requires handling dynamic structures
+	function traverse(n: any): void {
+		if (!n || typeof n !== "object") return;
+
+		// Look for indented blocks (functions, classes, if statements, etc.)
+		if (
+			n.nodeType === "FunctionDef" ||
+			n.nodeType === "AsyncFunctionDef" ||
+			n.nodeType === "ClassDef" ||
+			n.nodeType === "If" ||
+			n.nodeType === "For" ||
+			n.nodeType === "While" ||
+			n.nodeType === "With" ||
+			n.nodeType === "Try"
+		) {
+			// Check if we have body with statements that have col_offset info
+			if (n.body && Array.isArray(n.body) && n.body.length > 0) {
+				const firstBodyStmt = n.body[0];
+				if (
+					firstBodyStmt &&
+					typeof firstBodyStmt.col_offset === "number" &&
+					typeof n.col_offset === "number"
+				) {
+					const indentSize = firstBodyStmt.col_offset - n.col_offset;
+					if (indentSize > 0 && indentSize <= 8) {
+						// Reasonable indent sizes
+						if (indentSize === 1) {
+							detectedIndent = "\t"; // Tab
+						} else {
+							detectedIndent = " ".repeat(indentSize); // Spaces
+						}
+						return; // Found it, stop searching
+					}
+				}
+			}
+		}
+
+		// Recursively search through the AST
+		for (const value of Object.values(n)) {
+			if (Array.isArray(value)) {
+				value.forEach(traverse);
+			} else if (value && typeof value === "object") {
+				traverse(value);
+			}
+		}
+	}
+
+	traverse(node);
+	return detectedIndent;
+}
+
+/**
  * Unparse an AST node back to Python source code
  */
 export function unparse(
 	node: ASTNodeUnion,
 	options: { indent?: string } = {},
 ): string {
+	const detectedIndent = options.indent || detectIndentStyle(node);
+
 	const context: UnparseContext = {
 		precedence: Precedence.TUPLE,
 		source: [],
 		indent: 0,
-		indentString: options.indent || "    ", // 4 spaces instead of tab
+		indentString: detectedIndent,
 		isFirstStatement: true,
 	};
 
@@ -254,6 +314,26 @@ class Unparser extends NodeVisitor {
 		this.interleave(" = ", (target) => this.visit(target), node.targets);
 		this.write(" = ");
 		this.visit(node.value);
+
+		// Handle additional expression comments (avoid duplicating inlineComment)
+		const assignNode = node as Extract<StmtNode, { nodeType: "Assign" }> & {
+			expressionComments?: Comment[];
+		};
+		if (assignNode.expressionComments) {
+			// Find comments that aren't already handled as inlineComment
+			const inlineCommentValue = assignNode.inlineComment?.value;
+			const additionalComments = assignNode.expressionComments.filter(
+				(comment) => comment.value !== inlineCommentValue,
+			);
+
+			for (const comment of additionalComments) {
+				if (comment.inline) {
+					this.write("  ", comment.value);
+				} else {
+					this.write("\n", comment.value);
+				}
+			}
+		}
 	}
 
 	visit_AugAssign(node: Extract<StmtNode, { nodeType: "AugAssign" }>): void {
