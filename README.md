@@ -1076,4 +1076,6 @@ MIT License
 
 ## AI Usage
 
-Most part of this project is built using Claude Sonnet 4 in Github Copilot. However, a comprehensive verification and testing of both the code and the features.
+Most part of this project is built using Claude Sonnet 4 in Github Copilot. 
+
+A comprehensive verification and testing of both the code and the features is done.
