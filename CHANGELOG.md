@@ -1,3 +1,15 @@
+# [1.7.0](https://github.com/kriss-u/py-ast/compare/v1.6.0...v1.7.0) (2025-08-04)
+
+
+### Bug Fixes
+
+* fix the indent issue when comments are present ([808b69f](https://github.com/kriss-u/py-ast/commit/808b69fa1de212377100167dcf2bc044791015fb))
+
+
+### Features
+
+* add support for comments ([b020b15](https://github.com/kriss-u/py-ast/commit/b020b1506be2136c4911cdd6a80ef7b7f4bf8520))
+
 # [1.6.0](https://github.com/kriss-u/py-ast/compare/v1.5.0...v1.6.0) (2025-08-03)
 
 
