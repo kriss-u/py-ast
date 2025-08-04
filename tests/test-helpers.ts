@@ -1,6 +1,76 @@
 import { parse } from "../src/parser.js";
-import type { ExprNode, Module, StmtNode } from "../src/types.js";
+import type { ExprNode, Module, StmtNode, Comment } from "../src/types.js";
 import { unparse } from "../src/unparser.js";
+
+/**
+ * Helper function to collect all comments from an AST recursively
+ */
+export function collectComments(ast: Module): Comment[] {
+	const comments: Comment[] = [];
+	
+	function collectFromBody(body: StmtNode[]): void {
+		for (const stmt of body) {
+			if (stmt.nodeType === "Comment") {
+				comments.push(stmt);
+			} else {
+				// Check for inline comments attached to this statement
+				if (stmt.inlineComment) {
+					comments.push(stmt.inlineComment);
+				}
+				collectFromStmt(stmt);
+			}
+		}
+	}
+	
+	function collectFromStmt(stmt: StmtNode): void {
+		switch (stmt.nodeType) {
+			case "FunctionDef":
+			case "AsyncFunctionDef":
+				collectFromBody(stmt.body);
+				break;
+			case "ClassDef":
+				collectFromBody(stmt.body);
+				break;
+			case "If":
+				collectFromBody(stmt.body);
+				collectFromBody(stmt.orelse);
+				break;
+			case "For":
+			case "AsyncFor":
+				collectFromBody(stmt.body);
+				collectFromBody(stmt.orelse);
+				break;
+			case "While":
+				collectFromBody(stmt.body);
+				collectFromBody(stmt.orelse);
+				break;
+			case "With":
+			case "AsyncWith":
+				collectFromBody(stmt.body);
+				break;
+			case "Try":
+				collectFromBody(stmt.body);
+				if (stmt.handlers) {
+					for (const handler of stmt.handlers) {
+						collectFromBody(handler.body);
+					}
+				}
+				collectFromBody(stmt.orelse);
+				collectFromBody(stmt.finalbody);
+				break;
+			case "Match":
+				if (stmt.cases) {
+					for (const case_ of stmt.cases) {
+						collectFromBody(case_.body);
+					}
+				}
+				break;
+		}
+	}
+	
+	collectFromBody(ast.body);
+	return comments;
+}
 
 /**
  * Test helper to parse Python code and return the AST

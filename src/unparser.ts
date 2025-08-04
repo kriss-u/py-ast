@@ -3,6 +3,7 @@ import type {
 	Arguments,
 	ASTNodeUnion,
 	CmpOpNode,
+	Comment,
 	ExprNode,
 	Keyword,
 	ModuleNode,
@@ -39,6 +40,9 @@ interface UnparseContext {
 	indent: number;
 	indentString: string;
 	isFirstStatement: boolean;
+	// For handling inline comments during unparsing
+	inlineComments?: Comment[];
+	commentsByLine?: Map<number, Comment[]>;
 }
 
 /**
@@ -52,7 +56,7 @@ export function unparse(
 		precedence: Precedence.TUPLE,
 		source: [],
 		indent: 0,
-		indentString: options.indent || "    ",
+		indentString: options.indent || "    ", // 4 spaces instead of tab
 		isFirstStatement: true,
 	};
 
@@ -65,6 +69,19 @@ export function unparse(
 class Unparser extends NodeVisitor {
 	constructor(private context: UnparseContext) {
 		super();
+	}
+
+	// Override visit to handle inline comments for statement nodes
+	// biome-ignore lint/suspicious/noExplicitAny: Visitor pattern requires dynamic return types
+	visit(node: ASTNodeUnion): any {
+		const result = super.visit(node);
+
+		// After visiting a statement node, check for inline comments
+		if ("inlineComment" in node && node.inlineComment) {
+			this.write("  ", node.inlineComment.value);
+		}
+
+		return result;
 	}
 
 	private write(...text: string[]): void {
@@ -371,6 +388,16 @@ class Unparser extends NodeVisitor {
 
 	visit_Continue(_node: Extract<StmtNode, { nodeType: "Continue" }>): void {
 		this.fill("continue");
+	}
+
+	visit_Comment(node: Extract<StmtNode, { nodeType: "Comment" }>): void {
+		if (node.inline) {
+			// For inline comments, append to current line with a space
+			this.write("  ", node.value);
+		} else {
+			// For standalone comments, start a new line
+			this.fill(node.value);
+		}
 	}
 
 	visit_Delete(node: Extract<StmtNode, { nodeType: "Delete" }>): void {

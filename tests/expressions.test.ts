@@ -181,10 +181,12 @@ describe("F-string Support", () => {
 	test("f-strings in list with inline comments should parse correctly", () => {
 		const code = `
 def format_examples():
+    # Comment before the list
     formatted = [
-        f"Expression: 2 + 3 = {2 + 3}",  # Debug format alternative
+        f"Expression: 2 + 3 = {2 + 3}", # Inline comment
         f"Dict access: {test_dict['key']}",
     ]
+    # Comment after the list
     return formatted
 `;
 
