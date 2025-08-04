@@ -48,6 +48,7 @@ export class Parser {
 	private current = 0;
 	private includeComments: boolean;
 	private lastNonCommentTokenLine = 0; // Track the line of the last non-comment, non-newline token
+	private pendingComments: Comment[] = []; // Temporary storage for comments during expression parsing
 
 	constructor(source: string, options: ParseOptions = {}) {
 		const lexer = new Lexer(source);
@@ -82,6 +83,25 @@ export class Parser {
 				continue;
 			}
 
+			// Handle comments that were collected during token peeking
+			if (this.includeComments && this.pendingComments.length > 0) {
+				for (const comment of this.pendingComments) {
+					// If this is an inline comment and we have a previous statement, attach it
+					if (comment.inline && body.length > 0) {
+						const lastStmt = body[body.length - 1];
+						// Add the comment as metadata to the last statement
+						if (!lastStmt.inlineComment) {
+							lastStmt.inlineComment = comment;
+						}
+					} else {
+						// For standalone comments, add as separate statement
+						body.push(comment);
+					}
+				}
+				// Clear pending comments after processing
+				this.pendingComments = [];
+			}
+
 			// Parse comments as proper statement nodes when includeComments is enabled
 			if (this.includeComments && this.check(TokenType.COMMENT)) {
 				const comment = this.parseCommentStatement();
@@ -103,7 +123,42 @@ export class Parser {
 			const stmt = this.parseStatement();
 			if (stmt) {
 				body.push(stmt);
+
+				// Process any comments that were collected during statement parsing
+				if (this.includeComments && this.pendingComments.length > 0) {
+					for (const comment of this.pendingComments) {
+						if (comment.inline) {
+							// Attach inline comment to the statement we just parsed
+							if (!stmt.inlineComment) {
+								stmt.inlineComment = comment;
+							}
+						} else {
+							// Add standalone comment as separate statement
+							body.push(comment);
+						}
+					}
+					// Clear pending comments after processing
+					this.pendingComments = [];
+				}
 			}
+		}
+
+		// Handle any remaining pending comments after the main parsing loop
+		if (this.includeComments && this.pendingComments.length > 0) {
+			for (const comment of this.pendingComments) {
+				if (comment.inline && body.length > 0) {
+					// Attach inline comment to the last statement
+					const lastStmt = body[body.length - 1];
+					if (!lastStmt.inlineComment) {
+						lastStmt.inlineComment = comment;
+					}
+				} else {
+					// Add standalone comment as separate statement
+					body.push(comment);
+				}
+			}
+			// Clear pending comments after processing
+			this.pendingComments = [];
 		}
 
 		const result: Module = {
@@ -159,6 +214,10 @@ export class Parser {
 		};
 
 		collectFromBody(module.body);
+
+		// Also include any pending comments from expression parsing
+		comments.push(...this.pendingComments);
+
 		return comments;
 	}
 
@@ -224,11 +283,6 @@ export class Parser {
 	} // ==== Statement parsers ====
 
 	private parseStatement(): StmtNode | null {
-		// Skip comment tokens
-		while (this.check(TokenType.COMMENT)) {
-			this.advance();
-		}
-
 		// Handle indentation
 		if (this.check(TokenType.INDENT)) {
 			// INDENT tokens should only appear after compound statements
@@ -589,20 +643,52 @@ export class Parser {
 			this.validateAssignmentTarget(expr);
 			let value = this.parseTestList();
 
+			// Collect any comments that were gathered during value parsing
+			const expressionComments: Comment[] = [];
+			if (this.includeComments && this.pendingComments.length > 0) {
+				expressionComments.push(...this.pendingComments);
+				this.pendingComments = [];
+			}
+
 			// Check for chained assignments like x = y = z
 			while (this.match(TokenType.EQUAL)) {
 				this.validateAssignmentTarget(value);
 				targets.push(value);
 				value = this.parseTestList();
+
+				// Collect any additional comments from chained assignment parsing
+				if (this.includeComments && this.pendingComments.length > 0) {
+					expressionComments.push(...this.pendingComments);
+					this.pendingComments = [];
+				}
 			}
 
-			return {
+			const assignNode: StmtNode & { expressionComments?: Comment[] } = {
 				nodeType: "Assign",
 				targets,
 				value,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
 			};
+
+			// Attach all collected expression comments
+			if (expressionComments.length > 0) {
+				// For now, attach the first inline comment as inlineComment
+				// and store the rest as a special property
+				const inlineComments = expressionComments.filter((c) => c.inline);
+				const standaloneComments = expressionComments.filter((c) => !c.inline);
+
+				if (inlineComments.length > 0) {
+					assignNode.inlineComment = inlineComments[0];
+				}
+
+				// Store additional comments for unparsing
+				if (inlineComments.length > 1 || standaloneComments.length > 0) {
+					assignNode.expressionComments = expressionComments;
+				}
+			}
+
+			return assignNode;
 		} else if (this.matchAugAssign()) {
 			// Augmented assignment
 			this.validateAssignmentTarget(expr);
@@ -2232,7 +2318,26 @@ export class Parser {
 					continue;
 				}
 
-				// Parse comments as statement nodes when includeComments is enabled
+				// Handle comments that were collected during token peeking
+				if (this.includeComments && this.pendingComments.length > 0) {
+					for (const comment of this.pendingComments) {
+						// If this is an inline comment and we have a previous statement, attach it
+						if (comment.inline && stmts.length > 0) {
+							const lastStmt = stmts[stmts.length - 1];
+							// Add the comment as metadata to the last statement
+							if (!lastStmt.inlineComment) {
+								lastStmt.inlineComment = comment;
+							}
+						} else {
+							// For standalone comments, add as separate statement
+							stmts.push(comment);
+						}
+					}
+					// Clear pending comments after processing
+					this.pendingComments = [];
+				}
+
+				// Parse comments as statement nodes when includeComments is enabled (fallback for direct comment tokens)
 				if (this.includeComments && this.check(TokenType.COMMENT)) {
 					const comment = this.parseCommentStatement();
 
@@ -2253,6 +2358,23 @@ export class Parser {
 				const stmt = this.parseStatement();
 				if (stmt) {
 					stmts.push(stmt);
+
+					// Process any comments that were collected during statement parsing
+					if (this.includeComments && this.pendingComments.length > 0) {
+						for (const comment of this.pendingComments) {
+							if (comment.inline) {
+								// Attach inline comment to the statement we just parsed
+								if (!stmt.inlineComment) {
+									stmt.inlineComment = comment;
+								}
+							} else {
+								// Add standalone comment as separate statement
+								stmts.push(comment);
+							}
+						}
+						// Clear pending comments after processing
+						this.pendingComments = [];
+					}
 				}
 			}
 
@@ -3149,6 +3271,27 @@ export class Parser {
 	}
 
 	private peek(): Token {
+		// Skip over comment tokens and collect them
+		let currentIndex = this.current;
+		while (
+			currentIndex < this.tokens.length &&
+			this.tokens[currentIndex].type === TokenType.COMMENT
+		) {
+			// Create comment node directly without using parseCommentStatement to avoid recursion
+			const commentToken = this.tokens[currentIndex];
+			const comment: Comment = {
+				nodeType: "Comment",
+				value: commentToken.value,
+				inline: commentToken.lineno === this.lastNonCommentTokenLine,
+				lineno: commentToken.lineno,
+				col_offset: commentToken.col_offset,
+			};
+			this.pendingComments.push(comment);
+			// Advance past this comment token
+			currentIndex++;
+			this.current = currentIndex;
+		}
+
 		if (this.current >= this.tokens.length) {
 			// Return EOF token if we've gone past the end
 			return {
@@ -3190,7 +3333,7 @@ export class Parser {
 
 		// Track the line number of non-comment, non-newline tokens
 		if (token.type !== TokenType.COMMENT && token.type !== TokenType.NEWLINE) {
-			this.lastNonCommentTokenLine = token.lineno;
+			this.lastNonCommentTokenLine = token.end_lineno || token.lineno;
 		}
 
 		return token;
