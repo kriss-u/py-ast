@@ -1,3 +1,11 @@
+# [1.9.0](https://github.com/kriss-u/py-ast/compare/v1.8.1...v1.9.0) (2025-08-04)
+
+
+### Features
+
+* handle nested string ([fe10cb6](https://github.com/kriss-u/py-ast/commit/fe10cb68af574232157ab9d7d4a0072b8fa55b77))
+* handle quotes as original ([404849c](https://github.com/kriss-u/py-ast/commit/404849c575ebb3bd9a890aaeebdbea1d4a0ed0f8))
+
 ## [1.8.1](https://github.com/kriss-u/py-ast/compare/v1.8.0...v1.8.1) (2025-08-04)
 
 
