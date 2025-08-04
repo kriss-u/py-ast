@@ -1,3 +1,10 @@
+## [1.8.1](https://github.com/kriss-u/py-ast/compare/v1.8.0...v1.8.1) (2025-08-04)
+
+
+### Bug Fixes
+
+* preserve parenthesis on precedence ([f6224d4](https://github.com/kriss-u/py-ast/commit/f6224d4fca7763f8a85a1cc9b000d9cf422b6002))
+
 # [1.8.0](https://github.com/kriss-u/py-ast/compare/v1.7.0...v1.8.0) (2025-08-04)
 
 
