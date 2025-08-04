@@ -26,13 +26,13 @@ describe("Public API Tests", () => {
 		const codeWithComment = "x = 1  # this is a comment";
 		const ast3 = parse(codeWithComment, { comments: true });
 		expect(ast3.nodeType).toBe("Module");
-		expect(ast3.body).toHaveLength(1);
+		expect(ast3.body).toHaveLength(1); // Assignment with inline comment attached
 
 		// Test hash comment parsing
 		const codeWithHashComment = "x = 1  # this is a hash comment";
 		const ast4 = parse(codeWithHashComment, { comments: true });
 		expect(ast4.nodeType).toBe("Module");
-		expect(ast4.body).toHaveLength(1);
+		expect(ast4.body).toHaveLength(1); // Assignment with inline comment attached
 	});
 
 	test("unparse function", () => {

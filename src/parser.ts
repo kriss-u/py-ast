@@ -47,6 +47,7 @@ export class Parser {
 	private tokens: Token[];
 	private current = 0;
 	private includeComments: boolean;
+	private lastNonCommentTokenLine = 0; // Track the line of the last non-comment, non-newline token
 
 	constructor(source: string, options: ParseOptions = {}) {
 		const lexer = new Lexer(source);
@@ -70,7 +71,6 @@ export class Parser {
 
 	private parseFileInput(): Module {
 		const body: StmtNode[] = [];
-		const comments: Comment[] = [];
 
 		// Skip leading newlines
 		while (this.match(TokenType.NEWLINE)) {
@@ -82,15 +82,28 @@ export class Parser {
 				continue;
 			}
 
+			// Parse comments as proper statement nodes when includeComments is enabled
+			if (this.includeComments && this.check(TokenType.COMMENT)) {
+				const comment = this.parseCommentStatement();
+
+				// If this is an inline comment and we have a previous statement, attach it
+				if (comment.inline && body.length > 0) {
+					const lastStmt = body[body.length - 1];
+					// Add the comment as metadata to the last statement
+					if (!lastStmt.inlineComment) {
+						lastStmt.inlineComment = comment;
+					}
+				} else {
+					// For standalone comments, add as separate statement
+					body.push(comment);
+				}
+				continue;
+			}
+
 			const stmt = this.parseStatement();
 			if (stmt) {
 				body.push(stmt);
 			}
-		}
-
-		// Collect comments if enabled
-		if (this.includeComments) {
-			this.collectComments(comments);
 		}
 
 		const result: Module = {
@@ -100,14 +113,115 @@ export class Parser {
 			col_offset: 0,
 		};
 
-		if (this.includeComments && comments.length > 0) {
-			result.comments = comments;
+		// If comments are enabled, collect all comments and add them to the module
+		if (this.includeComments) {
+			result.comments = this.collectAllComments(result);
 		}
 
 		return result;
 	}
 
-	// ==== Statement parsers ====
+	// Parse a comment as a statement node
+	private parseCommentStatement(): Comment {
+		const token = this.consume(TokenType.COMMENT, "Expected comment");
+
+		// Check if this is an inline comment (on the same line as previous content)
+		const isInline = token.lineno === this.lastNonCommentTokenLine;
+
+		return {
+			nodeType: "Comment",
+			value: token.value,
+			lineno: token.lineno,
+			col_offset: token.col_offset,
+			end_lineno: token.end_lineno,
+			end_col_offset: token.end_col_offset,
+			inline: isInline,
+		};
+	}
+
+	// Collect all comments from the AST (both standalone and inline)
+	private collectAllComments(module: Module): Comment[] {
+		const comments: Comment[] = [];
+
+		const collectFromBody = (body: StmtNode[]): void => {
+			for (const stmt of body) {
+				if (stmt.nodeType === "Comment") {
+					comments.push(stmt);
+				} else {
+					// Check for inline comments attached to this statement
+					if (stmt.inlineComment) {
+						comments.push(stmt.inlineComment);
+					}
+					// Recursively collect from nested bodies
+					this.collectFromStatement(stmt, comments);
+				}
+			}
+		};
+
+		collectFromBody(module.body);
+		return comments;
+	}
+
+	// Helper to collect comments from nested statement bodies
+	private collectFromStatement(stmt: StmtNode, comments: Comment[]): void {
+		switch (stmt.nodeType) {
+			case "FunctionDef":
+			case "AsyncFunctionDef":
+				this.collectFromBody(stmt.body, comments);
+				break;
+			case "ClassDef":
+				this.collectFromBody(stmt.body, comments);
+				break;
+			case "If":
+				this.collectFromBody(stmt.body, comments);
+				this.collectFromBody(stmt.orelse, comments);
+				break;
+			case "For":
+			case "AsyncFor":
+				this.collectFromBody(stmt.body, comments);
+				this.collectFromBody(stmt.orelse, comments);
+				break;
+			case "While":
+				this.collectFromBody(stmt.body, comments);
+				this.collectFromBody(stmt.orelse, comments);
+				break;
+			case "With":
+			case "AsyncWith":
+				this.collectFromBody(stmt.body, comments);
+				break;
+			case "Try":
+				this.collectFromBody(stmt.body, comments);
+				if (stmt.handlers) {
+					for (const handler of stmt.handlers) {
+						this.collectFromBody(handler.body, comments);
+					}
+				}
+				this.collectFromBody(stmt.orelse, comments);
+				this.collectFromBody(stmt.finalbody, comments);
+				break;
+			case "Match":
+				if (stmt.cases) {
+					for (const case_ of stmt.cases) {
+						this.collectFromBody(case_.body, comments);
+					}
+				}
+				break;
+		}
+	}
+
+	// Helper to collect comments from a statement body
+	private collectFromBody(body: StmtNode[], comments: Comment[]): void {
+		for (const stmt of body) {
+			if (stmt.nodeType === "Comment") {
+				comments.push(stmt);
+			} else {
+				if (stmt.inlineComment) {
+					comments.push(stmt.inlineComment);
+				}
+				this.collectFromStatement(stmt, comments);
+			}
+		}
+	} // ==== Statement parsers ====
 
 	private parseStatement(): StmtNode | null {
 		// Skip comment tokens
@@ -397,6 +511,7 @@ export class Parser {
 				!this.check(TokenType.NEWLINE) &&
 				!this.check(TokenType.SEMI) &&
 				!this.check(TokenType.DEDENT) &&
+				!this.check(TokenType.COMMENT) &&
 				!this.isAtEnd()
 			) {
 				exc = this.parseTest();
@@ -972,6 +1087,7 @@ export class Parser {
 		this.consume(TokenType.NEWLINE, "Expected newline after match:");
 
 		// Skip comment tokens and newlines that might appear before the indent
+		// (These comments belong to the match statement level, not the case level)
 		while (this.check(TokenType.COMMENT) || this.check(TokenType.NEWLINE)) {
 			this.advance();
 		}
@@ -985,9 +1101,12 @@ export class Parser {
 				continue;
 			}
 
-			// Skip comment tokens
-			while (this.check(TokenType.COMMENT)) {
-				this.advance();
+			// When includeComments is true, comments will be parsed as statements in parseSuite
+			// For now, skip comments at the case level (this could be enhanced later)
+			if (!this.includeComments) {
+				while (this.check(TokenType.COMMENT)) {
+					this.advance();
+				}
 			}
 
 			if (this.match(TokenType.CASE)) {
@@ -2065,30 +2184,69 @@ export class Parser {
 	// ==== Helper parsers ====
 
 	private parseSuite(): StmtNode[] {
+		// Handle comments that appear immediately after colon but before newline
+		const postColonComments: Comment[] = [];
+		if (this.includeComments) {
+			while (this.check(TokenType.COMMENT)) {
+				const comment = this.parseCommentStatement();
+				postColonComments.push(comment);
+			}
+		}
+
 		if (this.match(TokenType.NEWLINE)) {
 			// Skip any additional newlines before the indent
 			while (this.match(TokenType.NEWLINE)) {
 				// Continue skipping newlines
 			}
 
-			// Skip comment tokens that might appear before the indent
-			while (this.check(TokenType.COMMENT)) {
+			// Skip any newlines before INDENT
+			while (this.check(TokenType.NEWLINE)) {
 				this.advance();
-				// Comments might be followed by newlines, skip those too
-				while (this.match(TokenType.NEWLINE)) {
-					// Continue skipping newlines after comments
-				}
 			}
 
-			// Require proper indentation - must have INDENT token for block structure
+			// When includeComments is enabled, collect any comments before INDENT
+			const preIndentComments: Comment[] = [];
+			if (this.includeComments) {
+				while (this.check(TokenType.COMMENT)) {
+					const comment = this.parseCommentStatement();
+					preIndentComments.push(comment);
+					// Skip newlines after comments
+					while (this.check(TokenType.NEWLINE)) {
+						this.advance();
+					}
+				}
+			} // Require proper indentation - must have INDENT token for block structure
 			if (!this.match(TokenType.INDENT)) {
 				throw this.error("Expected indented block");
 			}
 
 			const stmts: StmtNode[] = [];
 
+			// Add post-colon comments first
+			stmts.push(...postColonComments);
+			// Then add pre-indent comments
+			stmts.push(...preIndentComments);
+
 			while (!this.check(TokenType.DEDENT) && !this.isAtEnd()) {
 				if (this.match(TokenType.NEWLINE)) {
+					continue;
+				}
+
+				// Parse comments as statement nodes when includeComments is enabled
+				if (this.includeComments && this.check(TokenType.COMMENT)) {
+					const comment = this.parseCommentStatement();
+
+					// If this is an inline comment and we have a previous statement, attach it
+					if (comment.inline && stmts.length > 0) {
+						const lastStmt = stmts[stmts.length - 1];
+						// Add the comment as metadata to the last statement
+						if (!lastStmt.inlineComment) {
+							lastStmt.inlineComment = comment;
+						}
+					} else {
+						// For standalone comments, add as separate statement
+						stmts.push(comment);
+					}
 					continue;
 				}
 
@@ -2124,6 +2282,16 @@ export class Parser {
 
 		if (!this.check(TokenType.RPAR)) {
 			do {
+				// Skip comments and newlines at the start of each parameter
+				while (this.check(TokenType.COMMENT) || this.check(TokenType.NEWLINE)) {
+					this.advance();
+				}
+
+				// Check for end of parameter list
+				if (this.check(TokenType.RPAR)) {
+					break;
+				}
+
 				if (this.match(TokenType.SLASH)) {
 					// Positional-only separator
 					// Move all current args to posonlyargs
@@ -2131,6 +2299,7 @@ export class Parser {
 					args.length = 0;
 				} else if (this.match(TokenType.STAR)) {
 					seenStar = true;
+
 					if (this.check(TokenType.NAME)) {
 						const name = this.advance().value;
 						let annotation: ExprNode | undefined;
@@ -2404,6 +2573,13 @@ export class Parser {
 		// Regular list
 		const elts = [first];
 		while (this.match(TokenType.COMMA)) {
+			// Skip comments after comma when includeComments is enabled
+			if (this.includeComments) {
+				while (this.check(TokenType.COMMENT)) {
+					this.advance();
+				}
+			}
+
 			if (this.check(TokenType.RSQB)) break;
 			elts.push(this.parseTestOrStarred());
 		}
@@ -2946,10 +3122,6 @@ export class Parser {
 	private match(...types: TokenType[]): boolean {
 		for (const type of types) {
 			if (this.check(type)) {
-				// Skip comments if we're including comments, then advance to the actual token
-				if (this.includeComments) {
-					this.skipComments();
-				}
 				this.advance();
 				return true;
 			}
@@ -2959,11 +3131,11 @@ export class Parser {
 
 	private check(type: TokenType): boolean {
 		if (this.isAtEnd()) return false;
-		// Use peekNonComment when comments are included to skip over comment tokens
-		// for most parsing operations, but allow comments to be processed when needed
-		const token = this.includeComments ? this.peekNonComment() : this.peek();
+		const token = this.peek();
 		return token.type === type;
 	}
+
+	// Helper method to peek while skipping comments
 
 	private checkNext(type: TokenType): boolean {
 		if (this.current + 1 >= this.tokens.length) return false;
@@ -2971,8 +3143,8 @@ export class Parser {
 	}
 
 	private isAtEnd(): boolean {
-		// Use peekNonComment when comments are included to check for EOF properly
-		const token = this.includeComments ? this.peekNonComment() : this.peek();
+		// When parsing comments as statement nodes, check the actual current token
+		const token = this.peek();
 		return token.type === TokenType.EOF;
 	}
 
@@ -3014,58 +3186,14 @@ export class Parser {
 		if (!this.isAtEnd()) {
 			this.current++;
 		}
-		return this.previous();
-	}
+		const token = this.previous();
 
-	private skipComments(): void {
-		while (
-			this.current < this.tokens.length &&
-			this.tokens[this.current].type === TokenType.COMMENT
-		) {
-			this.advance();
-		}
-	}
-
-	private peekNonComment(): Token {
-		let idx = this.current;
-		while (
-			idx < this.tokens.length &&
-			this.tokens[idx].type === TokenType.COMMENT
-		) {
-			idx++;
+		// Track the line number of non-comment, non-newline tokens
+		if (token.type !== TokenType.COMMENT && token.type !== TokenType.NEWLINE) {
+			this.lastNonCommentTokenLine = token.lineno;
 		}
 
-		if (idx >= this.tokens.length) {
-			// Return EOF token if we've gone past the end
-			return {
-				type: TokenType.EOF,
-				value: "",
-				lineno: this.tokens[this.tokens.length - 1]?.lineno || 1,
-				col_offset: this.tokens[this.tokens.length - 1]?.col_offset || 0,
-				end_lineno: this.tokens[this.tokens.length - 1]?.end_lineno || 1,
-				end_col_offset:
-					this.tokens[this.tokens.length - 1]?.end_col_offset || 0,
-			};
-		}
-
-		return this.tokens[idx];
-	}
-
-	private collectComments(comments: Comment[]): void {
-		// Iterate through all tokens and collect comment tokens
-		for (let i = 0; i < this.tokens.length; i++) {
-			const token = this.tokens[i];
-			if (token.type === TokenType.COMMENT) {
-				comments.push({
-					nodeType: "Comment",
-					value: token.value,
-					lineno: token.lineno,
-					col_offset: token.col_offset,
-					end_lineno: token.end_lineno,
-					end_col_offset: token.end_col_offset,
-				});
-			}
-		}
+		return token;
 	}
 
 	private previous(): Token {
@@ -3074,10 +3202,6 @@ export class Parser {
 
 	private consume(type: TokenType, message: string): Token {
 		if (this.check(type)) {
-			// Skip any comments before advancing to the target token
-			if (this.includeComments) {
-				this.skipComments();
-			}
 			return this.advance();
 		}
 		throw this.error(message);

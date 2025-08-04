@@ -1,4 +1,5 @@
 import { parse, unparse } from "../src/index.js";
+import { collectComments } from "./test-helpers.js";
 
 describe("Comment Parsing", () => {
 	test("parse with comments disabled", () => {
@@ -8,7 +9,9 @@ x = 1  # Inline comment
 
 		const ast = parse(code, { comments: false });
 		expect(ast.nodeType).toBe("Module");
-		expect(ast.comments).toBeUndefined();
+		// When comments are disabled, they should not appear in the AST body
+		const comments = collectComments(ast);
+		expect(comments).toHaveLength(0);
 		expect(ast.body).toHaveLength(1);
 		expect(ast.body[0].nodeType).toBe("Assign");
 	});
@@ -20,18 +23,19 @@ x = 1  # Inline comment
 
 		const ast = parse(code, { comments: true });
 		expect(ast.nodeType).toBe("Module");
-		expect(ast.comments).toHaveLength(3);
+		const comments = collectComments(ast);
+		expect(comments).toHaveLength(3);
 		
-		expect(ast.comments![0].nodeType).toBe("Comment");
-		expect(ast.comments![0].value).toBe("# Top comment");
-		expect(ast.comments![0].lineno).toBe(1);
-		expect(ast.comments![0].col_offset).toBe(0);
+		expect(comments[0].nodeType).toBe("Comment");
+		expect(comments[0].value).toBe("# Top comment");
+		expect(comments[0].lineno).toBe(1);
+		expect(comments[0].col_offset).toBe(0);
 
-		expect(ast.comments![1].value).toBe("# Inline comment");
-		expect(ast.comments![1].lineno).toBe(2);
+		expect(comments[1].value).toBe("# Inline comment");
+		expect(comments[1].lineno).toBe(2);
 		
-		expect(ast.comments![2].value).toBe("# Bottom comment");
-		expect(ast.comments![2].lineno).toBe(3);
+		expect(comments[2].value).toBe("# Bottom comment");
+		expect(comments[2].lineno).toBe(3);
 	});
 
 	test("standalone strings are not treated as comments", () => {
@@ -44,7 +48,8 @@ x = 1`;
 
 		const ast = parse(code, { comments: true });
 		expect(ast.nodeType).toBe("Module");
-		expect(ast.comments?.length || 0).toBe(0);
+		const comments = collectComments(ast);
+		expect(comments.length).toBe(0);
 		expect(ast.body).toHaveLength(4); // 3 expression statements + 1 assignment
 
 		// First standalone string
@@ -63,8 +68,9 @@ def func():  # Function definition
     return 42  # Return value`;
 
 		const ast = parse(code, { comments: true });
-		expect(ast.comments).toHaveLength(4);
-		expect(ast.comments!.map(c => c.value)).toEqual([
+		const comments = collectComments(ast);
+		expect(comments).toHaveLength(4);
+		expect(comments.map(c => c.value)).toEqual([
 			"# Module docstring",
 			"# Function definition",
 			"# Inside function",
@@ -162,10 +168,11 @@ quoted"""  # Final comment`;
 		const unparsed = unparse(ast);
 
 		// Check comments are collected
-		expect(ast.comments).toHaveLength(3);
-		expect(ast.comments![0].value).toBe("# This is a comment");
-		expect(ast.comments![1].value).toBe("# Another comment");
-		expect(ast.comments![2].value).toBe("# Final comment");
+		const comments = collectComments(ast);
+		expect(comments).toHaveLength(3);
+		expect(comments[0].value).toBe("# This is a comment");
+		expect(comments[1].value).toBe("# Another comment");
+		expect(comments[2].value).toBe("# Final comment");
 
 		// Check quote styles are preserved
 		expect(unparsed).toContain("'single quoted'");
@@ -200,6 +207,7 @@ def greet(name):  # Function comment
 		expect(unparsed2).toContain('"""'); // Structure preserved
 		
 		// Comments should be in the AST
-		expect(ast1.comments).toHaveLength(5);
+		const comments = collectComments(ast1);
+		expect(comments).toHaveLength(5);
 	});
 });

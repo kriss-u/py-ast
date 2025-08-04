@@ -12,6 +12,8 @@ export interface ASTNode {
 	col_offset?: number;
 	end_lineno?: number;
 	end_col_offset?: number;
+	// Optional inline comment attached to this node
+	inlineComment?: Comment;
 }
 
 /**
@@ -30,6 +32,8 @@ export interface Located extends ASTNode {
 export interface Comment extends Located {
 	nodeType: "Comment";
 	value: string;
+	// Indicates if this comment appears on the same line as other content
+	inline?: boolean;
 }
 
 // ==== Module nodes ====
@@ -38,6 +42,7 @@ export type ModuleNode = Module | Interactive | Expression | FunctionType;
 export interface Module extends Located {
 	nodeType: "Module";
 	body: StmtNode[];
+	// All comments found in the module when comments: true is enabled
 	comments?: Comment[];
 }
 
@@ -86,7 +91,8 @@ export type StmtNode =
 	| Expr
 	| Pass
 	| Break
-	| Continue;
+	| Continue
+	| Comment;
 
 export interface FunctionDef extends Located {
 	nodeType: "FunctionDef";
