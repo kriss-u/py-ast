@@ -427,6 +427,7 @@ export interface FormattedValue extends Located {
 export interface JoinedStr extends Located {
 	nodeType: "JoinedStr";
 	values: ExprNode[];
+	kind?: string; // Store original quote style (f", f', etc.)
 }
 
 export interface Constant extends Located {

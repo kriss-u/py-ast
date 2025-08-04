@@ -3083,6 +3083,9 @@ export class Parser {
 		// Extract the content inside the f-string quotes
 		let content = token.value;
 
+		// Determine and store the original quote style
+		const quoteStyle = this.getStringQuoteStyle(token.value);
+
 		// Remove f-string prefix and quotes
 		if (content.toLowerCase().startsWith('f"')) {
 			content = content.slice(2, -1); // Remove f" and "
@@ -3151,6 +3154,7 @@ export class Parser {
 		return {
 			nodeType: "JoinedStr",
 			values,
+			kind: quoteStyle,
 			lineno: token.lineno,
 			col_offset: token.col_offset,
 		};
