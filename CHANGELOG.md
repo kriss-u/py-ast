@@ -1,3 +1,10 @@
+# [1.8.0](https://github.com/kriss-u/py-ast/compare/v1.7.0...v1.8.0) (2025-08-04)
+
+
+### Features
+
+* handle indentation size and comments properly ([b0bea39](https://github.com/kriss-u/py-ast/commit/b0bea3995fea93c27692db2f025cd576ffa554bc))
+
 # [1.7.0](https://github.com/kriss-u/py-ast/compare/v1.6.0...v1.7.0) (2025-08-04)
 
 
