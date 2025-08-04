@@ -736,10 +736,31 @@ class Unparser extends NodeVisitor {
 		const needParens = this.requireParens(precedence, node);
 
 		if (needParens) this.write("(");
+
+		// Check if left operand needs parentheses
+		const leftNeedsParens = this.requireParens(precedence, node.left);
+		if (leftNeedsParens) this.write("(");
 		this.withPrecedence(precedence, node.left);
+		if (leftNeedsParens) this.write(")");
+
 		this.write(" ", this.getBinOpSymbol(node.op), " ");
+
+		// Check if right operand needs parentheses
+		// For right-associative operators or same precedence, we need to be more careful
+		const rightNeedsParens =
+			this.requireParens(precedence, node.right) ||
+			(this.getPrecedence(node.right) === precedence &&
+				this.isLeftAssociative(node.op));
+		if (rightNeedsParens) this.write("(");
 		this.withPrecedence(precedence, node.right);
+		if (rightNeedsParens) this.write(")");
+
 		if (needParens) this.write(")");
+	}
+
+	private isLeftAssociative(op: OperatorNode): boolean {
+		// Most binary operators are left-associative, except power
+		return op.nodeType !== "Pow";
 	}
 
 	private getBinOpSymbol(op: OperatorNode): string {

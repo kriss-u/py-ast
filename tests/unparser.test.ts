@@ -515,7 +515,7 @@ describe("Unparser", () => {
 	describe("Operator Precedence", () => {
 		test("arithmetic precedence", () => {
 			testUnparse("a + b * c", "a + b * c");
-			testUnparse("(a + b) * c", "a + b * c"); // Unparser removes unnecessary parens
+			testUnparse("(a + b) * c", "(a + b) * c"); // Parentheses are necessary to preserve mathematical meaning
 			testUnparse("a ** b ** c", "a ** b ** c");
 			testRoundtrip("a + b * c / d");
 		});
