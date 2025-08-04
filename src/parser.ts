@@ -3083,6 +3083,9 @@ export class Parser {
 		// Extract the content inside the f-string quotes
 		let content = token.value;
 
+		// Determine and store the original quote style
+		const quoteStyle = this.getStringQuoteStyle(token.value);
+
 		// Remove f-string prefix and quotes
 		if (content.toLowerCase().startsWith('f"')) {
 			content = content.slice(2, -1); // Remove f" and "
@@ -3091,47 +3094,33 @@ export class Parser {
 		}
 
 		const values: ExprNode[] = [];
-		let braceLevel = 0;
-		let inExpression = false;
-		let expressionStart = 0;
+		let i = 0;
 		let literalStart = 0;
 
-		for (let i = 0; i < content.length; i++) {
-			const char = content[i];
-
-			if (char === "{") {
-				if (!inExpression) {
-					// Add any literal content before this expression
-					if (i > literalStart) {
-						const literalValue = content.slice(literalStart, i);
-						if (literalValue) {
-							values.push({
-								nodeType: "Constant",
-								value: literalValue,
-								lineno: token.lineno,
-								col_offset: token.col_offset + literalStart + 2, // +2 for f" prefix
-							});
-						}
-					}
-					inExpression = true;
-					expressionStart = i + 1;
-					braceLevel = 1;
-				} else {
-					braceLevel++;
-				}
-			} else if (char === "}") {
-				if (inExpression) {
-					braceLevel--;
-					if (braceLevel === 0) {
-						// Parse the expression inside the braces
-						const exprText = content.slice(expressionStart, i);
-						const formattedValue = this.parseFormattedValue(exprText, token);
-						values.push(formattedValue);
-
-						inExpression = false;
-						literalStart = i + 1;
+		while (i < content.length) {
+			if (content[i] === "{") {
+				// Add any literal content before this expression
+				if (i > literalStart) {
+					const literalValue = content.slice(literalStart, i);
+					if (literalValue) {
+						values.push({
+							nodeType: "Constant",
+							value: literalValue,
+							lineno: token.lineno,
+							col_offset: token.col_offset + literalStart + 2, // +2 for f" prefix
+						});
 					}
 				}
+
+				// Parse the expression recursively
+				const { exprText, nextPos } = this.parseExpressionInFString(content, i);
+				const formattedValue = this.parseFormattedValue(exprText, token);
+				values.push(formattedValue);
+
+				i = nextPos;
+				literalStart = i;
+			} else {
+				i++;
 			}
 		}
 
@@ -3151,9 +3140,143 @@ export class Parser {
 		return {
 			nodeType: "JoinedStr",
 			values,
+			kind: quoteStyle,
 			lineno: token.lineno,
 			col_offset: token.col_offset,
 		};
+	}
+
+	/**
+	 * Parse an expression within an f-string, handling nested contexts properly.
+	 * Returns the expression text and the position after the closing brace.
+	 */
+	private parseExpressionInFString(
+		content: string,
+		startPos: number,
+	): { exprText: string; nextPos: number } {
+		if (content[startPos] !== "{") {
+			throw new Error(`Expected '{' at position ${startPos}`);
+		}
+
+		let i = startPos + 1;
+		let braceLevel = 1;
+		let result = "";
+
+		while (i < content.length && braceLevel > 0) {
+			const char = content[i];
+
+			// Handle nested f-strings
+			if (char === "f" && i + 1 < content.length) {
+				const nextChar = content[i + 1];
+				if (nextChar === '"' || nextChar === "'") {
+					// Found nested f-string, parse it recursively
+					const { fStringContent, nextPos } = this.parseNestedFString(
+						content,
+						i,
+					);
+					result += fStringContent;
+					i = nextPos;
+					continue;
+				}
+			}
+
+			// Handle regular strings
+			if (char === '"' || char === "'") {
+				const { stringContent, nextPos } = this.parseStringLiteral(content, i);
+				result += stringContent;
+				i = nextPos;
+				continue;
+			}
+
+			// Handle braces
+			if (char === "{") {
+				braceLevel++;
+				result += char;
+			} else if (char === "}") {
+				braceLevel--;
+				if (braceLevel > 0) {
+					result += char;
+				}
+			} else {
+				result += char;
+			}
+
+			i++;
+		}
+
+		if (braceLevel !== 0) {
+			throw new Error(`Unmatched '{' in f-string at position ${startPos}`);
+		}
+
+		return { exprText: result, nextPos: i };
+	}
+
+	/**
+	 * Parse a nested f-string within an expression.
+	 */
+	private parseNestedFString(
+		content: string,
+		startPos: number,
+	): { fStringContent: string; nextPos: number } {
+		const quote = content[startPos + 1];
+		let i = startPos + 2; // Skip 'f' and quote
+		let braceLevel = 0;
+		let result = content.slice(startPos, startPos + 2); // Include 'f' and opening quote
+
+		while (i < content.length) {
+			const char = content[i];
+
+			if (char === "{") {
+				braceLevel++;
+				result += char;
+			} else if (char === "}") {
+				braceLevel--;
+				result += char;
+			} else if (char === quote && braceLevel === 0) {
+				result += char;
+				return { fStringContent: result, nextPos: i + 1 };
+			} else {
+				result += char;
+			}
+
+			i++;
+		}
+
+		throw new Error(`Unterminated f-string starting at position ${startPos}`);
+	}
+
+	/**
+	 * Parse a regular string literal within an expression.
+	 */
+	private parseStringLiteral(
+		content: string,
+		startPos: number,
+	): { stringContent: string; nextPos: number } {
+		const quote = content[startPos];
+		let i = startPos + 1;
+		let escaped = false;
+		let result = quote;
+
+		while (i < content.length) {
+			const char = content[i];
+
+			if (escaped) {
+				escaped = false;
+				result += char;
+			} else if (char === "\\") {
+				escaped = true;
+				result += char;
+			} else if (char === quote) {
+				result += char;
+				return { stringContent: result, nextPos: i + 1 };
+			} else {
+				result += char;
+			}
+
+			i++;
+		}
+
+		throw new Error(`Unterminated string starting at position ${startPos}`);
 	}
 
 	private parseFormattedValue(exprText: string, token: Token): FormattedValue {

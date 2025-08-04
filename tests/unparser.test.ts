@@ -146,7 +146,7 @@ describe("Unparser", () => {
 			testUnparse("def func():\n    pass", "def func():\n    pass");
 			testUnparse(
 				"def greet(name):\n    return f'Hello, {name}'",
-				'def greet(name):\n    return f"Hello, {name}"',
+				"def greet(name):\n    return f'Hello, {name}'",
 			);
 			testRoundtrip("def func():\n    return 42");
 		});
@@ -469,7 +469,7 @@ describe("Unparser", () => {
 
 	describe("F-strings", () => {
 		test("simple f-strings", () => {
-			testUnparse("f'Hello, {name}!'", 'f"Hello, {name}!"');
+			testUnparse("f'Hello, {name}!'", "f'Hello, {name}!'");
 			testRoundtrip("f'Value: {value}'");
 		});
 

@@ -258,10 +258,36 @@ class Unparser extends NodeVisitor {
 		this.visit(node.body);
 	}
 
+	// Helper method to write decorators
+	private writeDecorators(decorators: ExprNode[]): void {
+		for (const decorator of decorators) {
+			this.fill("@");
+			this.visit(decorator);
+		}
+	}
+
+	// Helper method to choose quotes for f-strings to avoid conflicts
+	// Helper method to choose quotes for f-strings - preserve original style
+	private chooseFStringQuotes(
+		node: Extract<ExprNode, { nodeType: "JoinedStr" }>,
+	): [string, string] {
+		// If we have the original quote style, use it exactly
+		if (node.kind) {
+			// Extract quote from the kind (e.g., 'f"' -> '"', "f'" -> "'")
+			const prefixMatch = node.kind.match(/^([fFrRbBuU]*)(.*)/);
+			const quote = prefixMatch ? prefixMatch[2] : '"';
+			return [node.kind, quote];
+		}
+
+		// Default to double quotes if no original style info
+		return ['f"', '"'];
+	}
+
 	// Statement visitors
 	visit_FunctionDef(
 		node: Extract<StmtNode, { nodeType: "FunctionDef" }>,
 	): void {
+		this.writeDecorators(node.decorator_list);
 		this.fill("def ");
 		this.write(node.name);
 		this.writeTypeParams(node.type_params);
@@ -281,6 +307,7 @@ class Unparser extends NodeVisitor {
 	}
 
 	visit_ClassDef(node: Extract<StmtNode, { nodeType: "ClassDef" }>): void {
+		this.writeDecorators(node.decorator_list);
 		this.fill("class ");
 		this.write(node.name);
 		this.writeTypeParams(node.type_params);
@@ -701,6 +728,7 @@ class Unparser extends NodeVisitor {
 	visit_AsyncFunctionDef(
 		node: Extract<StmtNode, { nodeType: "AsyncFunctionDef" }>,
 	): void {
+		this.writeDecorators(node.decorator_list);
 		this.fill("async def ");
 		this.write(node.name);
 		this.writeTypeParams(node.type_params);
@@ -919,9 +947,10 @@ class Unparser extends NodeVisitor {
 	}
 
 	visit_JoinedStr(node: Extract<ExprNode, { nodeType: "JoinedStr" }>): void {
-		this.write('f"');
+		const [openQuote, closeQuote] = this.chooseFStringQuotes(node);
+		this.write(openQuote);
 		this.writeJoinedStrContent(node);
-		this.write('"');
+		this.write(closeQuote);
 	}
 
 	private writeJoinedStrContent(
