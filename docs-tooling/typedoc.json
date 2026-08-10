@@ -1,0 +1,19 @@
+{
+	"$schema": "https://typedoc.org/schema.json",
+	"entryPoints": ["../src/index.ts"],
+	"tsconfig": "../tsconfig.json",
+	"out": "../docs",
+	"plugin": ["typedoc-github-theme"],
+	"name": "py-ast",
+	"readme": "../README.md",
+	"includeVersion": true,
+	"excludePrivate": true,
+	"excludeInternal": true,
+	"excludeExternals": true,
+	"cleanOutputDir": true,
+	"navigationLinks": {
+		"GitHub": "https://github.com/kriss-u/py-ast",
+		"npm": "https://www.npmjs.com/package/py-ast"
+	},
+	"sort": ["source-order"]
+}

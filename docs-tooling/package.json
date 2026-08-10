@@ -1,0 +1,13 @@
+{
+	"name": "py-ast-docs-tooling",
+	"private": true,
+	"description": "Isolated TypeDoc toolchain for py-ast API docs. Kept separate from the root package.json because TypeDoc's compiler-API usage is not yet compatible with the native TypeScript 7 compiler the root project builds with.",
+	"scripts": {
+		"build": "typedoc --options typedoc.json"
+	},
+	"devDependencies": {
+		"typedoc": "^0.28.20",
+		"typedoc-github-theme": "^0.3.0",
+		"typescript": "^5.9.0"
+	}
+}
