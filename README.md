@@ -1,5 +1,12 @@
 # Python AST Parser for TypeScript
 
+[![npm version](https://img.shields.io/npm/v/py-ast.svg)](https://www.npmjs.com/package/py-ast)
+[![npm downloads](https://img.shields.io/npm/dm/py-ast.svg)](https://www.npmjs.com/package/py-ast)
+[![JSR](https://jsr.io/badges/@kriss-u/py-ast)](https://jsr.io/@kriss-u/py-ast)
+[![Release](https://github.com/kriss-u/py-ast/actions/workflows/release.yml/badge.svg)](https://github.com/kriss-u/py-ast/actions/workflows/release.yml)
+[![semantic-release](https://img.shields.io/badge/%20%20%F0%9F%93%A6%F0%9F%9A%80-semantic--release-e10079.svg)](https://github.com/semantic-release/semantic-release)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 A comprehensive TypeScript-based Python source code parser that generates Abstract Syntax Trees (AST) following the Python ASDL grammar specification. This library provides complete parsing, unparsing, and AST traversal infrastructure similar to ESPrima for JavaScript, with bidirectional Python code ↔ AST conversion.
 
 📖 **[API documentation](https://kriss-u.github.io/py-ast/)**
