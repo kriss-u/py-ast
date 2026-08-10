@@ -1,3 +1,10 @@
+## [1.9.1](https://github.com/kriss-u/py-ast/compare/v1.9.0...v1.9.1) (2026-08-10)
+
+
+### Bug Fixes
+
+* raise error two statements without indent or dedent ([dfe65dd](https://github.com/kriss-u/py-ast/commit/dfe65dd5723e957b0d5bdf43c170a9078555d7dd))
+
 # [1.9.0](https://github.com/kriss-u/py-ast/compare/v1.8.1...v1.9.0) (2025-08-04)
 
 
