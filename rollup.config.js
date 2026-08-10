@@ -1,6 +1,6 @@
 import commonjs from "@rollup/plugin-commonjs";
 import resolve from "@rollup/plugin-node-resolve";
-import typescript from "@rollup/plugin-typescript";
+import esbuild from "rollup-plugin-esbuild";
 import dts from "rollup-plugin-dts";
 
 const external = (id) =>
@@ -19,9 +19,8 @@ export default [
 		plugins: [
 			resolve(),
 			commonjs(),
-			typescript({
+			esbuild({
 				tsconfig: "./tsconfig.json",
-				declaration: false,
 				sourceMap: true,
 			}),
 		],
@@ -30,7 +29,7 @@ export default [
 	{
 		input: "src/index.ts",
 		output: {
-			file: "dist/index.js",
+			file: "dist/index.cjs",
 			format: "cjs",
 			sourcemap: true,
 		},
@@ -38,9 +37,8 @@ export default [
 		plugins: [
 			resolve(),
 			commonjs(),
-			typescript({
+			esbuild({
 				tsconfig: "./tsconfig.json",
-				declaration: false,
 				sourceMap: true,
 			}),
 		],

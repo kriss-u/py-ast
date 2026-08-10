@@ -3,7 +3,7 @@
 		"target": "ES2020",
 		"module": "ESNext",
 		"lib": ["ES2020"],
-		"moduleResolution": "node",
+		"moduleResolution": "bundler",
 		"declaration": true,
 		"sourceMap": true,
 		"outDir": "./dist",
@@ -16,7 +16,8 @@
 		"esModuleInterop": true,
 		"allowSyntheticDefaultImports": true,
 		"forceConsistentCasingInFileNames": true,
-		"skipLibCheck": true
+		"skipLibCheck": true,
+		"types": ["node", "vitest/globals"]
 	},
 	"include": ["src/**/*"],
 	"exclude": ["node_modules", "dist", "**/*.test.ts"]

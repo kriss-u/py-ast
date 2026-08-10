@@ -3,13 +3,13 @@
 	"version": "1.9.1",
 	"type": "module",
 	"description": "A TypeScript library for parsing and walking Python Abstract Syntax Trees",
-	"main": "dist/index.js",
+	"main": "dist/index.cjs",
 	"module": "dist/index.esm.js",
 	"types": "dist/index.d.ts",
 	"exports": {
 		".": {
 			"import": "./dist/index.esm.js",
-			"require": "./dist/index.js",
+			"require": "./dist/index.cjs",
 			"types": "./dist/index.d.ts"
 		}
 	},
@@ -17,14 +17,14 @@
 		"dist"
 	],
 	"scripts": {
-		"build": "rollup -c",
+		"build": "npm run type-check && rollup -c",
 		"dev": "rollup -c --watch",
-		"test": "jest",
-		"test:watch": "jest --watch",
+		"test": "vitest run",
+		"test:watch": "vitest",
 		"lint": "biome check src/",
 		"lint:fix": "biome check src/ --write",
 		"format": "biome format --write",
-		"type-check": "tsc --noEmit",
+		"type-check": "node node_modules/typescript/bin/tsc --noEmit",
 		"clean": "rimraf dist",
 		"prepare": "husky",
 		"demo": "node demo/ast-demo.mjs",
@@ -63,22 +63,22 @@
 		"@commitlint/config-conventional": "^19.8.1",
 		"@rollup/plugin-commonjs": "^28.0.0",
 		"@rollup/plugin-node-resolve": "^16.0.0",
-		"@rollup/plugin-typescript": "^12.0.0",
 		"@semantic-release/changelog": "^6.0.3",
 		"@semantic-release/git": "^10.0.1",
 		"@semantic-release/github": "^11.0.3",
-		"@types/jest": "^30.0.0",
 		"@types/node": "^22.0.0",
+		"@typescript/typescript6": "^6.0.2",
+		"esbuild": "^0.28.2",
 		"husky": "^9.1.7",
-		"jest": "^30.0.0",
 		"lint-staged": "^16.1.2",
 		"rimraf": "^5.0.0",
 		"rollup": "^4.0.0",
-		"rollup-plugin-dts": "^6.0.0",
+		"rollup-plugin-dts": "^6.5.1",
+		"rollup-plugin-esbuild": "^6.2.1",
 		"semantic-release": "^25.0.9",
-		"ts-jest": "^29.4.0",
 		"tslib": "^2.6.0",
-		"typescript": "^5.0.0"
+		"typescript": "^7.0.2",
+		"vitest": "^4.1.10"
 	},
 	"overrides": {
 		"glob": "^10.0.0",
@@ -86,6 +86,6 @@
 	},
 	"lint-staged": {
 		"src/**/*.ts": "biome check --write",
-		"*.json": "biome format --write"
+		"!(package-lock).json": "biome format --write"
 	}
 }
