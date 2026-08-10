@@ -303,14 +303,23 @@ export class Parser {
 
 	private parseSimpleStmt(): StmtNode | null {
 		const stmt = this.parseSmallStmt();
+		if (!stmt) {
+			return null;
+		}
 
-		// Handle multiple statements on one line
-		while (this.match(TokenType.SEMI)) {
-			if (!this.check(TokenType.NEWLINE) && !this.isAtEnd()) {
-				// Additional statements on the same line would go here
-				// For simplicity, we'll just parse the first one
-				break;
-			}
+		// A semicolon separates this statement from the next one on the
+		// same line; the next small_stmt is picked up by the caller's
+		// statement loop, which invokes parseStatement()/parseSimpleStmt()
+		// again.
+		const hadSemi = this.match(TokenType.SEMI);
+
+		if (
+			!hadSemi &&
+			!this.check(TokenType.NEWLINE) &&
+			!this.check(TokenType.DEDENT) &&
+			!this.isAtEnd()
+		) {
+			throw this.error("invalid syntax");
 		}
 
 		this.match(TokenType.NEWLINE); // Optional newline
