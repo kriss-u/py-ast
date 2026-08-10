@@ -2,6 +2,8 @@
 
 A comprehensive TypeScript-based Python source code parser that generates Abstract Syntax Trees (AST) following the Python ASDL grammar specification. This library provides complete parsing, unparsing, and AST traversal infrastructure similar to ESPrima for JavaScript, with bidirectional Python code ↔ AST conversion.
 
+📖 **[API documentation](https://kriss-u.github.io/py-ast/)**
+
 ## Features
 
 - 🔍 **Complete Python lexical analysis** - Tokenizes Python source code with full syntax support
@@ -426,6 +428,8 @@ console.log(importAnalyzer.imports);
 ```
 
 ## API Reference
+
+Full generated API docs (every exported function, class, and type): **[kriss-u.github.io/py-ast](https://kriss-u.github.io/py-ast/)**
 
 ### Core Functions
 
