@@ -3,6 +3,17 @@
  * Converts Python source code into a stream of tokens
  */
 
+/**
+ * The kind of a lexical token produced by {@link Lexer}.
+ *
+ * Mirrors CPython's `tokenize` module categories: literals, keywords,
+ * operators/delimiters, comparison and assignment operators, and the
+ * structural tokens (`NEWLINE`/`INDENT`/`DEDENT`/`EOF`) used to represent
+ * Python's significant whitespace. F-string specific values
+ * (`FSTRING_START`/`FSTRING_MIDDLE`/`FSTRING_END`) are reserved for future
+ * use; this lexer currently emits whole f-strings as a single `STRING`
+ * token (see {@link Lexer.scanFString}).
+ */
 export enum TokenType {
 	// Literals
 	NUMBER = "NUMBER",
@@ -116,21 +127,44 @@ export enum TokenType {
 	FSTRING_END = "FSTRING_END",
 }
 
+/**
+ * A single lexical token produced by {@link Lexer.tokenize}.
+ *
+ * Line numbers are 1-based and column offsets are 0-based, matching
+ * CPython's `ast` module conventions so positions can be attached directly
+ * to AST nodes by the parser.
+ */
 export interface Token {
+	/** The token's category. */
 	type: TokenType;
+	/** The raw source text of the token (e.g. `"def"`, `"+="`, or a string literal including its quotes/prefix). */
 	value: string;
+	/** 1-based line number where the token starts. */
 	lineno: number;
+	/** 0-based column offset where the token starts. */
 	col_offset: number;
+	/** 1-based line number where the token ends. */
 	end_lineno: number;
+	/** 0-based column offset where the token ends. */
 	end_col_offset: number;
 }
 
+/**
+ * A mutable cursor into the source string, tracked as the lexer advances.
+ *
+ * `line`/`column` are used to stamp token positions, while `index` is the
+ * absolute offset used for all character lookups.
+ */
 export interface Position {
+	/** 1-based line number. */
 	line: number;
+	/** 0-based column number within the current line. */
 	column: number;
+	/** 0-based absolute character offset into the source string. */
 	index: number;
 }
 
+/** Maps Python reserved words to their {@link TokenType}. Any identifier not present here is lexed as {@link TokenType.NAME}. */
 const KEYWORDS = new Map<string, TokenType>([
 	["and", TokenType.AND],
 	["as", TokenType.AS],
@@ -171,21 +205,51 @@ const KEYWORDS = new Map<string, TokenType>([
 	["yield", TokenType.YIELD],
 ]);
 
+/**
+ * Tokenizes Python source code into a flat array of {@link Token}s.
+ *
+ * Handles Python's significant-whitespace grammar (emitting synthetic
+ * `INDENT`/`DEDENT`/`NEWLINE` tokens), string literals (plain, prefixed,
+ * triple-quoted, and f-strings), numeric literals (decimal, hex, octal,
+ * binary, float, scientific notation, complex), comments, line
+ * continuations (`\` followed by a newline), and all Python operators and
+ * delimiters.
+ */
 export class Lexer {
 	private source: string;
 	private position: Position;
 	private tokens: Token[] = [];
+	/** Stack of indentation widths (in columns) for currently-open blocks; always starts at `[0]` for the top level. */
 	private indentStack: number[] = [0];
+	/** Whether the lexer is positioned at the start of a logical line and still needs to process leading indentation. */
 	private atLineStart = true;
+	/** Nesting depth of `(`/`)`; while > 0, newlines and indentation are not significant (implicit line joining). */
 	private parenLevel = 0;
+	/** Nesting depth of `[`/`]`; while > 0, newlines and indentation are not significant (implicit line joining). */
 	private bracketLevel = 0;
+	/** Nesting depth of `{`/`}`; while > 0, newlines and indentation are not significant (implicit line joining). */
 	private braceLevel = 0;
 
+	/**
+	 * @param source - The full Python source text to tokenize.
+	 */
 	constructor(source: string) {
 		this.source = source;
 		this.position = { line: 1, column: 0, index: 0 };
 	}
 
+	/**
+	 * Tokenizes the source text passed to the constructor.
+	 *
+	 * Resets all internal lexer state first, so the same {@link Lexer}
+	 * instance can be safely re-tokenized by calling this method again.
+	 * Emits any trailing `DEDENT` tokens needed to close open indentation
+	 * levels, followed by a final `EOF` token.
+	 *
+	 * @returns The complete list of tokens, terminated by an `EOF` token.
+	 * @throws {Error} If the source contains invalid indentation, an
+	 *   unterminated string/f-string literal, or an unexpected character.
+	 */
 	tokenize(): Token[] {
 		this.tokens = [];
 		this.position = { line: 1, column: 0, index: 0 };
@@ -209,6 +273,14 @@ export class Lexer {
 		return this.tokens;
 	}
 
+	/**
+	 * Scans and emits exactly one token (or handles one piece of
+	 * line-start/whitespace state) starting at the current position.
+	 *
+	 * Dispatches to the appropriate specialized `scan*` method based on the
+	 * current character, checking for f-string prefixes before falling back
+	 * to generic identifier scanning.
+	 */
 	private scanToken(): void {
 		const c = this.peek();
 
@@ -291,6 +363,12 @@ export class Lexer {
 		this.scanSingleCharOperator(c);
 	}
 
+	/**
+	 * Consumes a `\n` and emits a `NEWLINE` token, unless the lexer is
+	 * currently inside parentheses, brackets, or braces (implicit line
+	 * joining), in which case the newline is consumed silently. Marks the
+	 * lexer as being at the start of a new line so indentation is rescanned.
+	 */
 	private scanNewline(): void {
 		const start = { ...this.position }; // Create a copy
 		this.advance(); // consume '\n'
@@ -307,6 +385,18 @@ export class Lexer {
 		this.atLineStart = true;
 	}
 
+	/**
+	 * Measures the leading whitespace of a logical line and updates
+	 * {@link indentStack}, emitting `INDENT`/`DEDENT` tokens as needed.
+	 *
+	 * Blank lines and comment-only lines are skipped entirely (they don't
+	 * affect indentation), and indentation is not tracked while inside an
+	 * open `()`/`[]`/`{}` (continuation lines can be indented arbitrarily).
+	 * Tabs are counted as 8 columns each, matching CPython's tokenizer.
+	 *
+	 * @throws {Error} If a dedent's width doesn't match any level still on
+	 *   the indent stack (inconsistent indentation).
+	 */
 	private scanIndentation(): void {
 		let indent = 0;
 		while (this.position.index < this.source.length) {
@@ -353,6 +443,10 @@ export class Lexer {
 		}
 	}
 
+	/**
+	 * Consumes a `#` comment through the end of the current line (exclusive
+	 * of the trailing newline) and emits a `COMMENT` token.
+	 */
 	private scanComment(): void {
 		const start = { ...this.position }; // Create a copy
 		this.advance(); // consume '#'
@@ -366,6 +460,15 @@ export class Lexer {
 		this.addTokenAt(TokenType.COMMENT, value, start);
 	}
 
+	/**
+	 * Scans a single- or triple-quoted string literal (`'...'`, `"..."`,
+	 * `'''...'''`, `"""..."""`) with no prefix, starting at the opening
+	 * quote. Escape sequences are copied through verbatim without
+	 * interpretation (unparsing/interpretation happens elsewhere).
+	 *
+	 * @throws {Error} If a single-quoted string contains a raw newline, or
+	 *   if the string is unterminated at end of source.
+	 */
 	private scanString(): void {
 		const start = { ...this.position }; // Create a copy
 		const quote = this.peek();
@@ -443,6 +546,21 @@ export class Lexer {
 		this.addTokenAt(TokenType.STRING, value, start);
 	}
 
+	/**
+	 * Scans an f-string literal (`f"..."`, `f'''...'''`, etc.) starting at
+	 * the leading `f`. The whole f-string — including its prefix, quotes,
+	 * and any `{expr}` replacement fields — is captured as a single `STRING`
+	 * token's value; nested expressions are not tokenized separately.
+	 *
+	 * Brace nesting is tracked via a local `braceLevel` so that the closing
+	 * quote is only recognized outside of a `{...}` replacement field (e.g.
+	 * a quote character used inside the expression doesn't terminate the
+	 * f-string).
+	 *
+	 * @throws {Error} If a single-quoted f-string contains a raw newline
+	 *   outside of a replacement field, or if it is unterminated at end of
+	 *   source.
+	 */
 	private scanFString(): void {
 		const start = { ...this.position }; // Create a copy
 
@@ -545,6 +663,17 @@ export class Lexer {
 		this.addTokenAt(TokenType.STRING, value, start);
 	}
 
+	/**
+	 * Scans a numeric literal starting at the current position, producing a
+	 * single `NUMBER` token.
+	 *
+	 * Handles hex (`0x`), octal (`0o`), and binary (`0b`) integers; plain
+	 * decimal integers; floats with a fractional part; scientific notation
+	 * (`e`/`E` with an optional sign); and the trailing `j`/`J` suffix for
+	 * complex number literals. Underscores used as digit-group separators
+	 * (e.g. `1_000_000`) are recognized and stripped from the emitted value,
+	 * matching Python's numeric literal grammar.
+	 */
 	private scanNumber(): void {
 		const start = { ...this.position }; // Create a copy
 		let value = "";
@@ -645,6 +774,16 @@ export class Lexer {
 		this.addTokenAt(TokenType.NUMBER, value, start);
 	}
 
+	/**
+	 * Scans an identifier or keyword starting at the current position.
+	 *
+	 * If the scanned word is a recognized string prefix (`r`, `b`, `u`,
+	 * `fr`, `rf`, `br`, `rb` — case-insensitive) immediately followed by a
+	 * quote character, delegates to {@link scanPrefixedString} instead of
+	 * emitting a `NAME`/keyword token, since it's actually the prefix of a
+	 * string literal. Otherwise emits the matching keyword token type from
+	 * {@link KEYWORDS}, or `NAME` if the word isn't a keyword.
+	 */
 	private scanIdentifier(): void {
 		const start = { ...this.position }; // Create a copy
 		let value = "";
@@ -671,11 +810,37 @@ export class Lexer {
 		this.addTokenAt(tokenType, value, start);
 	}
 
+	/**
+	 * Checks whether `value` is a valid Python string-prefix word (e.g.
+	 * `r`, `b`, `u`, `rb`, `fr`) that, combined with a following quote,
+	 * denotes a raw/bytes/unicode string rather than a plain identifier.
+	 * Note: plain `f`-prefixed strings are handled separately by
+	 * {@link scanFString}, called eagerly from {@link scanToken} before
+	 * this check is reached for the single-character `"f"` case.
+	 *
+	 * @param value - The already-scanned identifier text to test.
+	 * @returns `true` if `value` (case-insensitively) is a recognized
+	 *   string prefix.
+	 */
 	private isStringPrefix(value: string): boolean {
 		const lowerValue = value.toLowerCase();
 		return ["f", "r", "b", "u", "fr", "rf", "br", "rb"].includes(lowerValue);
 	}
 
+	/**
+	 * Scans a prefixed string literal (e.g. `r"..."`, `rb'''...'''`) whose
+	 * prefix and opening quote have already been identified by
+	 * {@link scanIdentifier}. Behaves like {@link scanString} but includes
+	 * the prefix in the emitted token's value and does not itself throw on
+	 * an unterminated triple-quoted string reaching end of source (unlike
+	 * {@link scanString}/{@link scanFString}).
+	 *
+	 * @param prefix - The string prefix text already consumed (e.g. `"rb"`).
+	 * @param start - The position where the prefix began, used as the
+	 *   resulting token's start position.
+	 * @throws {Error} If a single-quoted prefixed string contains a raw
+	 *   newline.
+	 */
 	private scanPrefixedString(prefix: string, start: Position): void {
 		const quote = this.peek();
 		this.advance(); // consume opening quote
@@ -737,6 +902,16 @@ export class Lexer {
 		this.addTokenAt(TokenType.STRING, value, start);
 	}
 
+	/**
+	 * Attempts to match `twoChar` against the set of two-character
+	 * operators/delimiters (e.g. `==`, `->`, `+=`). If it matches, consumes
+	 * both characters and emits the corresponding token.
+	 *
+	 * @param twoChar - The two characters at the current position.
+	 * @returns `true` if a two-character operator was matched and consumed;
+	 *   `false` if `twoChar` isn't a recognized operator, leaving the
+	 *   position unchanged so the caller can fall back to shorter matches.
+	 */
 	private scanTwoCharOperator(twoChar: string): boolean {
 		const start = { ...this.position }; // Create a copy
 		let tokenType: TokenType | null = null;
@@ -811,6 +986,16 @@ export class Lexer {
 		return false;
 	}
 
+	/**
+	 * Attempts to match `threeChar` against the set of three-character
+	 * operators (e.g. `...`, `**=`, `//=`). If it matches, consumes all
+	 * three characters and emits the corresponding token. Checked before
+	 * {@link scanTwoCharOperator} so e.g. `...` isn't misread as `..` + `.`.
+	 *
+	 * @param threeChar - The three characters at the current position.
+	 * @returns `true` if a three-character operator was matched and
+	 *   consumed; `false` otherwise, leaving the position unchanged.
+	 */
 	private scanThreeCharOperator(threeChar: string): boolean {
 		const start = { ...this.position }; // Create a copy
 		let tokenType: TokenType | null = null;
@@ -847,6 +1032,18 @@ export class Lexer {
 		return false;
 	}
 
+	/**
+	 * Scans a single-character operator or delimiter.
+	 *
+	 * Also maintains {@link parenLevel}/{@link bracketLevel}/{@link braceLevel}
+	 * as `(`/`)`, `[`/`]`, and `{`/`}` are encountered, and handles the
+	 * backslash line-continuation form (`\` immediately followed by `\n`),
+	 * which consumes both characters and emits no token.
+	 *
+	 * @param c - The single character at the current position.
+	 * @throws {Error} If `c` is a backslash not followed by a newline, or
+	 *   is any other character not recognized as an operator/delimiter.
+	 */
 	private scanSingleCharOperator(c: string): void {
 		const start = { ...this.position }; // Create a copy
 		let tokenType: TokenType;
@@ -950,15 +1147,34 @@ export class Lexer {
 		this.addTokenAt(tokenType, c, start);
 	}
 
+	/**
+	 * Returns the character `offset` positions ahead of the current index
+	 * without consuming it.
+	 *
+	 * @param offset - How many characters ahead to look (0 = current
+	 *   character). Defaults to `0`.
+	 * @returns The character at that position, or `""` if it is past the
+	 *   end of the source.
+	 */
 	private peek(offset: number = 0): string {
 		const index = this.position.index + offset;
 		return index < this.source.length ? this.source[index] : "";
 	}
 
+	/**
+	 * Returns the character immediately after the current one, without
+	 * consuming it. Equivalent to `peek(1)`.
+	 */
 	private peekNext(): string {
 		return this.peek(1);
 	}
 
+	/**
+	 * Consumes and returns the current character, advancing the position by
+	 * one. Updates `line`/`column` bookkeeping when crossing a `\n`.
+	 *
+	 * @returns The consumed character, or `""` if already at end of source.
+	 */
 	private advance(): string {
 		const c = this.peek();
 		if (c === "\n") {
@@ -971,10 +1187,27 @@ export class Lexer {
 		return c;
 	}
 
+	/**
+	 * Appends a zero-width token (e.g. `INDENT`/`DEDENT`/`EOF`) whose start
+	 * position is the lexer's current position.
+	 *
+	 * @param type - The token's type.
+	 * @param value - The token's raw text (typically `""` for structural
+	 *   tokens).
+	 */
 	private addToken(type: TokenType, value: string): void {
 		this.addTokenAt(type, value, this.position);
 	}
 
+	/**
+	 * Appends a token to the output list, using `start` as the token's
+	 * start position and the lexer's current position as its end position.
+	 *
+	 * @param type - The token's type.
+	 * @param value - The token's raw source text.
+	 * @param start - The position captured before the token's characters
+	 *   were consumed.
+	 */
 	private addTokenAt(type: TokenType, value: string, start: Position): void {
 		this.tokens.push({
 			type,
@@ -986,27 +1219,38 @@ export class Lexer {
 		});
 	}
 
+	/** Returns `true` if `c` is an ASCII digit (`0`-`9`). */
 	private isDigit(c: string): boolean {
 		return c >= "0" && c <= "9";
 	}
 
+	/** Returns `true` if `c` is a valid hexadecimal digit (`0`-`9`, `a`-`f`, `A`-`F`). */
 	private isHexDigit(c: string): boolean {
 		return this.isDigit(c) || (c >= "a" && c <= "f") || (c >= "A" && c <= "F");
 	}
 
+	/** Returns `true` if `c` is a valid octal digit (`0`-`7`). */
 	private isOctalDigit(c: string): boolean {
 		return c >= "0" && c <= "7";
 	}
 
+	/** Returns `true` if `c` is a valid binary digit (`0` or `1`). */
 	private isBinaryDigit(c: string): boolean {
 		return c === "0" || c === "1";
 	}
 
+	/**
+	 * Returns `true` if `c` is a letter usable as the start of a Python
+	 * identifier. Uses the Unicode `\p{L}` property class (rather than an
+	 * ASCII-only check) because Python identifiers may contain Unicode
+	 * letters (PEP 3131).
+	 */
 	private isAlpha(c: string): boolean {
 		// Support Unicode letters using regex
 		return /^[\p{L}]$/u.test(c);
 	}
 
+	/** Returns `true` if `c` is a letter or digit valid inside a Python identifier. */
 	private isAlphaNumeric(c: string): boolean {
 		return this.isAlpha(c) || this.isDigit(c);
 	}

@@ -30,19 +30,42 @@ import type {
 	WithItem,
 } from "./types.js";
 
+/**
+ * Options controlling how {@link parse} lexes and parses Python source.
+ */
 export interface ParseOptions {
+	/** Source filename to associate with parse errors and the resulting AST (informational only). */
 	filename?: string;
+	/** When true, comments are lexed and attached to the AST (as `Comment` nodes / `inlineComment`) instead of being discarded. */
 	comments?: boolean;
+	/** Target Python feature version; currently unused but reserved for future version-gated syntax. */
 	feature_version?: number;
 }
 
+/**
+ * Error thrown for a Python syntax error encountered during parsing.
+ * Extends `Error` with the source position of the offending token.
+ */
 export interface ParseError extends Error {
+	/** 1-based line number of the token that triggered the error. */
 	lineno: number;
+	/** 0-based column offset of the token that triggered the error. */
 	col_offset: number;
+	/** End line number of the offending token, if known. */
 	end_lineno?: number;
+	/** End column offset of the offending token, if known. */
 	end_col_offset?: number;
 }
 
+/**
+ * Recursive-descent parser that turns a token stream (produced by {@link Lexer})
+ * into a Python AST rooted at a {@link Module} node, mirroring the shape of
+ * CPython's `ast` module as defined in the project's ASDL grammar.
+ *
+ * Each `parseX` method corresponds to one grammar production and consumes
+ * exactly the tokens for that production, leaving the cursor positioned at
+ * the first unconsumed token.
+ */
 export class Parser {
 	private tokens: Token[];
 	private current = 0;
@@ -50,6 +73,12 @@ export class Parser {
 	private lastNonCommentTokenLine = 0; // Track the line of the last non-comment, non-newline token
 	private pendingComments: Comment[] = []; // Temporary storage for comments during expression parsing
 
+	/**
+	 * Lexes `source` and prepares the parser to consume the resulting tokens.
+	 * @param source Python source code to tokenize.
+	 * @param options Parsing options; see {@link ParseOptions}.
+	 * @throws Error (or a lexer-specific error) if `source` cannot be tokenized.
+	 */
 	constructor(source: string, options: ParseOptions = {}) {
 		const lexer = new Lexer(source);
 		this.tokens = lexer.tokenize();
@@ -63,6 +92,11 @@ export class Parser {
 		}
 	}
 
+	/**
+	 * Parses the full token stream into a {@link Module} node (the `file_input` grammar rule).
+	 * @returns The root `Module` AST node.
+	 * @throws {ParseError} On any syntax error in the source.
+	 */
 	parse(): Module {
 		this.current = 0;
 		return this.parseFileInput();
@@ -70,6 +104,13 @@ export class Parser {
 
 	// ==== Top level parser ====
 
+	/**
+	 * Parses a whole program (`file_input`): a sequence of top-level statements
+	 * until EOF, threading standalone/inline comments through when
+	 * `includeComments` is enabled.
+	 * @returns The `Module` node containing the parsed statement list.
+	 * @throws {ParseError} On any syntax error encountered while parsing statements.
+	 */
 	private parseFileInput(): Module {
 		const body: StmtNode[] = [];
 
@@ -176,7 +217,12 @@ export class Parser {
 		return result;
 	}
 
-	// Parse a comment as a statement node
+	/**
+	 * Consumes a `COMMENT` token and builds a {@link Comment} node, marking it
+	 * `inline` when it shares a line with the previously consumed non-comment token.
+	 * @returns The parsed `Comment` node.
+	 * @throws {ParseError} If the current token is not a comment.
+	 */
 	private parseCommentStatement(): Comment {
 		const token = this.consume(TokenType.COMMENT, "Expected comment");
 
@@ -194,7 +240,13 @@ export class Parser {
 		};
 	}
 
-	// Collect all comments from the AST (both standalone and inline)
+	/**
+	 * Walks the parsed `module` and gathers every {@link Comment} node,
+	 * whether standalone or attached to a statement as an inline comment,
+	 * plus any comments still buffered in {@link pendingComments}.
+	 * @param module The parsed module to scan for comments.
+	 * @returns All comments found, in traversal order.
+	 */
 	private collectAllComments(module: Module): Comment[] {
 		const comments: Comment[] = [];
 
@@ -221,7 +273,12 @@ export class Parser {
 		return comments;
 	}
 
-	// Helper to collect comments from nested statement bodies
+	/**
+	 * Recurses into the nested body/bodies of a compound statement (function,
+	 * class, if/for/while, with, try, match) to collect their comments.
+	 * @param stmt The statement to inspect for nested bodies.
+	 * @param comments Accumulator array that found comments are pushed onto.
+	 */
 	private collectFromStatement(stmt: StmtNode, comments: Comment[]): void {
 		switch (stmt.nodeType) {
 			case "FunctionDef":
@@ -268,7 +325,12 @@ export class Parser {
 		}
 	}
 
-	// Helper to collect comments from a statement body
+	/**
+	 * Collects top-level and inline comments from a flat statement list,
+	 * recursing into nested bodies via {@link collectFromStatement}.
+	 * @param body Statement list to scan.
+	 * @param comments Accumulator array that found comments are pushed onto.
+	 */
 	private collectFromBody(body: StmtNode[], comments: Comment[]): void {
 		for (const stmt of body) {
 			if (stmt.nodeType === "Comment") {
@@ -282,6 +344,12 @@ export class Parser {
 		}
 	} // ==== Statement parsers ====
 
+	/**
+	 * Parses a single statement, dispatching to decorated/simple/compound
+	 * statement parsing as appropriate.
+	 * @returns The parsed statement, or `null` at a `DEDENT` (end of a block).
+	 * @throws {ParseError} On an unexpected `INDENT` or other syntax error.
+	 */
 	private parseStatement(): StmtNode | null {
 		// Handle indentation
 		if (this.check(TokenType.INDENT)) {
@@ -301,6 +369,13 @@ export class Parser {
 		return this.parseSimpleStmt() || this.parseCompoundStmt();
 	}
 
+	/**
+	 * Parses one `simple_stmt`: a small statement followed by an optional
+	 * `;` or newline terminator.
+	 * @returns The parsed statement, or `null` if the current token doesn't
+	 * start a small statement.
+	 * @throws {ParseError} If the statement isn't terminated correctly.
+	 */
 	private parseSimpleStmt(): StmtNode | null {
 		const stmt = this.parseSmallStmt();
 		if (!stmt) {
@@ -326,6 +401,15 @@ export class Parser {
 		return stmt;
 	}
 
+	/**
+	 * Parses a `small_stmt`: pass/break/continue/return/delete/global/
+	 * nonlocal/import/from-import/raise/assert/type-alias, or falls through
+	 * to an expression statement (plain, assignment, augmented assignment,
+	 * or annotated assignment).
+	 * @returns The parsed statement, or `null` if the current token starts a
+	 * compound statement instead (handled by {@link parseCompoundStmt}).
+	 * @throws {ParseError} On malformed statement syntax.
+	 */
 	private parseSmallStmt(): StmtNode | null {
 		const start = this.peek();
 
@@ -740,6 +824,12 @@ export class Parser {
 		};
 	}
 
+	/**
+	 * Parses a `compound_stmt`: if/while/for/try/with/def/class/async/match.
+	 * @returns The parsed statement, or `null` if the current token doesn't
+	 * start any known compound statement.
+	 * @throws {ParseError} On malformed statement syntax.
+	 */
 	private parseCompoundStmt(): StmtNode | null {
 		const start = this.peek();
 
@@ -771,6 +861,13 @@ export class Parser {
 		return null;
 	}
 
+	/**
+	 * Parses a decorator list followed by the def/class/async-def/type-alias
+	 * it applies to, attaching the decorators to the resulting node.
+	 * @returns The decorated function, class, or type-alias statement.
+	 * @throws {Error} If the decorators are not followed by a valid target.
+	 * @throws {ParseError} On malformed statement syntax.
+	 */
 	private parseDecorated(): StmtNode | null {
 		const decorators = this.parseDecorators();
 
@@ -815,6 +912,10 @@ export class Parser {
 		throw new Error("Invalid decorator target");
 	}
 
+	/**
+	 * Parses zero or more `@expr` decorator lines preceding a def/class.
+	 * @returns The decorator expressions, in source order.
+	 */
 	private parseDecorators(): ExprNode[] {
 		const decorators: ExprNode[] = [];
 
@@ -827,6 +928,13 @@ export class Parser {
 		return decorators;
 	}
 
+	/**
+	 * Parses an `if` statement, recursively folding any `elif` clauses into
+	 * nested `If` nodes in `orelse` and handling a trailing `else`.
+	 * @param start Token of the already-consumed `if` keyword, used for node position.
+	 * @returns The parsed `If` node.
+	 * @throws {ParseError} On malformed statement syntax.
+	 */
 	private parseIfStmt(start: Token): StmtNode {
 		const test = this.parseTest();
 		this.consume(TokenType.COLON, "Expected ':' after if condition");
@@ -852,6 +960,12 @@ export class Parser {
 		};
 	}
 
+	/**
+	 * Parses a `while` statement, including its optional `else` clause.
+	 * @param start Token of the already-consumed `while` keyword, used for node position.
+	 * @returns The parsed `While` node.
+	 * @throws {ParseError} On malformed statement syntax.
+	 */
 	private parseWhileStmt(start: Token): StmtNode {
 		const test = this.parseTest();
 		this.consume(TokenType.COLON, "Expected ':' after while condition");
@@ -873,6 +987,12 @@ export class Parser {
 		};
 	}
 
+	/**
+	 * Parses a `for` statement, including its optional `else` clause.
+	 * @param start Token of the already-consumed `for` keyword, used for node position.
+	 * @returns The parsed `For` node.
+	 * @throws {ParseError} On malformed statement syntax.
+	 */
 	private parseForStmt(start: Token): StmtNode {
 		const target = this.parseExprList();
 		this.consume(TokenType.IN, "Expected 'in' in for statement");
@@ -897,6 +1017,14 @@ export class Parser {
 		};
 	}
 
+	/**
+	 * Parses a `def` statement: name, optional PEP 695 type parameters,
+	 * parameter list, optional return annotation, and body.
+	 * @param start Token of the already-consumed `def` keyword, used for node position.
+	 * @param decorators Decorator expressions already parsed by the caller (empty if none).
+	 * @returns The parsed `FunctionDef` node.
+	 * @throws {ParseError} On malformed statement syntax.
+	 */
 	private parseFunctionDef(
 		start: Token,
 		decorators: ExprNode[] = [],
@@ -931,6 +1059,14 @@ export class Parser {
 		};
 	}
 
+	/**
+	 * Parses an `async def` statement; identical to {@link parseFunctionDef}
+	 * but produces an `AsyncFunctionDef` node.
+	 * @param start Token of the already-consumed `def` keyword, used for node position.
+	 * @param decorators Decorator expressions already parsed by the caller (empty if none).
+	 * @returns The parsed `AsyncFunctionDef` node.
+	 * @throws {ParseError} On malformed statement syntax.
+	 */
 	private parseAsyncFunctionDef(
 		start: Token,
 		decorators: ExprNode[] = [],
@@ -965,6 +1101,15 @@ export class Parser {
 		};
 	}
 
+	/**
+	 * Parses a `class` statement: name, optional PEP 695 type parameters,
+	 * and an optional parenthesized list of base classes and/or keyword
+	 * arguments (e.g. `metaclass=...`).
+	 * @param start Token of the already-consumed `class` keyword, used for node position.
+	 * @param decorators Decorator expressions already parsed by the caller (empty if none).
+	 * @returns The parsed `ClassDef` node.
+	 * @throws {ParseError} On malformed statement syntax.
+	 */
 	private parseClassDef(start: Token, decorators: ExprNode[] = []): StmtNode {
 		const name = this.consume(TokenType.NAME, "Expected class name").value;
 
@@ -1024,6 +1169,15 @@ export class Parser {
 		};
 	}
 
+	/**
+	 * Parses a `try` statement, including all `except`/`except*` handlers
+	 * (which cannot be mixed on the same `try`), the optional `else`, and
+	 * the optional `finally` clause.
+	 * @param start Token of the already-consumed `try` keyword, used for node position.
+	 * @returns The parsed `Try` node.
+	 * @throws {ParseError} On malformed statement syntax, or if `except` and
+	 * `except*` handlers are mixed on the same `try`.
+	 */
 	private parseTryStmt(start: Token): StmtNode {
 		this.consume(TokenType.COLON, "Expected ':' after try");
 		const body = this.parseSuite();
@@ -1110,6 +1264,13 @@ export class Parser {
 		} as Try | TryStar;
 	}
 
+	/**
+	 * Parses a `with` statement, including one or more comma-separated
+	 * context-manager items, each with an optional `as` target.
+	 * @param start Token of the already-consumed `with` keyword, used for node position.
+	 * @returns The parsed `With` node.
+	 * @throws {ParseError} On malformed statement syntax.
+	 */
 	private parseWithStmt(start: Token): StmtNode {
 		const items: WithItem[] = [];
 
@@ -1141,6 +1302,14 @@ export class Parser {
 		};
 	}
 
+	/**
+	 * Parses the statement following an `async` keyword (`def`, `for`, or
+	 * `with`) by delegating to the corresponding sync parser and rewriting
+	 * the result's `nodeType` to its async variant.
+	 * @param start Token of the already-consumed `async` keyword, used for node position.
+	 * @returns The parsed `AsyncFunctionDef`, `AsyncFor`, or `AsyncWith` node.
+	 * @throws {ParseError} If `async` is not followed by `def`, `for`, or `with`.
+	 */
 	private parseAsyncStmt(start: Token): StmtNode {
 		if (this.match(TokenType.DEF)) {
 			// biome-ignore lint/suspicious/noExplicitAny: Type assertion needed for object spreading
@@ -1174,6 +1343,14 @@ export class Parser {
 		throw this.error("Invalid async statement");
 	}
 
+	/**
+	 * Parses a `match` statement (PEP 634): the subject expression followed
+	 * by an indented block of one or more `case pattern [if guard]:` clauses.
+	 * @param start Token of the already-consumed `match` keyword, used for node position.
+	 * @returns The parsed `Match` node.
+	 * @throws {ParseError} On malformed statement syntax, e.g. a missing
+	 * `case` in the match body.
+	 */
 	private parseMatchStmt(start: Token): StmtNode {
 		const subject = this.parseTest();
 		this.consume(TokenType.COLON, "Expected ':' after match subject");
@@ -1238,10 +1415,21 @@ export class Parser {
 		};
 	}
 
+	/**
+	 * Parses one `case` pattern (the entry point of the pattern grammar).
+	 * @returns The parsed pattern node.
+	 * @throws {ParseError} On malformed pattern syntax.
+	 */
 	private parsePattern(): PatternNode {
 		return this.parseOrPattern();
 	}
 
+	/**
+	 * Parses a pattern with optional `|`-separated alternatives, producing
+	 * a `MatchOr` when more than one alternative is present.
+	 * @returns The parsed pattern, or a `MatchOr` wrapping multiple alternatives.
+	 * @throws {ParseError} On malformed pattern syntax.
+	 */
 	private parseOrPattern(): PatternNode {
 		const patterns: PatternNode[] = [];
 		const start = this.peek();
@@ -1264,6 +1452,13 @@ export class Parser {
 		};
 	}
 
+	/**
+	 * Parses a single match pattern alternative: class patterns (`Point(x, y=0)`),
+	 * capture/wildcard/value patterns, literals, sequence patterns (`[...]`/`(...)`),
+	 * mapping patterns (`{...}`), or an `as`-bound pattern.
+	 * @returns The parsed pattern node.
+	 * @throws {ParseError} On malformed pattern syntax.
+	 */
 	private parseBasicPattern(): PatternNode {
 		const start = this.peek();
 
@@ -1502,6 +1697,12 @@ export class Parser {
 
 	// ==== Expression parsers ====
 
+	/**
+	 * Parses a `testlist`: a single test expression, or a comma-separated
+	 * sequence of them collapsed into a `Tuple` (trailing comma allowed).
+	 * @returns The single expression, or a `Tuple` node if a comma was found.
+	 * @throws {ParseError} On malformed expression syntax.
+	 */
 	private parseTestList(): ExprNode {
 		const expr = this.parseTest();
 
@@ -1532,6 +1733,12 @@ export class Parser {
 		return expr;
 	}
 
+	/**
+	 * Parses a `test`: an or-test, optionally followed by a conditional
+	 * expression (`X if COND else Y`).
+	 * @returns The parsed expression, or an `IfExp` node.
+	 * @throws {ParseError} On malformed expression syntax.
+	 */
 	private parseTest(): ExprNode {
 		const expr = this.parseOrTest();
 
@@ -1553,6 +1760,12 @@ export class Parser {
 		return expr;
 	}
 
+	/**
+	 * Parses a call argument, recognizing a bare generator expression
+	 * (`f(x for x in y)`, no parens needed for a lone argument).
+	 * @returns The parsed argument expression, or a `GeneratorExp` node.
+	 * @throws {ParseError} On malformed expression syntax.
+	 */
 	private parseArgument(): ExprNode {
 		// Parse an argument that could be a generator expression
 		const start = this.current;
@@ -1575,6 +1788,12 @@ export class Parser {
 		return expr;
 	}
 
+	/**
+	 * Parses an `or_test`: a `lambda` expression, or a chain of `and_test`s
+	 * joined by `or` (collapsed into a single `BoolOp` when more than one).
+	 * @returns The parsed expression.
+	 * @throws {ParseError} On malformed expression syntax.
+	 */
 	private parseOrTest(): ExprNode {
 		// Check for lambda expression first
 		if (this.match(TokenType.LAMBDA)) {
@@ -1630,6 +1849,13 @@ export class Parser {
 		return expr;
 	}
 
+	/**
+	 * Parses an `and_test`: a `not_test`, optionally a named expression
+	 * (`:=` walrus target), or a chain of `not_test`s joined by `and`
+	 * (collapsed into a single `BoolOp` when more than one).
+	 * @returns The parsed expression.
+	 * @throws {ParseError} On malformed expression syntax.
+	 */
 	private parseAndTest(): ExprNode {
 		const expr = this.parseNotTest();
 
@@ -1664,6 +1890,12 @@ export class Parser {
 		return expr;
 	}
 
+	/**
+	 * Parses a `not_test`: zero or more `not` unary operators applied to a
+	 * comparison expression.
+	 * @returns The parsed expression, wrapped in `UnaryOp`(`Not`) for each `not`.
+	 * @throws {ParseError} On malformed expression syntax.
+	 */
 	private parseNotTest(): ExprNode {
 		if (this.match(TokenType.NOT)) {
 			const start = this.previous();
@@ -1681,6 +1913,13 @@ export class Parser {
 		return this.parseComparison();
 	}
 
+	/**
+	 * Parses a `comparison`: an expr optionally followed by a chain of
+	 * comparison operators and operands, collapsed into a single `Compare`
+	 * node (Python allows chained comparisons like `a < b < c`).
+	 * @returns The parsed expression, or a `Compare` node.
+	 * @throws {ParseError} On malformed expression syntax.
+	 */
 	private parseComparison(): ExprNode {
 		const expr = this.parseExpr();
 
@@ -1706,10 +1945,20 @@ export class Parser {
 		return expr;
 	}
 
+	/**
+	 * Parses an `expr` (the bitwise-or precedence level and below).
+	 * @returns The parsed expression.
+	 * @throws {ParseError} On malformed expression syntax.
+	 */
 	private parseExpr(): ExprNode {
 		return this.parseOrExpr();
 	}
 
+	/**
+	 * Parses a chain of `xor_expr`s joined by `|`, left-associative.
+	 * @returns The parsed expression, or a `BinOp`(`BitOr`) chain.
+	 * @throws {ParseError} On malformed expression syntax.
+	 */
 	private parseOrExpr(): ExprNode {
 		let expr = this.parseXorExpr();
 
@@ -1730,6 +1979,11 @@ export class Parser {
 		return expr;
 	}
 
+	/**
+	 * Parses a chain of `and_expr`s joined by `^`, left-associative.
+	 * @returns The parsed expression, or a `BinOp`(`BitXor`) chain.
+	 * @throws {ParseError} On malformed expression syntax.
+	 */
 	private parseXorExpr(): ExprNode {
 		let expr = this.parseAndExpr();
 
@@ -1750,6 +2004,11 @@ export class Parser {
 		return expr;
 	}
 
+	/**
+	 * Parses a chain of `shift_expr`s joined by `&`, left-associative.
+	 * @returns The parsed expression, or a `BinOp`(`BitAnd`) chain.
+	 * @throws {ParseError} On malformed expression syntax.
+	 */
 	private parseAndExpr(): ExprNode {
 		let expr = this.parseShiftExpr();
 
@@ -1770,6 +2029,11 @@ export class Parser {
 		return expr;
 	}
 
+	/**
+	 * Parses a chain of `arith_expr`s joined by `<<`/`>>`, left-associative.
+	 * @returns The parsed expression, or a `BinOp`(`LShift`/`RShift`) chain.
+	 * @throws {ParseError} On malformed expression syntax.
+	 */
 	private parseShiftExpr(): ExprNode {
 		let expr = this.parseArithExpr();
 
@@ -1794,6 +2058,11 @@ export class Parser {
 		return expr;
 	}
 
+	/**
+	 * Parses a chain of `term`s joined by `+`/`-`, left-associative.
+	 * @returns The parsed expression, or a `BinOp`(`Add`/`Sub`) chain.
+	 * @throws {ParseError} On malformed expression syntax.
+	 */
 	private parseArithExpr(): ExprNode {
 		let expr = this.parseTerm();
 
@@ -1818,6 +2087,13 @@ export class Parser {
 		return expr;
 	}
 
+	/**
+	 * Parses a chain of `factor`s joined by `*`, `@`, `/`, `//`, or `%`,
+	 * left-associative.
+	 * @returns The parsed expression, or a `BinOp` chain over these operators.
+	 * @throws {ParseError} On malformed expression syntax, or an unreachable
+	 * operator mismatch.
+	 */
 	private parseTerm(): ExprNode {
 		let expr = this.parseFactor();
 
@@ -1868,6 +2144,13 @@ export class Parser {
 		return expr;
 	}
 
+	/**
+	 * Parses a `factor`: an `await` expression, a unary `+`/`-`/`~` applied
+	 * (right-recursively) to another factor, or a power expression.
+	 * @returns The parsed expression.
+	 * @throws {ParseError} On malformed expression syntax, or an unreachable
+	 * operator mismatch.
+	 */
 	private parseFactor(): ExprNode {
 		// Handle await expressions at factor level (unary)
 		if (this.match(TokenType.AWAIT)) {
@@ -1913,6 +2196,12 @@ export class Parser {
 		return this.parsePower();
 	}
 
+	/**
+	 * Parses a `power`: an atom-with-trailers, optionally raised to a
+	 * right-associative `**` exponent.
+	 * @returns The parsed expression, or a `BinOp`(`Pow`) node.
+	 * @throws {ParseError} On malformed expression syntax.
+	 */
 	private parsePower(): ExprNode {
 		let expr = this.parseAtomWithTrailers();
 
@@ -1933,6 +2222,12 @@ export class Parser {
 		return expr;
 	}
 
+	/**
+	 * Parses an atom followed by zero or more trailers: attribute access
+	 * (`.name`), subscription (`[...]`), or call (`(...)`).
+	 * @returns The parsed expression, wrapped in `Attribute`/`Subscript`/`Call` per trailer.
+	 * @throws {ParseError} On malformed expression syntax.
+	 */
 	private parseAtomWithTrailers(): ExprNode {
 		let expr = this.parseAtom();
 
@@ -2027,6 +2322,14 @@ export class Parser {
 		return expr;
 	}
 
+	/**
+	 * Parses an `atom`: the base case of the expression grammar — names,
+	 * numeric/string/f-string/boolean/`None`/ellipsis literals, parenthesized
+	 * expressions, tuples, list/dict/set displays and comprehensions, or
+	 * `yield`/`yield from`.
+	 * @returns The parsed atomic expression node.
+	 * @throws {ParseError} On malformed or unrecognized atom syntax.
+	 */
 	private parseAtom(): ExprNode {
 		const start = this.peek();
 
@@ -2278,6 +2581,15 @@ export class Parser {
 
 	// ==== Helper parsers ====
 
+	/**
+	 * Parses a `suite`: either an indented block of statements following a
+	 * `:` and `NEWLINE`, or a single simple statement on the same line as
+	 * the `:`. When `includeComments` is enabled, standalone comments are
+	 * threaded into the returned list and inline comments are attached to
+	 * the preceding statement's `inlineComment`.
+	 * @returns The list of parsed statements (and comment nodes, if enabled).
+	 * @throws {ParseError} If the block is not properly indented/dedented.
+	 */
 	private parseSuite(): StmtNode[] {
 		// Handle comments that appear immediately after colon but before newline
 		const postColonComments: Comment[] = [];
@@ -2400,6 +2712,13 @@ export class Parser {
 		}
 	}
 
+	/**
+	 * Parses a `def`/`class`-style parameter list: positional-only args
+	 * (before `/`), regular args, `*args`/bare `*`, keyword-only args, and
+	 * `**kwargs`, each with optional annotations and defaults.
+	 * @returns The parsed `Arguments` node.
+	 * @throws {ParseError} On malformed parameter syntax.
+	 */
 	private parseParameters(): Arguments {
 		const posonlyargs: Arg[] = [];
 		const args: Arg[] = [];
@@ -2517,6 +2836,12 @@ export class Parser {
 		};
 	}
 
+	/**
+	 * Parses a `lambda`'s (simplified, unannotated) parameter list: plain
+	 * names with optional `=default` values, comma-separated.
+	 * @returns The parsed `Arguments` node (no posonly/kwonly/vararg/kwarg support).
+	 * @throws {ParseError} On malformed parameter syntax.
+	 */
 	private parseLambdaParameters(): Arguments {
 		const args: Arg[] = [];
 		const defaults: ExprNode[] = [];
@@ -2557,6 +2882,13 @@ export class Parser {
 		};
 	}
 
+	/**
+	 * Parses an `exprlist` (assignment-target form used by `for`/`del`):
+	 * a single expr, or a comma-separated sequence collapsed into a `Tuple`
+	 * with `Store` context, stopping before a trailing `in`.
+	 * @returns The single expression, or a `Tuple` node.
+	 * @throws {ParseError} On malformed expression syntax.
+	 */
 	private parseExprList(): ExprNode {
 		const expr = this.parseExpr();
 
@@ -2583,6 +2915,12 @@ export class Parser {
 		return expr;
 	}
 
+	/**
+	 * Parses a comma-separated list of subscripts inside `[...]`, collapsing
+	 * multiple entries into a `Tuple` (used for multi-dimensional indexing).
+	 * @returns The single subscript expression, or a `Tuple` node.
+	 * @throws {ParseError} On malformed subscript syntax.
+	 */
 	private parseSubscriptList(): ExprNode {
 		const first = this.parseSubscript();
 
@@ -2609,6 +2947,12 @@ export class Parser {
 		return first;
 	}
 
+	/**
+	 * Parses a single subscript entry: a plain index expression, or a
+	 * `lower:upper:step` slice (any part may be omitted).
+	 * @returns The parsed index expression, or a `Slice` node.
+	 * @throws {ParseError} On malformed subscript syntax.
+	 */
 	private parseSubscript(): ExprNode {
 		if (this.match(TokenType.COLON)) {
 			// Slice with no lower bound
@@ -2673,6 +3017,14 @@ export class Parser {
 		return first;
 	}
 
+	/**
+	 * Parses the contents of a `[...]` display after the opening bracket has
+	 * been consumed: an empty list, a list comprehension, or a regular
+	 * (possibly starred) element list.
+	 * @param start Token of the already-consumed `[`, used for node position.
+	 * @returns The parsed `List` or `ListComp` node.
+	 * @throws {ParseError} On malformed list syntax.
+	 */
 	private parseListOrListComp(start: Token): ExprNode {
 		if (this.match(TokenType.RSQB)) {
 			// Empty list
@@ -2726,6 +3078,14 @@ export class Parser {
 		};
 	}
 
+	/**
+	 * Parses the contents of a `{...}` display after the opening brace has
+	 * been consumed: an empty dict, a dict/dict-comprehension (`key: value`),
+	 * or a set/set-comprehension.
+	 * @param start Token of the already-consumed `{`, used for node position.
+	 * @returns The parsed `Dict`, `DictComp`, `Set`, or `SetComp` node.
+	 * @throws {ParseError} On malformed dict/set syntax.
+	 */
 	private parseDictOrSetOrComp(start: Token): ExprNode {
 		if (this.match(TokenType.RBRACE)) {
 			// Empty dict
@@ -2813,6 +3173,13 @@ export class Parser {
 		}
 	}
 
+	/**
+	 * Parses a sequence of `[async] for ... in ... [if ...]` comprehension
+	 * clauses, used when the leading `for` has not yet been consumed
+	 * (e.g. list/generator comprehensions).
+	 * @returns The parsed comprehension clauses, in source order.
+	 * @throws {ParseError} On malformed comprehension syntax.
+	 */
 	private parseComprehensions(): Comprehension[] {
 		const comprehensions: Comprehension[] = [];
 
@@ -2850,6 +3217,13 @@ export class Parser {
 		return comprehensions;
 	}
 
+	/**
+	 * Parses a sequence of comprehension clauses when the leading `for`
+	 * keyword of the first clause has already been consumed by the caller
+	 * (e.g. dict/set comprehensions).
+	 * @returns The parsed comprehension clauses, in source order.
+	 * @throws {ParseError} On malformed comprehension syntax.
+	 */
 	private parseComprehensionsAfterFor(): Comprehension[] {
 		const comprehensions: Comprehension[] = [];
 		let is_async = 0; // First comprehension is not async for now
@@ -2909,6 +3283,11 @@ export class Parser {
 
 	// ==== Utility methods ====
 
+	/**
+	 * Reports whether the current token is an augmented-assignment operator
+	 * (e.g. `+=`, `-=`, `**=`) without consuming it.
+	 * @returns `true` if the current token is an augmented-assignment operator.
+	 */
 	private matchAugAssign(): boolean {
 		return (
 			this.check(TokenType.PLUSEQUAL) ||
@@ -2927,6 +3306,12 @@ export class Parser {
 		);
 	}
 
+	/**
+	 * Consumes the current augmented-assignment token and maps it to its
+	 * underlying binary operator node (e.g. `+=` -> `Add`).
+	 * @returns The corresponding `OperatorNode`.
+	 * @throws {ParseError} If the current token is not a valid augmented-assignment operator.
+	 */
 	private parseAugAssignOp(): OperatorNode {
 		const token = this.advance();
 
@@ -2962,6 +3347,12 @@ export class Parser {
 		}
 	}
 
+	/**
+	 * Reports whether the current token(s) start a comparison operator
+	 * (`<`, `>`, `==`, `>=`, `<=`, `!=`, `in`, `is`, `not in`, `is not`)
+	 * without consuming them.
+	 * @returns `true` if the current position begins a comparison operator.
+	 */
 	private matchComparison(): boolean {
 		return (
 			this.check(TokenType.LESS) ||
@@ -2977,6 +3368,12 @@ export class Parser {
 		);
 	}
 
+	/**
+	 * Consumes one comparison operator (including the two-token `not in`
+	 * and `is not` forms) and returns its AST node.
+	 * @returns The corresponding `CmpOpNode`.
+	 * @throws {ParseError} If the current token is not a valid comparison operator.
+	 */
 	private parseCompOp(): CmpOpNode {
 		if (this.match(TokenType.LESS)) return { nodeType: "Lt" };
 		if (this.match(TokenType.GREATER)) return { nodeType: "Gt" };
@@ -2999,18 +3396,33 @@ export class Parser {
 		throw this.error("Expected comparison operator");
 	}
 
+	/**
+	 * Determines whether an annotated-assignment target is a "simple" name
+	 * target per the `AnnAssign.simple` flag in the Python AST (as opposed
+	 * to an attribute, subscript, or parenthesized name).
+	 * @param expr The assignment target expression.
+	 * @returns `true` if `expr` is a bare `Name` node.
+	 */
 	private isSimpleTarget(expr: ExprNode): boolean {
 		return expr.nodeType === "Name";
 	}
 
+	/** Creates a `Load` expression-context node. */
 	private createLoad(): Load {
 		return { nodeType: "Load" };
 	}
 
+	/** Creates a `Store` expression-context node. */
 	private createStore(): Store {
 		return { nodeType: "Store" };
 	}
 
+	/**
+	 * Converts a raw numeric literal token value to a JS `number`, handling
+	 * hex (`0x`), octal (`0o`), binary (`0b`), float, and decimal-int forms.
+	 * @param value The raw token text of the numeric literal.
+	 * @returns The parsed numeric value.
+	 */
 	private parseNumber(value: string): number {
 		// Handle different number formats
 		if (value.startsWith("0x") || value.startsWith("0X")) {
@@ -3030,6 +3442,14 @@ export class Parser {
 		}
 	}
 
+	/**
+	 * Converts a raw string literal token value to its decoded string
+	 * content: strips the prefix (`f`/`r`/`b`/`u`) and surrounding quotes
+	 * (single or triple), and resolves basic escape sequences unless the
+	 * literal is raw (`r`-prefixed).
+	 * @param value The raw token text of the string literal, including prefix and quotes.
+	 * @returns The decoded string content.
+	 */
 	private parseString(value: string): string {
 		// Check for string prefixes (f, r, b, u, etc.)
 		let prefix = "";
@@ -3067,6 +3487,12 @@ export class Parser {
 		return content;
 	}
 
+	/**
+	 * Determines the original prefix + quote style (e.g. `f"`, `'''`) of a
+	 * raw string/f-string token, for round-tripping through the unparser.
+	 * @param tokenValue The raw token text, including prefix and quotes.
+	 * @returns The prefix concatenated with its quote characters (defaults to `"` if undetected).
+	 */
 	private getStringQuoteStyle(tokenValue: string): string {
 		// Extract any prefix (f, r, b, u, etc.)
 		const prefixMatch = tokenValue.match(/^([fFrRbBuU]*)/);
@@ -3088,6 +3514,16 @@ export class Parser {
 		return `${prefix}"`;
 	}
 
+	/**
+	 * Parses an f-string token into a `JoinedStr` node: splits the content
+	 * into literal text segments (`Constant` nodes) and `{expr}` segments
+	 * (delegated to {@link parseExpressionInFString}), tracking brace/quote
+	 * nesting so expressions containing strings or nested f-strings are
+	 * handled correctly.
+	 * @param token The f-string token, including its quotes and `f` prefix.
+	 * @returns A `JoinedStr` node containing the interleaved literal and formatted-value parts.
+	 * @throws {ParseError} If an f-string expression is malformed.
+	 */
 	private parseFString(token: Token): JoinedStr {
 		// Extract the content inside the f-string quotes
 		let content = token.value;
@@ -3159,6 +3595,15 @@ export class Parser {
 	 * Parse an expression within an f-string, handling nested contexts properly.
 	 * Returns the expression text and the position after the closing brace.
 	 */
+	/**
+	 * Extracts the raw text of a single `{expr}` segment from f-string
+	 * content, tracking brace nesting and skipping over any nested strings
+	 * or nested f-strings so their braces/quotes don't confuse the scan.
+	 * @param content The f-string's unquoted content.
+	 * @param startPos Index into `content` of the opening `{`.
+	 * @returns The expression text (braces excluded) and the index just past the matching `}`.
+	 * @throws {Error} If `startPos` isn't a `{`, or the braces are unbalanced.
+	 */
 	private parseExpressionInFString(
 		content: string,
 		startPos: number,
@@ -3221,7 +3666,13 @@ export class Parser {
 	}
 
 	/**
-	 * Parse a nested f-string within an expression.
+	 * Scans a nested f-string literal (`f"..."`/`f'...'`) that appears
+	 * inside an outer f-string's `{expr}` segment, returning its raw text
+	 * verbatim so the outer scan can skip past it intact.
+	 * @param content The enclosing f-string's unquoted content.
+	 * @param startPos Index into `content` of the nested f-string's `f` prefix.
+	 * @returns The nested f-string's full raw text and the index just past its closing quote.
+	 * @throws {Error} If the nested f-string is unterminated.
 	 */
 	private parseNestedFString(
 		content: string,
@@ -3255,7 +3706,13 @@ export class Parser {
 	}
 
 	/**
-	 * Parse a regular string literal within an expression.
+	 * Scans a quoted string literal that appears inside an f-string's
+	 * `{expr}` segment, respecting backslash escapes so an escaped quote
+	 * doesn't terminate the scan early.
+	 * @param content The enclosing f-string's unquoted content.
+	 * @param startPos Index into `content` of the string's opening quote.
+	 * @returns The string's raw text (quotes included) and the index just past its closing quote.
+	 * @throws {Error} If the string literal is unterminated.
 	 */
 	private parseStringLiteral(
 		content: string,
@@ -3288,6 +3745,15 @@ export class Parser {
 		throw new Error(`Unterminated string starting at position ${startPos}`);
 	}
 
+	/**
+	 * Parses the text of an f-string `{expr}` segment into a `FormattedValue`
+	 * node: splits off an optional `!r`/`!s`/`!a` conversion specifier and/or
+	 * a `:spec` format spec, then parses the remaining expression text via
+	 * {@link parseExpressionFromString}.
+	 * @param exprText The raw text between the segment's braces (as returned by {@link parseExpressionInFString}).
+	 * @param token The f-string token, used for error/node position.
+	 * @returns The parsed `FormattedValue` node.
+	 */
 	private parseFormattedValue(exprText: string, token: Token): FormattedValue {
 		// Split expression and format spec if present
 		let expression = exprText;
@@ -3352,6 +3818,15 @@ export class Parser {
 		};
 	}
 
+	/**
+	 * Parses a standalone expression string (an f-string interpolation's
+	 * expression text) using a fresh nested {@link Parser} instance. Falls
+	 * back to treating the text as a bare `Name` if it fails to parse, so a
+	 * single malformed interpolation doesn't abort the whole file.
+	 * @param exprText The expression source text to parse.
+	 * @param token The originating f-string token, used for fallback node position.
+	 * @returns The parsed expression, or a fallback `Name` node on parse failure.
+	 */
 	private parseExpressionFromString(exprText: string, token: Token): ExprNode {
 		try {
 			// Create a mini-lexer/parser for the expression
@@ -3373,6 +3848,11 @@ export class Parser {
 
 	// ==== Parser utilities ====
 
+	/**
+	 * Consumes the current token if it matches any of `types`.
+	 * @param types Token types to accept.
+	 * @returns `true` (and advances) if the current token matched one of `types`; otherwise `false`.
+	 */
 	private match(...types: TokenType[]): boolean {
 		for (const type of types) {
 			if (this.check(type)) {
@@ -3383,25 +3863,46 @@ export class Parser {
 		return false;
 	}
 
+	/**
+	 * Reports whether the current token (comments skipped) is of `type`, without consuming it.
+	 * @param type Token type to test for.
+	 * @returns `true` if the current token matches `type`.
+	 */
 	private check(type: TokenType): boolean {
 		if (this.isAtEnd()) return false;
 		const token = this.peek();
 		return token.type === type;
 	}
 
-	// Helper method to peek while skipping comments
-
+	/**
+	 * Reports whether the token immediately after the current one is of
+	 * `type`, without consuming anything. Unlike {@link check}, this looks
+	 * at the raw next token and does not skip comments.
+	 * @param type Token type to test for.
+	 * @returns `true` if the next raw token matches `type`.
+	 */
 	private checkNext(type: TokenType): boolean {
 		if (this.current + 1 >= this.tokens.length) return false;
 		return this.tokens[this.current + 1].type === type;
 	}
 
+	/**
+	 * Reports whether the parser has consumed all tokens (reached `EOF`).
+	 * @returns `true` at end of input.
+	 */
 	private isAtEnd(): boolean {
 		// When parsing comments as statement nodes, check the actual current token
 		const token = this.peek();
 		return token.type === TokenType.EOF;
 	}
 
+	/**
+	 * Returns the current token without consuming it. As a side effect,
+	 * any `COMMENT` tokens at the current position are skipped over and
+	 * buffered into {@link pendingComments} so callers never observe them
+	 * directly (comments are re-attached to statements elsewhere).
+	 * @returns The current non-comment token, or a synthetic `EOF` token past the end of input.
+	 */
 	private peek(): Token {
 		// Skip over comment tokens and collect them
 		let currentIndex = this.current;
@@ -3440,6 +3941,11 @@ export class Parser {
 		return this.tokens[this.current];
 	}
 
+	/**
+	 * Returns the raw token immediately after the current position, without
+	 * skipping comments and without consuming anything.
+	 * @returns The next raw token, or a synthetic `EOF` token past the end of input.
+	 */
 	private peekNext(): Token {
 		if (this.current + 1 >= this.tokens.length) {
 			// Return EOF token if we've gone past the end
@@ -3457,6 +3963,12 @@ export class Parser {
 		return this.tokens[this.current + 1];
 	}
 
+	/**
+	 * Consumes and returns the current token, updating
+	 * {@link lastNonCommentTokenLine} when the consumed token isn't a
+	 * comment or newline (used to detect inline vs. standalone comments).
+	 * @returns The token that was just consumed.
+	 */
 	private advance(): Token {
 		if (!this.isAtEnd()) {
 			this.current++;
@@ -3471,10 +3983,21 @@ export class Parser {
 		return token;
 	}
 
+	/**
+	 * Returns the most recently consumed token.
+	 * @returns The token at the position just before the current cursor.
+	 */
 	private previous(): Token {
 		return this.tokens[this.current - 1];
 	}
 
+	/**
+	 * Consumes the current token if it matches `type`, otherwise raises a syntax error.
+	 * @param type Expected token type.
+	 * @param message Error message to use if the current token doesn't match.
+	 * @returns The consumed token.
+	 * @throws {ParseError} If the current token is not of `type`.
+	 */
 	private consume(type: TokenType, message: string): Token {
 		if (this.check(type)) {
 			return this.advance();
@@ -3482,6 +4005,11 @@ export class Parser {
 		throw this.error(message);
 	}
 
+	/**
+	 * Builds a {@link ParseError} for `message`, positioned at the current token.
+	 * @param message Description of the syntax error.
+	 * @returns A `ParseError` ready to be thrown, carrying the current token's source location.
+	 */
 	private error(message: string): ParseError {
 		const token = this.peek();
 		const error = new Error(
@@ -3494,6 +4022,13 @@ export class Parser {
 		return error;
 	}
 
+	/**
+	 * Recursively checks that an expression is a syntactically valid
+	 * assignment target (name, attribute, subscript, list/tuple of targets,
+	 * or a starred target), matching CPython's assignment-target rules.
+	 * @param expr The expression to validate as an assignment target.
+	 * @throws {ParseError} If `expr` (or one of its nested elements) cannot be assigned to.
+	 */
 	private validateAssignmentTarget(expr: ExprNode): void {
 		switch (expr.nodeType) {
 			case "Name":
@@ -3526,6 +4061,12 @@ export class Parser {
 		}
 	}
 
+	/**
+	 * Parses a `test`, or a starred expression (`*expr`) used as an element
+	 * of a list/tuple/call-argument context.
+	 * @returns The parsed expression, or a `Starred` node.
+	 * @throws {ParseError} On malformed expression syntax.
+	 */
 	private parseTestOrStarred(): ExprNode {
 		if (this.match(TokenType.STAR)) {
 			const start = this.previous();
@@ -3541,6 +4082,14 @@ export class Parser {
 		return this.parseTest();
 	}
 
+	/**
+	 * Parses a comma-separated list of (possibly starred) test expressions,
+	 * collapsing into a `Tuple` when more than one element is present
+	 * (trailing comma allowed). Used for expression statements and
+	 * assignment left-hand sides that may include starred targets.
+	 * @returns The single expression, or a `Tuple` node.
+	 * @throws {ParseError} On malformed expression syntax.
+	 */
 	private parseTestListWithStar(): ExprNode {
 		const expr = this.parseTestOrStarred();
 
@@ -3573,6 +4122,13 @@ export class Parser {
 
 	// ==== Type parameter parsing ====
 
+	/**
+	 * Parses an optional PEP 695 `[...]` type-parameter list on a
+	 * `def`/`class`/`type` statement: regular `TypeVar`s (with optional
+	 * `: bound` and `= default`), `*Ts` `TypeVarTuple`s, and `**P` `ParamSpec`s.
+	 * @returns The parsed type parameters, or an empty array if no `[` is present.
+	 * @throws {ParseError} On malformed type-parameter syntax.
+	 */
 	private parseTypeParams(): TypeParamNode[] {
 		const params: TypeParamNode[] = [];
 
@@ -3661,7 +4217,12 @@ export class Parser {
 // ==== Main parse functions ====
 
 /**
- * Parse Python source code from a string
+ * Parses Python source code from a string into an AST, mirroring
+ * CPython's `ast.parse`.
+ * @param source Python source code to parse.
+ * @param options Parsing options; see {@link ParseOptions}.
+ * @returns The root `Module` AST node.
+ * @throws {ParseError} On any syntax error in `source`.
  */
 export function parse(source: string, options: ParseOptions = {}): Module {
 	const parser = new Parser(source, options);
@@ -3669,8 +4230,13 @@ export function parse(source: string, options: ParseOptions = {}): Module {
 }
 
 /**
- * Parse Python source code from a file
- * Note: This is for Node.js environments. In browsers, you'll need to read the file content first.
+ * Parses Python source code from a file path. Not yet implemented: this is
+ * a Node.js-oriented placeholder — read the file's contents yourself and
+ * pass them to {@link parse} instead.
+ * @param _filename Path to the Python source file (currently unused).
+ * @param _options Parsing options; see {@link ParseOptions} (currently unused).
+ * @returns Never returns.
+ * @throws {Error} Always — this function is not implemented.
  */
 export function parseFile(
 	_filename: string,
@@ -3685,6 +4251,16 @@ export function parseFile(
 
 // ==== Additional utility functions ====
 
+/**
+ * Parses `source` and evaluates its first expression statement as a Python
+ * literal, mirroring CPython's `ast.literal_eval`. Supports constants,
+ * lists, tuples, sets, dicts (no unpacking), and unary/binary +/- on
+ * numeric literals.
+ * @param source Python source containing a single literal expression.
+ * @returns The evaluated JavaScript value corresponding to the literal.
+ * @throws {Error} If `source` contains no expression statement, or the
+ * expression isn't a supported literal form.
+ */
 // biome-ignore lint/suspicious/noExplicitAny: Function evaluates Python literals which can be any type
 export function literalEval(source: string): any {
 	// For literal evaluation, we just parse the source and evaluate the first expression
@@ -3700,6 +4276,15 @@ export function literalEval(source: string): any {
 	throw new Error("No expression found to evaluate");
 }
 
+/**
+ * Recursively evaluates an expression node as a Python literal (constant,
+ * list, tuple, dict, set, or +/- unary/binary op on numbers), the worker
+ * behind {@link literalEval}.
+ * @param node The expression node to evaluate.
+ * @returns The evaluated JavaScript value.
+ * @throws {Error} If `node` (or a nested key/value) isn't a supported
+ * literal form, e.g. dict unpacking or an unrecognized node type.
+ */
 // biome-ignore lint/suspicious/noExplicitAny: Function evaluates Python literals which can be any type
 function evaluateLiteral(node: ExprNode): any {
 	switch (node.nodeType) {
@@ -3744,6 +4329,15 @@ function evaluateLiteral(node: ExprNode): any {
 	throw new Error(`Cannot evaluate ${node.nodeType} in literal context`);
 }
 
+/**
+ * Copies source-location fields (`lineno`, `col_offset`, `end_lineno`,
+ * `end_col_offset`) from `oldNode` onto `newNode`, mirroring CPython's
+ * `ast.copy_location`. Useful when synthesizing or replacing AST nodes
+ * that must retain their original position for error reporting.
+ * @param newNode The node to receive the location.
+ * @param oldNode The node to copy the location from.
+ * @returns `newNode`, mutated in place.
+ */
 export function copyLocation(newNode: ASTNode, oldNode: ASTNode): ASTNode {
 	newNode.lineno = oldNode.lineno;
 	newNode.col_offset = oldNode.col_offset;
@@ -3752,6 +4346,15 @@ export function copyLocation(newNode: ASTNode, oldNode: ASTNode): ASTNode {
 	return newNode;
 }
 
+/**
+ * Recursively fills in missing `lineno`/`col_offset`/`end_lineno`/
+ * `end_col_offset` fields on `node` and all its descendants by inheriting
+ * them from the nearest ancestor that has them (or `(1, 0, 1, 0)` at the
+ * root), mirroring CPython's `ast.fix_missing_locations`. Useful after
+ * hand-constructing or transforming AST nodes that lack location info.
+ * @param node The AST node (typically a `Module`) to fix in place.
+ * @returns `node`, mutated in place.
+ */
 export function fixMissingLocations(node: ASTNode): ASTNode {
 	function fix(
 		// biome-ignore lint/suspicious/noExplicitAny: Supposed to be any
@@ -3805,6 +4408,15 @@ export function fixMissingLocations(node: ASTNode): ASTNode {
 	return node;
 }
 
+/**
+ * Recursively increments the `lineno` and `end_lineno` of `node` and all
+ * its descendants by `n`, mirroring CPython's `ast.increment_lineno`.
+ * Useful when splicing a parsed AST fragment into a larger source file at
+ * a known line offset.
+ * @param node The AST node (typically a `Module`) to adjust in place.
+ * @param n Number of lines to add to every line number (default `1`).
+ * @returns `node`, mutated in place.
+ */
 export function incrementLineno(node: ASTNode, n: number = 1): ASTNode {
 	// biome-ignore lint/suspicious/noExplicitAny: Function needs to traverse any AST node structure
 	function increment(node: any): void {

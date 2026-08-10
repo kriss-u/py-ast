@@ -14,6 +14,7 @@
 			"*.json",
 			"*.ts",
 			"*.js",
+			".claude/**/*.json",
 			"!dist",
 			"!scripts",
 			"demo/**/*.mjs"
