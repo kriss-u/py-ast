@@ -1,3 +1,10 @@
+## [1.9.2](https://github.com/kriss-u/py-ast/compare/v1.9.1...v1.9.2) (2026-08-10)
+
+
+### Bug Fixes
+
+* exclude package-lock.json from biome format in lint-staged ([e533c11](https://github.com/kriss-u/py-ast/commit/e533c112e28c3231d2b121a117785a606ef7e3ac))
+
 ## [1.9.1](https://github.com/kriss-u/py-ast/compare/v1.9.0...v1.9.1) (2026-08-10)
 
 
