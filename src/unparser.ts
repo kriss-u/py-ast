@@ -294,6 +294,7 @@ class Unparser extends NodeVisitor {
 			case "YieldFrom":
 				return Precedence.YIELD;
 			case "IfExp":
+			case "NamedExpr":
 				return Precedence.TEST;
 			case "BoolOp":
 				return node.op.nodeType === "Or" ? Precedence.OR : Precedence.AND;
@@ -1629,7 +1630,9 @@ class Unparser extends NodeVisitor {
 		}
 
 		if (node.kwonlyargs.length > 0) {
-			if (!node.vararg && all_args.length > 0) this.write(", *");
+			if (!node.vararg) {
+				this.write(all_args.length > 0 ? ", *" : "*");
+			}
 			for (let i = 0; i < node.kwonlyargs.length; i++) {
 				this.write(", ");
 				this.visit(node.kwonlyargs[i]);
