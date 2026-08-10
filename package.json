@@ -86,6 +86,6 @@
 	},
 	"lint-staged": {
 		"src/**/*.ts": "biome check --write",
-		"*.json": "biome format --write"
+		"!(package-lock).json": "biome format --write"
 	}
 }
