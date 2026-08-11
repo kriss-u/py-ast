@@ -184,6 +184,7 @@ class Point:
 first, *middle, last = [1, 2, 3, 4, 5]
 a, (b, c), *d = (1, (2, 3), 4, 5)
 combined = [*range(3), *range(3, 6)]
+merged = {**{"a": 1}, "b": 2, **{"c": 3}}  # dict unpacking
 
 name = "world"
 greeting = f"hello, {name!r:>{10}}"  # nested format spec with conversion

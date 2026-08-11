@@ -864,7 +864,7 @@ describe("Unparser Edge Cases", () => {
 	});
 
 	describe("Dict unpacking entries constructed directly", () => {
-		test("a null key renders a '**value' unpacking entry (parser has no surface syntax for this)", () => {
+		test("a null key renders a '**value' unpacking entry", () => {
 			const node: Dict = {
 				nodeType: "Dict",
 				keys: [
@@ -895,6 +895,10 @@ describe("Unparser Edge Cases", () => {
 				col_offset: 0,
 			};
 			expect(unparse(node)).toBe('{"a": 1, **rest}');
+		});
+
+		test("parsing and unparsing a dict literal with ** unpacking round-trips", () => {
+			testUnparse("{**a, 'b': 1, **c}", "{**a, 'b': 1, **c}");
 		});
 	});
 

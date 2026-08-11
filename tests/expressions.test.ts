@@ -146,6 +146,48 @@ describe("Collections", () => {
 		expect(expr.values).toHaveLength(2);
 	});
 
+	test("dict literals with ** unpacking", () => {
+		const expr = parseExpression("{**a, **b, 1: 2, **c}");
+		assertNodeType(expr, "Dict");
+		expect(expr.keys).toEqual([null, null, expect.objectContaining({ nodeType: "Constant" }), null]);
+		expect(expr.values).toHaveLength(4);
+		expect(expr.values[0]).toMatchObject({ nodeType: "Name", id: "a" });
+		expect(expr.values[1]).toMatchObject({ nodeType: "Name", id: "b" });
+		expect(expr.values[3]).toMatchObject({ nodeType: "Name", id: "c" });
+	});
+
+	test("dict literal with ** unpacking after a key:value entry", () => {
+		const expr = parseExpression("{1: 2, **a}");
+		assertNodeType(expr, "Dict");
+		expect(expr.keys).toEqual([expect.objectContaining({ nodeType: "Constant" }), null]);
+		expect(expr.values[1]).toMatchObject({ nodeType: "Name", id: "a" });
+	});
+
+	test("dict literal with only ** unpacking", () => {
+		const expr = parseExpression("{**a}");
+		assertNodeType(expr, "Dict");
+		expect(expr.keys).toEqual([null]);
+		expect(expr.values).toHaveLength(1);
+		expect(expr.values[0]).toMatchObject({ nodeType: "Name", id: "a" });
+	});
+
+	test("dict literal with parenthesized ternary after **", () => {
+		const expr = parseExpression("{**(a if b else c)}");
+		assertNodeType(expr, "Dict");
+		expect(expr.keys).toEqual([null]);
+		expect(expr.values[0].nodeType).toBe("IfExp");
+	});
+
+	test("dict literal rejects unparenthesized ternary after ** (matches CPython bitor precedence)", () => {
+		expect(() => parseExpression("{**a if b else c}")).toThrow();
+	});
+
+	test("dict literal with trailing comma after ** unpacking", () => {
+		const expr = parseExpression("{**a,}");
+		assertNodeType(expr, "Dict");
+		expect(expr.keys).toEqual([null]);
+	});
+
 	test("empty collections", () => {
 		const emptyList = parseExpression("[]");
 		assertNodeType(emptyList, "List");

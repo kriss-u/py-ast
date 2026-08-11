@@ -2948,6 +2948,39 @@ export class Parser {
 			};
 		}
 
+		if (this.match(TokenType.DOUBLESTAR)) {
+			// Dictionary starting with a `**expr` unpacking. Per CPython's
+			// grammar, the unpacked expression binds at `bitor` precedence
+			// (no ternary/lambda/comparison), unlike a `key: value` entry's
+			// value, which allows the full `expression` (test) grammar.
+			const firstValue = this.parseOrExpr();
+
+			const keys: (ExprNode | null)[] = [null];
+			const values = [firstValue];
+
+			while (this.match(TokenType.COMMA)) {
+				if (this.check(TokenType.RBRACE)) break; // Handle trailing comma
+				if (this.match(TokenType.DOUBLESTAR)) {
+					keys.push(null);
+					values.push(this.parseOrExpr());
+				} else {
+					keys.push(this.parseTest());
+					this.consume(TokenType.COLON, "Expected ':' in dictionary");
+					values.push(this.parseTest());
+				}
+			}
+
+			this.consume(TokenType.RBRACE, "Expected '}' after dictionary");
+
+			return {
+				nodeType: "Dict",
+				keys,
+				values,
+				lineno: start.lineno,
+				col_offset: start.col_offset,
+			};
+		}
+
 		const first = this.parseTest();
 
 		if (this.match(TokenType.COLON)) {
@@ -2970,14 +3003,19 @@ export class Parser {
 			}
 
 			// Regular dictionary
-			const keys = [first];
+			const keys: (ExprNode | null)[] = [first];
 			const values = [firstValue];
 
 			while (this.match(TokenType.COMMA)) {
 				if (this.check(TokenType.RBRACE)) break; // Handle trailing comma
-				keys.push(this.parseTest());
-				this.consume(TokenType.COLON, "Expected ':' in dictionary");
-				values.push(this.parseTest());
+				if (this.match(TokenType.DOUBLESTAR)) {
+					keys.push(null);
+					values.push(this.parseOrExpr());
+				} else {
+					keys.push(this.parseTest());
+					this.consume(TokenType.COLON, "Expected ':' in dictionary");
+					values.push(this.parseTest());
+				}
 			}
 
 			this.consume(TokenType.RBRACE, "Expected '}' after dictionary");

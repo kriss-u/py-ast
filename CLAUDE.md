@@ -60,6 +60,16 @@ for the grammar it's derived from). Source lives in `src/`; build output goes to
    a bug — fix the root cause, don't retry or skip it, don't mark it as skipped/todo to make CI
    green.
 
+9. **Verify parser/unparser behavior against CPython, not intuition.** When implementing or
+   fixing grammar (new syntax, precedence, edge cases), check actual CPython behavior — e.g.
+   `python3 -c "import ast; print(ast.dump(ast.parse(...)))"` — rather than guessing. This
+   includes precedence subtleties that aren't obvious from a quick reading of the grammar
+   (e.g. `**expr` in a dict display binds at `bitor` precedence, so `{**a if b else c}` is a
+   syntax error in CPython even though `{**(a if b else c)}` is fine — the same `**` in a call's
+   keyword arguments binds at full `expression`/`test` precedence instead, so the two aren't
+   interchangeable). Match CPython's emitted AST shape exactly (field names, `null` vs
+   omitted, node types) since the public surface mirrors `ast`.
+
 ## Before considering a task done
 
 - `npm run lint` passes
