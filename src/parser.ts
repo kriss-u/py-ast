@@ -1218,10 +1218,72 @@ export class Parser {
 	 * @throws {ParseError} On malformed statement syntax.
 	 */
 	private parseWithStmt(start: Token): StmtNode {
+		const items = this.parseWithItems();
+
+		this.consume(TokenType.COLON, "Expected ':' after with clause");
+		const body = this.parseSuite();
+
+		return {
+			nodeType: "With",
+			items,
+			body,
+			lineno: start.lineno,
+			col_offset: start.col_offset,
+		};
+	}
+
+	/**
+	 * Parses the with-item list of a `with` statement, including CPython's
+	 * PEP 617 parenthesized form (`with (a as x, b as y):`). Because a
+	 * leading `(` is ambiguous with a plain parenthesized/tuple
+	 * context-manager expression (e.g. `with (a, b) as x:`), this
+	 * speculatively parses `'(' with_item (',' with_item)* ','? ')'`
+	 * and only commits to it if it is immediately followed by `:` —
+	 * otherwise it backtracks and parses a single, possibly parenthesized,
+	 * expression per item instead, matching CPython's PEG grammar.
+	 * @returns The parsed list of `WithItem` nodes.
+	 */
+	private parseWithItems(): WithItem[] {
+		if (this.check(TokenType.LPAR)) {
+			const savedPos = this.current;
+			const savedComments = this.pendingComments.length;
+
+			try {
+				this.advance(); // consume '('
+				const items = this.parseWithItemList(true);
+
+				if (this.check(TokenType.RPAR)) {
+					this.advance(); // consume ')'
+					if (this.check(TokenType.COLON)) {
+						return items;
+					}
+				}
+			} catch {
+				// Not a parenthesized with-item list (e.g. `with (x for x in y):`,
+				// where the outer parens belong to a single expression) — fall
+				// through to backtrack and reparse as a plain expression below.
+			}
+
+			this.current = savedPos;
+			this.pendingComments.length = savedComments;
+		}
+
+		return this.parseWithItemList(false);
+	}
+
+	/**
+	 * Parses a comma-separated list of with-items (`expr ['as' target]`).
+	 * @param allowTrailingComma When `true`, a trailing comma may be
+	 *   followed directly by the closing `)` of a parenthesized with-item
+	 *   list, per PEP 617.
+	 * @returns The parsed list of `WithItem` nodes.
+	 */
+	private parseWithItemList(allowTrailingComma: boolean): WithItem[] {
 		const items: WithItem[] = [];
 
-		// Parse with items
 		do {
+			if (allowTrailingComma && this.check(TokenType.RPAR)) break;
+
 			const context_expr = this.parseTest();
 			let optional_vars: ExprNode | undefined;
 
@@ -1238,16 +1300,7 @@ export class Parser {
 			});
 		} while (this.match(TokenType.COMMA));
 
-		this.consume(TokenType.COLON, "Expected ':' after with clause");
-		const body = this.parseSuite();
-
-		return {
-			nodeType: "With",
-			items,
-			body,
-			lineno: start.lineno,
-			col_offset: start.col_offset,
-		};
+		return items;
 	}
 
 	/**

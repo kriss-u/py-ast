@@ -149,7 +149,12 @@ describe("Collections", () => {
 	test("dict literals with ** unpacking", () => {
 		const expr = parseExpression("{**a, **b, 1: 2, **c}");
 		assertNodeType(expr, "Dict");
-		expect(expr.keys).toEqual([null, null, expect.objectContaining({ nodeType: "Constant" }), null]);
+		expect(expr.keys).toEqual([
+			null,
+			null,
+			expect.objectContaining({ nodeType: "Constant" }),
+			null,
+		]);
 		expect(expr.values).toHaveLength(4);
 		expect(expr.values[0]).toMatchObject({ nodeType: "Name", id: "a" });
 		expect(expr.values[1]).toMatchObject({ nodeType: "Name", id: "b" });
@@ -159,7 +164,10 @@ describe("Collections", () => {
 	test("dict literal with ** unpacking after a key:value entry", () => {
 		const expr = parseExpression("{1: 2, **a}");
 		assertNodeType(expr, "Dict");
-		expect(expr.keys).toEqual([expect.objectContaining({ nodeType: "Constant" }), null]);
+		expect(expr.keys).toEqual([
+			expect.objectContaining({ nodeType: "Constant" }),
+			null,
+		]);
 		expect(expr.values[1]).toMatchObject({ nodeType: "Name", id: "a" });
 	});
 
