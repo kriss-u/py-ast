@@ -124,81 +124,46 @@ export class Parser {
 				continue;
 			}
 
-			// Handle comments that were collected during token peeking
+			// Comments collected during token peeking (via peek()) that precede
+			// the next statement are always standalone here: an inline comment
+			// (sharing a line with the previous statement) is always swept up
+			// and drained by the previous iteration's post-statement handling
+			// below before this point is reached.
 			if (this.includeComments && this.pendingComments.length > 0) {
-				for (const comment of this.pendingComments) {
-					// If this is an inline comment and we have a previous statement, attach it
-					if (comment.inline && body.length > 0) {
-						const lastStmt = body[body.length - 1];
-						// Add the comment as metadata to the last statement
-						if (!lastStmt.inlineComment) {
-							lastStmt.inlineComment = comment;
-						}
-					} else {
-						// For standalone comments, add as separate statement
-						body.push(comment);
-					}
-				}
-				// Clear pending comments after processing
+				body.push(...this.pendingComments);
 				this.pendingComments = [];
-			}
-
-			// Parse comments as proper statement nodes when includeComments is enabled
-			if (this.includeComments && this.check(TokenType.COMMENT)) {
-				const comment = this.parseCommentStatement();
-
-				// If this is an inline comment and we have a previous statement, attach it
-				if (comment.inline && body.length > 0) {
-					const lastStmt = body[body.length - 1];
-					// Add the comment as metadata to the last statement
-					if (!lastStmt.inlineComment) {
-						lastStmt.inlineComment = comment;
-					}
-				} else {
-					// For standalone comments, add as separate statement
-					body.push(comment);
-				}
-				continue;
 			}
 
 			const stmt = this.parseStatement();
 			if (stmt) {
 				body.push(stmt);
 
-				// Process any comments that were collected during statement parsing
+				// Comments collected while parsing `stmt` are usually inline
+				// with it, but a standalone comment can also surface here:
+				// one trailing the last statement of a just-closed nested
+				// suite is buffered (via peek()) by that suite's own DEDENT
+				// check, which then exits its loop without draining it, so
+				// it bubbles up to the statement that opened that suite.
 				if (this.includeComments && this.pendingComments.length > 0) {
 					for (const comment of this.pendingComments) {
 						if (comment.inline) {
-							// Attach inline comment to the statement we just parsed
 							if (!stmt.inlineComment) {
 								stmt.inlineComment = comment;
 							}
 						} else {
-							// Add standalone comment as separate statement
 							body.push(comment);
 						}
 					}
-					// Clear pending comments after processing
 					this.pendingComments = [];
 				}
 			}
 		}
 
 		// Handle any remaining pending comments after the main parsing loop
+		// (e.g. a trailing standalone comment at end of file); see the note
+		// above on why these are always standalone.
 		if (this.includeComments && this.pendingComments.length > 0) {
-			for (const comment of this.pendingComments) {
-				if (comment.inline && body.length > 0) {
-					// Attach inline comment to the last statement
-					const lastStmt = body[body.length - 1];
-					if (!lastStmt.inlineComment) {
-						lastStmt.inlineComment = comment;
-					}
-				} else {
-					// Add standalone comment as separate statement
-					body.push(comment);
-				}
-			}
-			// Clear pending comments after processing
+			body.push(...this.pendingComments);
 			this.pendingComments = [];
 		}
 
@@ -215,29 +180,6 @@ export class Parser {
 		}
 
 		return result;
-	}
-
-	/**
-	 * Consumes a `COMMENT` token and builds a {@link Comment} node, marking it
-	 * `inline` when it shares a line with the previously consumed non-comment token.
-	 * @returns The parsed `Comment` node.
-	 * @throws {ParseError} If the current token is not a comment.
-	 */
-	private parseCommentStatement(): Comment {
-		const token = this.consume(TokenType.COMMENT, "Expected comment");
-
-		// Check if this is an inline comment (on the same line as previous content)
-		const isInline = token.lineno === this.lastNonCommentTokenLine;
-
-		return {
-			nodeType: "Comment",
-			value: token.value,
-			lineno: token.lineno,
-			col_offset: token.col_offset,
-			end_lineno: token.end_lineno,
-			end_col_offset: token.end_col_offset,
-			inline: isInline,
-		};
 	}
 
 	/**
@@ -307,19 +249,15 @@ export class Parser {
 				break;
 			case "Try":
 				this.collectFromBody(stmt.body, comments);
-				if (stmt.handlers) {
-					for (const handler of stmt.handlers) {
-						this.collectFromBody(handler.body, comments);
-					}
+				for (const handler of stmt.handlers) {
+					this.collectFromBody(handler.body, comments);
 				}
 				this.collectFromBody(stmt.orelse, comments);
 				this.collectFromBody(stmt.finalbody, comments);
 				break;
 			case "Match":
-				if (stmt.cases) {
-					for (const case_ of stmt.cases) {
-						this.collectFromBody(case_.body, comments);
-					}
+				for (const case_ of stmt.cases) {
+					this.collectFromBody(case_.body, comments);
 				}
 				break;
 		}
@@ -347,7 +285,7 @@ export class Parser {
 	/**
 	 * Parses a single statement, dispatching to decorated/simple/compound
 	 * statement parsing as appropriate.
-	 * @returns The parsed statement, or `null` at a `DEDENT` (end of a block).
+	 * @returns The parsed statement.
 	 * @throws {ParseError} On an unexpected `INDENT` or other syntax error.
 	 */
 	private parseStatement(): StmtNode | null {
@@ -355,10 +293,6 @@ export class Parser {
 		if (this.check(TokenType.INDENT)) {
 			// INDENT tokens should only appear after compound statements
 			throw this.error("unexpected indent");
-		}
-
-		if (this.match(TokenType.DEDENT)) {
-			return null;
 		}
 
 		// Check for decorators first
@@ -658,7 +592,6 @@ export class Parser {
 				!this.check(TokenType.NEWLINE) &&
 				!this.check(TokenType.SEMI) &&
 				!this.check(TokenType.DEDENT) &&
-				!this.check(TokenType.COMMENT) &&
 				!this.isAtEnd()
 			) {
 				exc = this.parseTest();
@@ -826,17 +759,14 @@ export class Parser {
 
 	/**
 	 * Parses a `compound_stmt`: if/while/for/try/with/def/class/async/match.
-	 * @returns The parsed statement, or `null` if the current token doesn't
-	 * start any known compound statement.
+	 * Only called (via {@link parseStatement}) when {@link parseSmallStmt}
+	 * has already confirmed the current token starts one of these, so every
+	 * branch below is guaranteed to be taken.
+	 * @returns The parsed statement.
 	 * @throws {ParseError} On malformed statement syntax.
 	 */
-	private parseCompoundStmt(): StmtNode | null {
+	private parseCompoundStmt(): StmtNode {
 		const start = this.peek();
-
-		// Handle decorators
-		if (this.check(TokenType.AT)) {
-			return this.parseDecorated();
-		}
 
 		if (this.match(TokenType.IF)) {
 			return this.parseIfStmt(start);
@@ -854,11 +784,10 @@ export class Parser {
 			return this.parseClassDef(start);
 		} else if (this.match(TokenType.ASYNC)) {
 			return this.parseAsyncStmt(start);
-		} else if (this.match(TokenType.MATCH)) {
-			return this.parseMatchStmt(start);
 		}
 
-		return null;
+		this.consume(TokenType.MATCH, "Expected compound statement");
+		return this.parseMatchStmt(start);
 	}
 
 	/**
@@ -1358,10 +1287,10 @@ export class Parser {
 		// Match statements must always be multi-line with proper indentation
 		this.consume(TokenType.NEWLINE, "Expected newline after match:");
 
-		// Skip comment tokens and newlines that might appear before the indent
-		// (These comments belong to the match statement level, not the case level)
-		while (this.check(TokenType.COMMENT) || this.check(TokenType.NEWLINE)) {
-			this.advance();
+		// Skip newlines that might appear before the indent (these belong to
+		// the match statement level, not the case level)
+		while (this.match(TokenType.NEWLINE)) {
+			// Skip
 		}
 
 		this.consume(TokenType.INDENT, "Expected indented block");
@@ -1371,14 +1300,6 @@ export class Parser {
 		while (!this.check(TokenType.DEDENT) && !this.isAtEnd()) {
 			if (this.match(TokenType.NEWLINE)) {
 				continue;
-			}
-
-			// When includeComments is true, comments will be parsed as statements in parseSuite
-			// For now, skip comments at the case level (this could be enhanced later)
-			if (!this.includeComments) {
-				while (this.check(TokenType.COMMENT)) {
-					this.advance();
-				}
 			}
 
 			if (this.match(TokenType.CASE)) {
@@ -1637,24 +1558,16 @@ export class Parser {
 			// biome-ignore lint/suspicious/noExplicitAny: Value can be string, number, boolean, or null
 			let value: any;
 
-			switch (token.type) {
-				case TokenType.NUMBER:
-					value = this.parseNumber(token.value);
-					break;
-				case TokenType.STRING:
-					value = this.parseString(token.value);
-					break;
-				case TokenType.TRUE:
-					value = true;
-					break;
-				case TokenType.FALSE:
-					value = false;
-					break;
-				case TokenType.NONE:
-					value = null;
-					break;
-				default:
-					value = token.value;
+			if (token.type === TokenType.NUMBER) {
+				value = this.parseNumber(token.value);
+			} else if (token.type === TokenType.STRING) {
+				value = this.parseString(token.value);
+			} else if (token.type === TokenType.TRUE) {
+				value = true;
+			} else if (token.type === TokenType.FALSE) {
+				value = false;
+			} else {
+				value = null;
 			}
 
 			return {
@@ -1725,7 +1638,7 @@ export class Parser {
 				nodeType: "Tuple",
 				elts,
 				ctx: this.createLoad(),
-				lineno: expr.lineno || 1,
+				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
 			};
 		}
@@ -1752,7 +1665,7 @@ export class Parser {
 				test,
 				body: expr,
 				orelse,
-				lineno: expr.lineno || 1,
+				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
 			};
 		}
@@ -1841,7 +1754,7 @@ export class Parser {
 				nodeType: "BoolOp",
 				op: { nodeType: "Or" },
 				values,
-				lineno: expr.lineno || 1,
+				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
 			};
 		}
@@ -1866,7 +1779,7 @@ export class Parser {
 				nodeType: "NamedExpr",
 				target: expr,
 				value,
-				lineno: expr.lineno || 1,
+				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
 			};
 		}
@@ -1882,7 +1795,7 @@ export class Parser {
 				nodeType: "BoolOp",
 				op: { nodeType: "And" },
 				values,
-				lineno: expr.lineno || 1,
+				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
 			};
 		}
@@ -1937,7 +1850,7 @@ export class Parser {
 				left: expr,
 				ops,
 				comparators,
-				lineno: expr.lineno || 1,
+				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
 			};
 		}
@@ -1971,7 +1884,7 @@ export class Parser {
 				left: expr,
 				op,
 				right,
-				lineno: expr.lineno || 1,
+				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
 			};
 		}
@@ -1996,7 +1909,7 @@ export class Parser {
 				left: expr,
 				op,
 				right,
-				lineno: expr.lineno || 1,
+				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
 			};
 		}
@@ -2021,7 +1934,7 @@ export class Parser {
 				left: expr,
 				op,
 				right,
-				lineno: expr.lineno || 1,
+				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
 			};
 		}
@@ -2050,7 +1963,7 @@ export class Parser {
 				left: expr,
 				op,
 				right,
-				lineno: expr.lineno || 1,
+				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
 			};
 		}
@@ -2079,7 +1992,7 @@ export class Parser {
 				left: expr,
 				op,
 				right,
-				lineno: expr.lineno || 1,
+				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
 			};
 		}
@@ -2091,8 +2004,7 @@ export class Parser {
 	 * Parses a chain of `factor`s joined by `*`, `@`, `/`, `//`, or `%`,
 	 * left-associative.
 	 * @returns The parsed expression, or a `BinOp` chain over these operators.
-	 * @throws {ParseError} On malformed expression syntax, or an unreachable
-	 * operator mismatch.
+	 * @throws {ParseError} On malformed expression syntax.
 	 */
 	private parseTerm(): ExprNode {
 		let expr = this.parseFactor();
@@ -2109,24 +2021,16 @@ export class Parser {
 			const opToken = this.previous();
 			let op: OperatorNode;
 
-			switch (opToken.type) {
-				case TokenType.STAR:
-					op = { nodeType: "Mult" };
-					break;
-				case TokenType.AT:
-					op = { nodeType: "MatMult" };
-					break;
-				case TokenType.SLASH:
-					op = { nodeType: "Div" };
-					break;
-				case TokenType.DOUBLESLASH:
-					op = { nodeType: "FloorDiv" };
-					break;
-				case TokenType.PERCENT:
-					op = { nodeType: "Mod" };
-					break;
-				default:
-					throw this.error("Unexpected operator");
+			if (opToken.type === TokenType.STAR) {
+				op = { nodeType: "Mult" };
+			} else if (opToken.type === TokenType.AT) {
+				op = { nodeType: "MatMult" };
+			} else if (opToken.type === TokenType.SLASH) {
+				op = { nodeType: "Div" };
+			} else if (opToken.type === TokenType.DOUBLESLASH) {
+				op = { nodeType: "FloorDiv" };
+			} else {
+				op = { nodeType: "Mod" };
 			}
 
 			const right = this.parseFactor();
@@ -2136,7 +2040,7 @@ export class Parser {
 				left: expr,
 				op,
 				right,
-				lineno: expr.lineno || 1,
+				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
 			};
 		}
@@ -2148,8 +2052,7 @@ export class Parser {
 	 * Parses a `factor`: an `await` expression, a unary `+`/`-`/`~` applied
 	 * (right-recursively) to another factor, or a power expression.
 	 * @returns The parsed expression.
-	 * @throws {ParseError} On malformed expression syntax, or an unreachable
-	 * operator mismatch.
+	 * @throws {ParseError} On malformed expression syntax.
 	 */
 	private parseFactor(): ExprNode {
 		// Handle await expressions at factor level (unary)
@@ -2168,18 +2071,12 @@ export class Parser {
 			const start = this.previous();
 			let op: UnaryOpNode;
 
-			switch (start.type) {
-				case TokenType.PLUS:
-					op = { nodeType: "UAdd" };
-					break;
-				case TokenType.MINUS:
-					op = { nodeType: "USub" };
-					break;
-				case TokenType.TILDE:
-					op = { nodeType: "Invert" };
-					break;
-				default:
-					throw this.error("Unexpected unary operator");
+			if (start.type === TokenType.PLUS) {
+				op = { nodeType: "UAdd" };
+			} else if (start.type === TokenType.MINUS) {
+				op = { nodeType: "USub" };
+			} else {
+				op = { nodeType: "Invert" };
 			}
 
 			const operand = this.parseFactor();
@@ -2214,7 +2111,7 @@ export class Parser {
 				left: expr,
 				op,
 				right,
-				lineno: expr.lineno || 1,
+				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
 			};
 		}
@@ -2243,7 +2140,7 @@ export class Parser {
 					value: expr,
 					attr,
 					ctx: this.createLoad(),
-					lineno: expr.lineno || 1,
+					lineno: expr.lineno,
 					col_offset: expr.col_offset || 0,
 				};
 			} else if (this.match(TokenType.LSQB)) {
@@ -2254,7 +2151,7 @@ export class Parser {
 					value: expr,
 					slice,
 					ctx: this.createLoad(),
-					lineno: expr.lineno || 1,
+					lineno: expr.lineno,
 					col_offset: expr.col_offset || 0,
 				};
 			} else if (this.match(TokenType.LPAR)) {
@@ -2311,7 +2208,7 @@ export class Parser {
 					func: expr,
 					args,
 					keywords,
-					lineno: expr.lineno || 1,
+					lineno: expr.lineno,
 					col_offset: expr.col_offset || 0,
 				};
 			} else {
@@ -2591,118 +2488,55 @@ export class Parser {
 	 * @throws {ParseError} If the block is not properly indented/dedented.
 	 */
 	private parseSuite(): StmtNode[] {
-		// Handle comments that appear immediately after colon but before newline
-		const postColonComments: Comment[] = [];
-		if (this.includeComments) {
-			while (this.check(TokenType.COMMENT)) {
-				const comment = this.parseCommentStatement();
-				postColonComments.push(comment);
-			}
-		}
-
 		if (this.match(TokenType.NEWLINE)) {
 			// Skip any additional newlines before the indent
 			while (this.match(TokenType.NEWLINE)) {
 				// Continue skipping newlines
 			}
 
-			// Skip any newlines before INDENT
-			while (this.check(TokenType.NEWLINE)) {
-				this.advance();
-			}
-
-			// When includeComments is enabled, collect any comments before INDENT
-			const preIndentComments: Comment[] = [];
-			if (this.includeComments) {
-				while (this.check(TokenType.COMMENT)) {
-					const comment = this.parseCommentStatement();
-					preIndentComments.push(comment);
-					// Skip newlines after comments
-					while (this.check(TokenType.NEWLINE)) {
-						this.advance();
-					}
-				}
-			} // Require proper indentation - must have INDENT token for block structure
 			if (!this.match(TokenType.INDENT)) {
 				throw this.error("Expected indented block");
 			}
 
 			const stmts: StmtNode[] = [];
 
-			// Add post-colon comments first
-			stmts.push(...postColonComments);
-			// Then add pre-indent comments
-			stmts.push(...preIndentComments);
-
 			while (!this.check(TokenType.DEDENT) && !this.isAtEnd()) {
 				if (this.match(TokenType.NEWLINE)) {
 					continue;
 				}
 
-				// Handle comments that were collected during token peeking
+				// See the note in parseFileInput: comments collected here via
+				// peek() are always standalone, since an inline comment is
+				// always drained by the post-statement handling below first.
 				if (this.includeComments && this.pendingComments.length > 0) {
-					for (const comment of this.pendingComments) {
-						// If this is an inline comment and we have a previous statement, attach it
-						if (comment.inline && stmts.length > 0) {
-							const lastStmt = stmts[stmts.length - 1];
-							// Add the comment as metadata to the last statement
-							if (!lastStmt.inlineComment) {
-								lastStmt.inlineComment = comment;
-							}
-						} else {
-							// For standalone comments, add as separate statement
-							stmts.push(comment);
-						}
-					}
-					// Clear pending comments after processing
+					stmts.push(...this.pendingComments);
 					this.pendingComments = [];
-				}
-
-				// Parse comments as statement nodes when includeComments is enabled (fallback for direct comment tokens)
-				if (this.includeComments && this.check(TokenType.COMMENT)) {
-					const comment = this.parseCommentStatement();
-
-					// If this is an inline comment and we have a previous statement, attach it
-					if (comment.inline && stmts.length > 0) {
-						const lastStmt = stmts[stmts.length - 1];
-						// Add the comment as metadata to the last statement
-						if (!lastStmt.inlineComment) {
-							lastStmt.inlineComment = comment;
-						}
-					} else {
-						// For standalone comments, add as separate statement
-						stmts.push(comment);
-					}
-					continue;
 				}
 
 				const stmt = this.parseStatement();
 				if (stmt) {
 					stmts.push(stmt);
 
-					// Process any comments that were collected during statement parsing
+					// Comments collected while parsing `stmt` are usually
+					// inline with it, but a standalone comment can also
+					// surface here, bubbled up from a just-closed nested
+					// suite; see the note in parseFileInput.
 					if (this.includeComments && this.pendingComments.length > 0) {
 						for (const comment of this.pendingComments) {
 							if (comment.inline) {
-								// Attach inline comment to the statement we just parsed
 								if (!stmt.inlineComment) {
 									stmt.inlineComment = comment;
 								}
 							} else {
-								// Add standalone comment as separate statement
 								stmts.push(comment);
 							}
 						}
-						// Clear pending comments after processing
 						this.pendingComments = [];
 					}
 				}
 			}
 
-			// Consume DEDENT
-			if (!this.match(TokenType.DEDENT)) {
-				throw this.error("Expected dedent to close block");
-			}
+			this.consume(TokenType.DEDENT, "Expected dedent to close block");
 
 			return stmts;
 		} else {
@@ -2732,16 +2566,6 @@ export class Parser {
 
 		if (!this.check(TokenType.RPAR)) {
 			do {
-				// Skip comments and newlines at the start of each parameter
-				while (this.check(TokenType.COMMENT) || this.check(TokenType.NEWLINE)) {
-					this.advance();
-				}
-
-				// Check for end of parameter list
-				if (this.check(TokenType.RPAR)) {
-					break;
-				}
-
 				if (this.match(TokenType.SLASH)) {
 					// Positional-only separator
 					// Move all current args to posonlyargs
@@ -2907,7 +2731,7 @@ export class Parser {
 				nodeType: "Tuple",
 				elts,
 				ctx: this.createStore(),
-				lineno: expr.lineno || 1,
+				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
 			};
 		}
@@ -2939,7 +2763,7 @@ export class Parser {
 				nodeType: "Tuple",
 				elts,
 				ctx: this.createLoad(),
-				lineno: first.lineno || 1,
+				lineno: first.lineno,
 				col_offset: first.col_offset || 0,
 			};
 		}
@@ -3009,7 +2833,7 @@ export class Parser {
 				lower: first,
 				upper,
 				step,
-				lineno: first.lineno || 1,
+				lineno: first.lineno,
 				col_offset: first.col_offset || 0,
 			};
 		}
@@ -3056,13 +2880,6 @@ export class Parser {
 		// Regular list
 		const elts = [first];
 		while (this.match(TokenType.COMMA)) {
-			// Skip comments after comma when includeComments is enabled
-			if (this.includeComments) {
-				while (this.check(TokenType.COMMENT)) {
-					this.advance();
-				}
-			}
-
 			if (this.check(TokenType.RSQB)) break;
 			elts.push(this.parseTestOrStarred());
 		}
@@ -3308,43 +3125,28 @@ export class Parser {
 
 	/**
 	 * Consumes the current augmented-assignment token and maps it to its
-	 * underlying binary operator node (e.g. `+=` -> `Add`).
+	 * underlying binary operator node (e.g. `+=` -> `Add`). Only called
+	 * (via {@link matchAugAssign}) once the current token is already
+	 * confirmed to be one of these, so every branch below is reachable.
 	 * @returns The corresponding `OperatorNode`.
-	 * @throws {ParseError} If the current token is not a valid augmented-assignment operator.
 	 */
 	private parseAugAssignOp(): OperatorNode {
 		const token = this.advance();
 
-		switch (token.type) {
-			case TokenType.PLUSEQUAL:
-				return { nodeType: "Add" };
-			case TokenType.MINEQUAL:
-				return { nodeType: "Sub" };
-			case TokenType.STAREQUAL:
-				return { nodeType: "Mult" };
-			case TokenType.SLASHEQUAL:
-				return { nodeType: "Div" };
-			case TokenType.PERCENTEQUAL:
-				return { nodeType: "Mod" };
-			case TokenType.AMPEREQUAL:
-				return { nodeType: "BitAnd" };
-			case TokenType.VBAREQUAL:
-				return { nodeType: "BitOr" };
-			case TokenType.CIRCUMFLEXEQUAL:
-				return { nodeType: "BitXor" };
-			case TokenType.LEFTSHIFTEQUAL:
-				return { nodeType: "LShift" };
-			case TokenType.RIGHTSHIFTEQUAL:
-				return { nodeType: "RShift" };
-			case TokenType.DOUBLESTAREQUAL:
-				return { nodeType: "Pow" };
-			case TokenType.DOUBLESLASHEQUAL:
-				return { nodeType: "FloorDiv" };
-			case TokenType.ATEQUAL:
-				return { nodeType: "MatMult" };
-			default:
-				throw this.error("Invalid augmented assignment operator");
-		}
+		if (token.type === TokenType.PLUSEQUAL) return { nodeType: "Add" };
+		if (token.type === TokenType.MINEQUAL) return { nodeType: "Sub" };
+		if (token.type === TokenType.STAREQUAL) return { nodeType: "Mult" };
+		if (token.type === TokenType.SLASHEQUAL) return { nodeType: "Div" };
+		if (token.type === TokenType.PERCENTEQUAL) return { nodeType: "Mod" };
+		if (token.type === TokenType.AMPEREQUAL) return { nodeType: "BitAnd" };
+		if (token.type === TokenType.VBAREQUAL) return { nodeType: "BitOr" };
+		if (token.type === TokenType.CIRCUMFLEXEQUAL) return { nodeType: "BitXor" };
+		if (token.type === TokenType.LEFTSHIFTEQUAL) return { nodeType: "LShift" };
+		if (token.type === TokenType.RIGHTSHIFTEQUAL) return { nodeType: "RShift" };
+		if (token.type === TokenType.DOUBLESTAREQUAL) return { nodeType: "Pow" };
+		if (token.type === TokenType.DOUBLESLASHEQUAL)
+			return { nodeType: "FloorDiv" };
+		return { nodeType: "MatMult" };
 	}
 
 	/**
@@ -3363,16 +3165,16 @@ export class Parser {
 			this.check(TokenType.NOTEQUAL) ||
 			this.check(TokenType.IN) ||
 			this.check(TokenType.IS) ||
-			(this.check(TokenType.NOT) && this.checkNext(TokenType.IN)) ||
-			(this.check(TokenType.IS) && this.checkNext(TokenType.NOT))
+			(this.check(TokenType.NOT) && this.checkNext(TokenType.IN))
 		);
 	}
 
 	/**
 	 * Consumes one comparison operator (including the two-token `not in`
-	 * and `is not` forms) and returns its AST node.
+	 * and `is not` forms) and returns its AST node. Only called (via
+	 * {@link matchComparison}) once the current token is already confirmed
+	 * to start a comparison operator, so every branch below is reachable.
 	 * @returns The corresponding `CmpOpNode`.
-	 * @throws {ParseError} If the current token is not a valid comparison operator.
 	 */
 	private parseCompOp(): CmpOpNode {
 		if (this.match(TokenType.LESS)) return { nodeType: "Lt" };
@@ -3388,12 +3190,10 @@ export class Parser {
 			}
 			return { nodeType: "Is" };
 		}
-		if (this.match(TokenType.NOT)) {
-			this.consume(TokenType.IN, "Expected 'in' after 'not'");
-			return { nodeType: "NotIn" };
-		}
 
-		throw this.error("Expected comparison operator");
+		this.consume(TokenType.NOT, "Expected comparison operator");
+		this.consume(TokenType.IN, "Expected 'in' after 'not'");
+		return { nodeType: "NotIn" };
 	}
 
 	/**
@@ -3490,28 +3290,29 @@ export class Parser {
 	/**
 	 * Determines the original prefix + quote style (e.g. `f"`, `'''`) of a
 	 * raw string/f-string token, for round-tripping through the unparser.
+	 * The lexer only ever emits `STRING` tokens shaped as `<prefix><quote>
+	 * ...<quote>`, with the quote character immediately following the
+	 * prefix, so one of these cases always applies.
 	 * @param tokenValue The raw token text, including prefix and quotes.
-	 * @returns The prefix concatenated with its quote characters (defaults to `"` if undetected).
+	 * @returns The prefix concatenated with its quote characters.
 	 */
 	private getStringQuoteStyle(tokenValue: string): string {
-		// Extract any prefix (f, r, b, u, etc.)
-		const prefixMatch = tokenValue.match(/^([fFrRbBuU]*)/);
-		const prefix = prefixMatch ? prefixMatch[1] : "";
+		// Extract any prefix (f, r, b, u, etc.); the `*` quantifier means this
+		// regex always matches from position 0, so the capture group is
+		// always defined (possibly empty).
+		const [, prefix] = tokenValue.match(/^([fFrRbBuU]*)/) as [string, string];
 		const withoutPrefix = tokenValue.slice(prefix.length);
 
-		// Determine quote style
 		if (withoutPrefix.startsWith('"""')) {
 			return `${prefix}"""`;
-		} else if (withoutPrefix.startsWith("'''")) {
-			return `${prefix}'''`;
-		} else if (withoutPrefix.startsWith('"')) {
-			return `${prefix}"`;
-		} else if (withoutPrefix.startsWith("'")) {
-			return `${prefix}'`;
 		}
-
-		// Default fallback to double quotes
-		return `${prefix}"`;
+		if (withoutPrefix.startsWith("'''")) {
+			return `${prefix}'''`;
+		}
+		if (withoutPrefix.startsWith('"')) {
+			return `${prefix}"`;
+		}
+		return `${prefix}'`;
 	}
 
 	/**
@@ -3531,12 +3332,10 @@ export class Parser {
 		// Determine and store the original quote style
 		const quoteStyle = this.getStringQuoteStyle(token.value);
 
-		// Remove f-string prefix and quotes
-		if (content.toLowerCase().startsWith('f"')) {
-			content = content.slice(2, -1); // Remove f" and "
-		} else if (content.toLowerCase().startsWith("f'")) {
-			content = content.slice(2, -1); // Remove f' and '
-		}
+		// Remove f-string prefix and quotes. The sole caller only invokes
+		// parseFString when the token already starts with `f"` or `f'`
+		// (case-insensitively), so both cases strip the same way.
+		content = content.slice(2, -1);
 
 		const values: ExprNode[] = [];
 		let i = 0;
@@ -3546,15 +3345,12 @@ export class Parser {
 			if (content[i] === "{") {
 				// Add any literal content before this expression
 				if (i > literalStart) {
-					const literalValue = content.slice(literalStart, i);
-					if (literalValue) {
-						values.push({
-							nodeType: "Constant",
-							value: literalValue,
-							lineno: token.lineno,
-							col_offset: token.col_offset + literalStart + 2, // +2 for f" prefix
-						});
-					}
+					values.push({
+						nodeType: "Constant",
+						value: content.slice(literalStart, i),
+						lineno: token.lineno,
+						col_offset: token.col_offset + literalStart + 2, // +2 for f" prefix
+					});
 				}
 
 				// Parse the expression recursively
@@ -3571,15 +3367,12 @@ export class Parser {
 
 		// Add any remaining literal content
 		if (literalStart < content.length) {
-			const literalValue = content.slice(literalStart);
-			if (literalValue) {
-				values.push({
-					nodeType: "Constant",
-					value: literalValue,
-					lineno: token.lineno,
-					col_offset: token.col_offset + literalStart + 2,
-				});
-			}
+			values.push({
+				nodeType: "Constant",
+				value: content.slice(literalStart),
+				lineno: token.lineno,
+				col_offset: token.col_offset + literalStart + 2,
+			});
 		}
 
 		return {
@@ -3592,26 +3385,21 @@ export class Parser {
 	}
 
 	/**
-	 * Parse an expression within an f-string, handling nested contexts properly.
-	 * Returns the expression text and the position after the closing brace.
-	 */
-	/**
 	 * Extracts the raw text of a single `{expr}` segment from f-string
 	 * content, tracking brace nesting and skipping over any nested strings
 	 * or nested f-strings so their braces/quotes don't confuse the scan.
+	 * Only called with `startPos` pointing at a `{` (the caller checks
+	 * this first), and the lexer already validated overall brace balance
+	 * before producing the f-string token, so the braces here are always
+	 * balanced too.
 	 * @param content The f-string's unquoted content.
 	 * @param startPos Index into `content` of the opening `{`.
 	 * @returns The expression text (braces excluded) and the index just past the matching `}`.
-	 * @throws {Error} If `startPos` isn't a `{`, or the braces are unbalanced.
 	 */
 	private parseExpressionInFString(
 		content: string,
 		startPos: number,
 	): { exprText: string; nextPos: number } {
-		if (content[startPos] !== "{") {
-			throw new Error(`Expected '{' at position ${startPos}`);
-		}
-
 		let i = startPos + 1;
 		let braceLevel = 1;
 		let result = "";
@@ -3656,10 +3444,6 @@ export class Parser {
 			}
 
 			i++;
-		}
-
-		if (braceLevel !== 0) {
-			throw new Error(`Unmatched '{' in f-string at position ${startPos}`);
 		}
 
 		return { exprText: result, nextPos: i };
@@ -3882,7 +3666,6 @@ export class Parser {
 	 * @returns `true` if the next raw token matches `type`.
 	 */
 	private checkNext(type: TokenType): boolean {
-		if (this.current + 1 >= this.tokens.length) return false;
 		return this.tokens[this.current + 1].type === type;
 	}
 
@@ -3900,16 +3683,16 @@ export class Parser {
 	 * Returns the current token without consuming it. As a side effect,
 	 * any `COMMENT` tokens at the current position are skipped over and
 	 * buffered into {@link pendingComments} so callers never observe them
-	 * directly (comments are re-attached to statements elsewhere).
-	 * @returns The current non-comment token, or a synthetic `EOF` token past the end of input.
+	 * directly (comments are re-attached to statements elsewhere). The
+	 * lexer always terminates the token stream with a real `EOF` token, so
+	 * this comment-skipping loop always stops there and `this.current`
+	 * never runs past the end of {@link tokens}.
+	 * @returns The current non-comment token.
 	 */
 	private peek(): Token {
 		// Skip over comment tokens and collect them
 		let currentIndex = this.current;
-		while (
-			currentIndex < this.tokens.length &&
-			this.tokens[currentIndex].type === TokenType.COMMENT
-		) {
+		while (this.tokens[currentIndex].type === TokenType.COMMENT) {
 			// Create comment node directly without using parseCommentStatement to avoid recursion
 			const commentToken = this.tokens[currentIndex];
 			const comment: Comment = {
@@ -3925,41 +3708,15 @@ export class Parser {
 			this.current = currentIndex;
 		}
 
-		if (this.current >= this.tokens.length) {
-			// Return EOF token if we've gone past the end
-			return {
-				type: TokenType.EOF,
-				value: "",
-				lineno: this.tokens[this.tokens.length - 1]?.lineno || 1,
-				col_offset: this.tokens[this.tokens.length - 1]?.col_offset || 0,
-				end_lineno: this.tokens[this.tokens.length - 1]?.end_lineno || 1,
-				end_col_offset:
-					this.tokens[this.tokens.length - 1]?.end_col_offset || 0,
-			};
-		}
-
 		return this.tokens[this.current];
 	}
 
 	/**
 	 * Returns the raw token immediately after the current position, without
 	 * skipping comments and without consuming anything.
-	 * @returns The next raw token, or a synthetic `EOF` token past the end of input.
+	 * @returns The next raw token.
 	 */
 	private peekNext(): Token {
-		if (this.current + 1 >= this.tokens.length) {
-			// Return EOF token if we've gone past the end
-			return {
-				type: TokenType.EOF,
-				value: "",
-				lineno: this.tokens[this.tokens.length - 1]?.lineno || 1,
-				col_offset: this.tokens[this.tokens.length - 1]?.col_offset || 0,
-				end_lineno: this.tokens[this.tokens.length - 1]?.end_lineno || 1,
-				end_col_offset:
-					this.tokens[this.tokens.length - 1]?.end_col_offset || 0,
-			};
-		}
-
 		return this.tokens[this.current + 1];
 	}
 
@@ -3970,14 +3727,16 @@ export class Parser {
 	 * @returns The token that was just consumed.
 	 */
 	private advance(): Token {
-		if (!this.isAtEnd()) {
-			this.current++;
-		}
+		// Every call site checks/peeks the current token first, which is
+		// never EOF when advance() is reached, so the isAtEnd() guard other
+		// token-consuming helpers use isn't needed here.
+		this.current++;
 		const token = this.previous();
 
-		// Track the line number of non-comment, non-newline tokens
+		// Track the line number of non-comment, non-newline tokens. The
+		// lexer always sets end_lineno, so no fallback to lineno is needed.
 		if (token.type !== TokenType.COMMENT && token.type !== TokenType.NEWLINE) {
-			this.lastNonCommentTokenLine = token.end_lineno || token.lineno;
+			this.lastNonCommentTokenLine = token.end_lineno;
 		}
 
 		return token;
@@ -4112,7 +3871,7 @@ export class Parser {
 				nodeType: "Tuple",
 				elts,
 				ctx: this.createLoad(),
-				lineno: expr.lineno || 1,
+				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
 			};
 		}
@@ -4283,7 +4042,7 @@ export function literalEval(source: string): any {
  * @param node The expression node to evaluate.
  * @returns The evaluated JavaScript value.
  * @throws {Error} If `node` (or a nested key/value) isn't a supported
- * literal form, e.g. dict unpacking or an unrecognized node type.
+ * literal form, e.g. an unrecognized node type.
  */
 // biome-ignore lint/suspicious/noExplicitAny: Function evaluates Python literals which can be any type
 function evaluateLiteral(node: ExprNode): any {
@@ -4298,10 +4057,11 @@ function evaluateLiteral(node: ExprNode): any {
 			// biome-ignore lint/suspicious/noExplicitAny: Dictionary values can be any type
 			const result: Record<string, any> = {};
 			for (let i = 0; i < node.keys.length; i++) {
-				const key = node.keys[i];
-				if (key === null) {
-					throw new Error("Cannot evaluate dict unpacking in literal");
-				}
+				// `Dict.keys` allows `null` (for CPython AST shape parity with
+				// `**dict` unpacking), but this parser's dict-literal grammar
+				// never actually produces `**` entries, so a key here is
+				// always a real expression.
+				const key = node.keys[i] as ExprNode;
 				const keyValue = evaluateLiteral(key);
 				const value = evaluateLiteral(node.values[i]);
 				result[keyValue] = value;

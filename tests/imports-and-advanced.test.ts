@@ -1,3 +1,4 @@
+import { describe, expect, test } from "vitest";
 import { assertNodeType, parseStatement } from "./test-helpers.js";
 
 describe("Import Statements", () => {
@@ -131,7 +132,7 @@ describe("Match Statements (Python 3.10+)", () => {
 	});
 
 	test("match with comments between statement and cases (regression test)", () => {
-		// This tests the fix for indentation parsing errors when comments appear 
+		// This tests the fix for indentation parsing errors when comments appear
 		// between the match statement header and the case statements
 		const stmt = parseStatement(`match data:
     # This is a comment
@@ -180,10 +181,10 @@ async def complex_func(
     **kwargs: Dict[str, Any]
 ) -> AsyncIterator[str]:
     pass`);
-                assertNodeType(stmt, "AsyncFunctionDef");
-                expect(stmt.decorator_list).toHaveLength(2);
-                expect(stmt.returns?.nodeType).toBe("Subscript");
-        });
+		assertNodeType(stmt, "AsyncFunctionDef");
+		expect(stmt.decorator_list).toHaveLength(2);
+		expect(stmt.returns?.nodeType).toBe("Subscript");
+	});
 });
 
 describe("Import with Parentheses", () => {
@@ -197,7 +198,9 @@ describe("Import with Parentheses", () => {
 		});
 
 		test("multiple names in parentheses", () => {
-			const stmt = parseStatement(`from some.module import (function_one, function_two, function_three)`);
+			const stmt = parseStatement(
+				`from some.module import (function_one, function_two, function_three)`,
+			);
 			assertNodeType(stmt, "ImportFrom");
 			expect(stmt.module).toBe("some.module");
 			expect(stmt.names).toHaveLength(3);
@@ -235,7 +238,9 @@ describe("Import with Parentheses", () => {
 		});
 
 		test("imports with aliases in parentheses", () => {
-			const stmt = parseStatement(`from module import (name1 as alias1, name2 as alias2)`);
+			const stmt = parseStatement(
+				`from module import (name1 as alias1, name2 as alias2)`,
+			);
 			assertNodeType(stmt, "ImportFrom");
 			expect(stmt.names).toHaveLength(2);
 			expect(stmt.names[0].name).toBe("name1");

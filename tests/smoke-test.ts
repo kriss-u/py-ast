@@ -52,6 +52,7 @@ function runSmokeTest() {
 }
 
 // Run if this file is executed directly
+// @ts-ignore
 if (import.meta.url === `file://${process.argv[1]}`) {
 	runSmokeTest();
 }

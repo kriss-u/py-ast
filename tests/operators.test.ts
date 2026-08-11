@@ -1,3 +1,4 @@
+import { describe, expect, test } from "vitest";
 import { assertNodeType, parseExpression } from "./test-helpers.js";
 
 describe("Binary Operations", () => {

@@ -1,3 +1,4 @@
+import { describe, expect, test } from "vitest";
 import { assertNodeType, parseCode, parseExpression } from "./test-helpers.js";
 
 describe("Error Handling and Edge Cases", () => {

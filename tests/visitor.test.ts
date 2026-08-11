@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { parseCode } from "./test-helpers.js";
+import type {
+	ASTNodeUnion,
+	Assign,
+	Constant,
+	FunctionDef,
+	Global,
+	Module,
+	Name,
+	Pass,
+} from "../src/types.js";
 import { NodeTransformer, NodeVisitor, walk } from "../src/visitor.js";
-import type { ASTNodeUnion, Name } from "../src/types.js";
+import { parseCode } from "./test-helpers.js";
 
 describe("walk", () => {
 	it("yields the root node first", () => {
@@ -34,9 +43,22 @@ describe("walk", () => {
 	});
 
 	it("handles nodes with no children", () => {
-		const node: ASTNodeUnion = { nodeType: "Pass", lineno: 1, col_offset: 0 } as any;
+		const node: ASTNodeUnion = {
+			nodeType: "Pass",
+			lineno: 1,
+			col_offset: 0,
+		};
 		const nodes = Array.from(walk(node));
 		expect(nodes).toEqual([node]);
+	});
+
+	it("skips non-node items inside array fields", () => {
+		const tree = parseCode("def f():\n    global x, y\n");
+		const fn = tree.body[0] as FunctionDef;
+		const globalStmt = fn.body[0];
+		expect(globalStmt.nodeType).toBe("Global");
+		const types = Array.from(walk(globalStmt)).map((n) => n.nodeType);
+		expect(types).toEqual(["Global"]);
 	});
 });
 
@@ -75,7 +97,6 @@ describe("NodeVisitor", () => {
 	it("supports the visit_<NodeType> underscore naming convention", () => {
 		class NameCollector extends NodeVisitor {
 			names: string[] = [];
-			// biome-ignore lint/style/useNamingConvention: mirrors Python's ast.NodeVisitor convention
 			visit_Name(node: Name) {
 				this.names.push(node.id);
 			}
@@ -84,6 +105,23 @@ describe("NodeVisitor", () => {
 		const collector = new NameCollector();
 		collector.genericVisit(tree.body[0]);
 		expect(collector.names).toEqual(["x"]);
+	});
+
+	it("skips non-node items inside array fields during genericVisit", () => {
+		class CountingVisitor extends NodeVisitor {
+			visited: string[] = [];
+			genericVisit(node: ASTNodeUnion) {
+				this.visited.push(node.nodeType);
+				super.genericVisit(node);
+			}
+		}
+		const tree = parseCode("def f():\n    global x, y\n");
+		const fn = tree.body[0] as FunctionDef;
+		const globalStmt = fn.body[0];
+		expect(globalStmt.nodeType).toBe("Global");
+		const visitor = new CountingVisitor();
+		visitor.visit(globalStmt);
+		expect(visitor.visited).toEqual(["Global"]);
 	});
 
 	it("falls back to genericVisit for unhandled node types", () => {
@@ -112,7 +150,7 @@ describe("NodeTransformer", () => {
 
 	it("replaces nodes matching a visit<NodeType> method", () => {
 		class ConstantDoubler extends NodeTransformer {
-			visitConstant(node: any) {
+			visitConstant(node: Constant) {
 				if (typeof node.value === "number") {
 					return { ...node, value: node.value * 2 };
 				}
@@ -120,8 +158,9 @@ describe("NodeTransformer", () => {
 			}
 		}
 		const tree = parseCode("x = 21\n");
-		const result = new ConstantDoubler().visit(tree) as any;
-		expect(result.body[0].value.value).toBe(42);
+		const result = new ConstantDoubler().visit(tree) as Module;
+		const assign = result.body[0] as Assign;
+		expect((assign.value as Constant).value).toBe(42);
 	});
 
 	it("drops nodes when a visitor returns null", () => {
@@ -131,39 +170,39 @@ describe("NodeTransformer", () => {
 			}
 		}
 		const tree = parseCode("x = 1\npass\ny = 2\n");
-		const result = new PassRemover().visit(tree) as any;
+		const result = new PassRemover().visit(tree) as Module;
 		expect(result.body).toHaveLength(2);
-		expect(result.body.map((s: any) => s.nodeType)).toEqual(["Assign", "Assign"]);
+		expect(result.body.map((s) => s.nodeType)).toEqual(["Assign", "Assign"]);
 	});
 
 	it("splices in an array when a visitor returns multiple nodes", () => {
 		class StatementDuplicator extends NodeTransformer {
-			visitPass(node: any) {
+			visitPass(node: Pass) {
 				return [node, { ...node }];
 			}
 		}
 		const tree = parseCode("pass\n");
-		const result = new StatementDuplicator().visit(tree) as any;
+		const result = new StatementDuplicator().visit(tree) as Module;
 		expect(result.body).toHaveLength(2);
 	});
 
 	it("leaves non-node array items untouched", () => {
 		const tree = parseCode("def f(a, b): pass\n");
 		const transformer = new NodeTransformer();
-		const result = transformer.visit(tree) as any;
-		const fn = result.body[0];
+		const result = transformer.visit(tree) as Module;
+		const fn = result.body[0] as FunctionDef;
 		expect(fn.name).toBe("f");
 	});
 
 	it("leaves primitive array items (e.g. Global names) untouched", () => {
 		const tree = parseCode("global x, y\n");
-		const result = new NodeTransformer().visit(tree) as any;
-		expect(result.body[0].names).toEqual(["x", "y"]);
+		const result = new NodeTransformer().visit(tree) as Module;
+		expect((result.body[0] as Global).names).toEqual(["x", "y"]);
 	});
 
 	it("leaves nodes without children unchanged in shape", () => {
 		const tree = parseCode("pass\n");
-		const result = new NodeTransformer().visit(tree) as any;
+		const result = new NodeTransformer().visit(tree) as Module;
 		expect(result.body[0].nodeType).toBe("Pass");
 	});
 });

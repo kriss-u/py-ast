@@ -1,3 +1,4 @@
+import { describe, expect, test } from "vitest";
 import { parse } from "../src/parser.js";
 import { assertNodeType } from "./test-helpers.js";
 
@@ -59,7 +60,7 @@ describe("Error Handling and Edge Cases", () => {
 
 		test("inconsistent indentation", () => {
 			expect(() => parse("if True:\n    x = 1\n  y = 2")).toThrow();
-	});
+		});
 
 		test("unexpected indentation should fail", () => {
 			// Python requires consistent indentation
@@ -148,7 +149,7 @@ describe("Error Handling and Edge Cases", () => {
 		});
 
 		test("very long identifier", () => {
-			const longName = "a" + "b".repeat(1000);
+			const longName = `a${"b".repeat(1000)}`;
 			const ast = parse(`${longName} = 1`);
 			const stmt = ast.body[0];
 			assertNodeType(stmt, "Assign");
@@ -157,13 +158,13 @@ describe("Error Handling and Edge Cases", () => {
 		});
 
 		test("deeply nested expressions", () => {
-			const nested = "(".repeat(100) + "1" + ")".repeat(100);
+			const nested = `${"(".repeat(100)}1${")".repeat(100)}`;
 			const ast = parse(nested);
 			expect(ast.nodeType).toBe("Module");
 		});
 
 		test("many chained method calls", () => {
-			const chained = "obj" + ".method()".repeat(50);
+			const chained = `obj${".method()".repeat(50)}`;
 			const ast = parse(chained);
 			expect(ast.nodeType).toBe("Module");
 		});
@@ -204,7 +205,7 @@ describe("Error Handling and Edge Cases", () => {
 
 	describe("Number Edge Cases", () => {
 		test("very large integer", () => {
-			const largeNum = "1" + "0".repeat(100);
+			const largeNum = `1${"0".repeat(100)}`;
 			const ast = parse(largeNum);
 			const stmt = ast.body[0];
 			assertNodeType(stmt, "Expr");
@@ -463,13 +464,13 @@ except* TypeError:
 		});
 
 		test("deeply nested function calls", () => {
-			const nested = "f(" + "g(".repeat(50) + "1" + ")".repeat(50) + ")";
+			const nested = `f(${"g(".repeat(50)}1${")".repeat(50)})`;
 			const ast = parse(nested);
 			expect(ast.nodeType).toBe("Module");
 		});
 
 		test("very long string", () => {
-			const longString = '"' + "a".repeat(10000) + '"';
+			const longString = `"${"a".repeat(10000)}"`;
 			const ast = parse(longString);
 			const stmt = ast.body[0];
 			assertNodeType(stmt, "Expr");

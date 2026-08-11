@@ -1,5 +1,13 @@
+import { expect } from "vitest";
 import { parse } from "../src/parser.js";
-import type { ExprNode, Module, StmtNode, Comment } from "../src/types.js";
+import type {
+	ASTNodeUnion,
+	Comment,
+	Expr,
+	ExprNode,
+	Module,
+	StmtNode,
+} from "../src/types.js";
 import { unparse } from "../src/unparser.js";
 
 /**
@@ -7,7 +15,7 @@ import { unparse } from "../src/unparser.js";
  */
 export function collectComments(ast: Module): Comment[] {
 	const comments: Comment[] = [];
-	
+
 	function collectFromBody(body: StmtNode[]): void {
 		for (const stmt of body) {
 			if (stmt.nodeType === "Comment") {
@@ -21,7 +29,7 @@ export function collectComments(ast: Module): Comment[] {
 			}
 		}
 	}
-	
+
 	function collectFromStmt(stmt: StmtNode): void {
 		switch (stmt.nodeType) {
 			case "FunctionDef":
@@ -67,7 +75,7 @@ export function collectComments(ast: Module): Comment[] {
 				break;
 		}
 	}
-	
+
 	collectFromBody(ast.body);
 	return comments;
 }
@@ -94,7 +102,7 @@ export function parseStatement(code: string): StmtNode {
 export function parseExpression(code: string): ExprNode {
 	const stmt = parseStatement(code);
 	expect(stmt.nodeType).toBe("Expr");
-	return (stmt as any).value;
+	return (stmt as Expr).value;
 }
 
 /**
@@ -141,23 +149,23 @@ export function testUnparse(
 /**
  * Assert that a node has the expected type
  */
-export function assertNodeType<T extends string>(
-	node: any,
+export function assertNodeType<T extends ASTNodeUnion["nodeType"]>(
+	node: ASTNodeUnion | null | undefined,
 	expectedType: T,
-): asserts node is { nodeType: T } {
-	expect(node.nodeType).toBe(expectedType);
+): asserts node is Extract<ASTNodeUnion, { nodeType: T }> {
+	expect(node?.nodeType).toBe(expectedType);
 }
 
 /**
  * Test helper to count nodes of a specific type in an AST
  */
-export function countNodeTypes(node: any): Record<string, number> {
+export function countNodeTypes(node: unknown): Record<string, number> {
 	const counts: Record<string, number> = {};
 
-	function visit(n: any) {
+	function visit(n: unknown): void {
 		if (!n || typeof n !== "object") return;
 
-		if (n.nodeType) {
+		if ("nodeType" in n && typeof n.nodeType === "string") {
 			counts[n.nodeType] = (counts[n.nodeType] || 0) + 1;
 		}
 

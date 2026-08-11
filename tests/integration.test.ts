@@ -1,3 +1,4 @@
+import { describe, expect, test } from "vitest";
 import { countNodeTypes, parseCode, testRoundtrip } from "./test-helpers.js";
 
 describe("Parser Integration Tests", () => {
@@ -127,28 +128,28 @@ except* ExceptionGroup as eg:
 		const counts = countNodeTypes(ast);
 
 		// Check for presence of major statement types
-		expect(counts["Import"]).toBeGreaterThan(0);
-		expect(counts["ImportFrom"]).toBeGreaterThan(0);
-		expect(counts["FunctionDef"]).toBeGreaterThan(0);
-		expect(counts["AsyncFunctionDef"]).toBeGreaterThan(0);
-		expect(counts["ClassDef"]).toBeGreaterThan(0);
-		expect(counts["If"]).toBeGreaterThan(0);
-		expect(counts["For"]).toBeGreaterThan(0);
-		expect(counts["While"]).toBeGreaterThan(0);
-		expect(counts["Try"]).toBeGreaterThan(0);
-		expect(counts["With"]).toBeGreaterThan(0);
-		expect(counts["AsyncWith"]).toBeGreaterThan(0);
+		expect(counts.Import).toBeGreaterThan(0);
+		expect(counts.ImportFrom).toBeGreaterThan(0);
+		expect(counts.FunctionDef).toBeGreaterThan(0);
+		expect(counts.AsyncFunctionDef).toBeGreaterThan(0);
+		expect(counts.ClassDef).toBeGreaterThan(0);
+		expect(counts.If).toBeGreaterThan(0);
+		expect(counts.For).toBeGreaterThan(0);
+		expect(counts.While).toBeGreaterThan(0);
+		expect(counts.Try).toBeGreaterThan(0);
+		expect(counts.With).toBeGreaterThan(0);
+		expect(counts.AsyncWith).toBeGreaterThan(0);
 
 		// Check for expression types
-		expect(counts["BinOp"]).toBeGreaterThan(0);
-		expect(counts["Compare"]).toBeGreaterThan(0);
-		expect(counts["Call"]).toBeGreaterThan(0);
-		expect(counts["ListComp"]).toBeGreaterThan(0);
-		expect(counts["DictComp"]).toBeGreaterThan(0);
-		expect(counts["SetComp"]).toBeGreaterThan(0);
-		expect(counts["GeneratorExp"]).toBeGreaterThan(0);
-		expect(counts["Lambda"]).toBeGreaterThan(0);
-		expect(counts["IfExp"]).toBeGreaterThan(0);
+		expect(counts.BinOp).toBeGreaterThan(0);
+		expect(counts.Compare).toBeGreaterThan(0);
+		expect(counts.Call).toBeGreaterThan(0);
+		expect(counts.ListComp).toBeGreaterThan(0);
+		expect(counts.DictComp).toBeGreaterThan(0);
+		expect(counts.SetComp).toBeGreaterThan(0);
+		expect(counts.GeneratorExp).toBeGreaterThan(0);
+		expect(counts.Lambda).toBeGreaterThan(0);
+		expect(counts.IfExp).toBeGreaterThan(0);
 
 		console.log("Node type distribution:", counts);
 	});

@@ -1,14 +1,19 @@
+import { describe, expect, test } from "vitest";
 import { parse } from "../src/parser.js";
 import type {
+	Arg,
 	Constant,
+	Dict,
 	Expression,
 	FormattedValue,
+	FunctionDef,
 	FunctionType,
 	Interactive,
 	JoinedStr,
 	MatchAs,
 	MatchSingleton,
 	MatchValue,
+	Module,
 } from "../src/types.js";
 import { unparse } from "../src/unparser.js";
 import { testRoundtrip, testUnparse } from "./test-helpers.js";
@@ -120,11 +125,17 @@ describe("Unparser Edge Cases", () => {
 		});
 
 		test("vararg and kwarg with no keyword-only params", () => {
-			testUnparse("def f(*args, **kwargs):\n    pass", "def f(*args, **kwargs):\n    pass");
+			testUnparse(
+				"def f(*args, **kwargs):\n    pass",
+				"def f(*args, **kwargs):\n    pass",
+			);
 		});
 
 		test("keyword-only params combined with kwarg, no positional or vararg", () => {
-			testUnparse("def f(*, a, **kwargs):\n    pass", "def f(*, a, **kwargs):\n    pass");
+			testUnparse(
+				"def f(*, a, **kwargs):\n    pass",
+				"def f(*, a, **kwargs):\n    pass",
+			);
 		});
 
 		test("vararg combined with keyword-only params", () => {
@@ -313,6 +324,16 @@ describe("Unparser Edge Cases", () => {
 			expect(unparse(ast)).toBe("z = (a or b) + 1");
 		});
 
+		test("'and' boolean operation as a binary operator operand", () => {
+			const ast = parse("z = (a and b) + 1");
+			expect(unparse(ast)).toBe("z = (a and b) + 1");
+		});
+
+		test("conditional expression as a binary operator operand", () => {
+			const ast = parse("z = (a if b else c) + 1");
+			expect(unparse(ast)).toBe("z = (a if b else c) + 1");
+		});
+
 		test("comparison as a binary operator operand", () => {
 			const ast = parse("z = (a < b) + 1");
 			expect(unparse(ast)).toBe("z = (a < b) + 1");
@@ -364,10 +385,7 @@ describe("Unparser Edge Cases", () => {
 
 	describe("Comprehensions", () => {
 		test("dict comprehension", () => {
-			testUnparse(
-				"{k: v for k, v in items}",
-				"{k: v for (k, v) in items}",
-			);
+			testUnparse("{k: v for k, v in items}", "{k: v for (k, v) in items}");
 		});
 
 		test("generator expression", () => {
@@ -481,7 +499,12 @@ describe("Unparser Edge Cases", () => {
 		test("MatchAs node with a wrapped sub-pattern renders 'pattern as name'", () => {
 			const valuePattern: MatchValue = {
 				nodeType: "MatchValue",
-				value: { nodeType: "Constant", value: 1, lineno: 1, col_offset: 0 },
+				value: {
+					nodeType: "Constant",
+					value: 1,
+					lineno: 1,
+					col_offset: 0,
+				},
 				lineno: 1,
 				col_offset: 0,
 			};
@@ -498,9 +521,21 @@ describe("Unparser Edge Cases", () => {
 		test("standalone FormattedValue node with a non-JoinedStr format_spec", () => {
 			const node: FormattedValue = {
 				nodeType: "FormattedValue",
-				value: { nodeType: "Name", id: "x", ctx: { nodeType: "Load" }, lineno: 1, col_offset: 0 },
+				value: {
+					nodeType: "Name",
+					id: "x",
+					ctx: { nodeType: "Load" },
+					lineno: 1,
+					col_offset: 0,
+				},
 				conversion: 114,
-				format_spec: { nodeType: "Name", id: "spec", ctx: { nodeType: "Load" }, lineno: 1, col_offset: 0 },
+				format_spec: {
+					nodeType: "Name",
+					id: "spec",
+					ctx: { nodeType: "Load" },
+					lineno: 1,
+					col_offset: 0,
+				},
 				lineno: 1,
 				col_offset: 0,
 			};
@@ -510,7 +545,13 @@ describe("Unparser Edge Cases", () => {
 		test("standalone FormattedValue node with the !s and !a conversions", () => {
 			const makeNode = (conversion: number): FormattedValue => ({
 				nodeType: "FormattedValue",
-				value: { nodeType: "Name", id: "x", ctx: { nodeType: "Load" }, lineno: 1, col_offset: 0 },
+				value: {
+					nodeType: "Name",
+					id: "x",
+					ctx: { nodeType: "Load" },
+					lineno: 1,
+					col_offset: 0,
+				},
 				conversion,
 				lineno: 1,
 				col_offset: 0,
@@ -522,13 +563,24 @@ describe("Unparser Edge Cases", () => {
 		test("standalone FormattedValue node with a JoinedStr format_spec", () => {
 			const node: FormattedValue = {
 				nodeType: "FormattedValue",
-				value: { nodeType: "Name", id: "x", ctx: { nodeType: "Load" }, lineno: 1, col_offset: 0 },
+				value: {
+					nodeType: "Name",
+					id: "x",
+					ctx: { nodeType: "Load" },
+					lineno: 1,
+					col_offset: 0,
+				},
 				conversion: -1,
 				format_spec: {
 					nodeType: "JoinedStr",
 					kind: 'f"',
 					values: [
-						{ nodeType: "Constant", value: ">10", lineno: 1, col_offset: 0 },
+						{
+							nodeType: "Constant",
+							value: ">10",
+							lineno: 1,
+							col_offset: 0,
+						},
 					],
 					lineno: 1,
 					col_offset: 0,
@@ -546,9 +598,21 @@ describe("Unparser Edge Cases", () => {
 				values: [
 					{
 						nodeType: "FormattedValue",
-						value: { nodeType: "Name", id: "x", ctx: { nodeType: "Load" }, lineno: 1, col_offset: 0 },
+						value: {
+							nodeType: "Name",
+							id: "x",
+							ctx: { nodeType: "Load" },
+							lineno: 1,
+							col_offset: 0,
+						},
 						conversion: -1,
-						format_spec: { nodeType: "Name", id: "spec", ctx: { nodeType: "Load" }, lineno: 1, col_offset: 0 },
+						format_spec: {
+							nodeType: "Name",
+							id: "spec",
+							ctx: { nodeType: "Load" },
+							lineno: 1,
+							col_offset: 0,
+						},
 						lineno: 1,
 						col_offset: 0,
 					},
@@ -564,7 +628,13 @@ describe("Unparser Edge Cases", () => {
 				nodeType: "JoinedStr",
 				kind: 'f"',
 				values: [
-					{ nodeType: "Name", id: "raw", ctx: { nodeType: "Load" }, lineno: 1, col_offset: 0 },
+					{
+						nodeType: "Name",
+						id: "raw",
+						ctx: { nodeType: "Load" },
+						lineno: 1,
+						col_offset: 0,
+					},
 				],
 				lineno: 1,
 				col_offset: 0,
@@ -575,7 +645,14 @@ describe("Unparser Edge Cases", () => {
 		test("JoinedStr without a kind hint falls back to double-quoted f-string", () => {
 			const node: JoinedStr = {
 				nodeType: "JoinedStr",
-				values: [{ nodeType: "Constant", value: "hi", lineno: 1, col_offset: 0 }],
+				values: [
+					{
+						nodeType: "Constant",
+						value: "hi",
+						lineno: 1,
+						col_offset: 0,
+					},
+				],
 				lineno: 1,
 				col_offset: 0,
 			};
@@ -590,6 +667,230 @@ describe("Unparser Edge Cases", () => {
 				col_offset: 0,
 			};
 			expect(unparse(node)).toBe("custom");
+		});
+	});
+
+	describe("Indentation detection with irregular hand-built ASTs", () => {
+		test("compound statement with an empty body is skipped, falling back to default indent", () => {
+			const emptyFunction: FunctionDef = {
+				nodeType: "FunctionDef",
+				name: "f",
+				args: {
+					nodeType: "Arguments",
+					posonlyargs: [],
+					args: [],
+					kwonlyargs: [],
+					kw_defaults: [],
+					defaults: [],
+				},
+				body: [],
+				decorator_list: [],
+				type_params: [],
+				lineno: 1,
+				col_offset: 0,
+			};
+			const outer: FunctionDef = {
+				nodeType: "FunctionDef",
+				name: "g",
+				args: {
+					nodeType: "Arguments",
+					posonlyargs: [],
+					args: [],
+					kwonlyargs: [],
+					kw_defaults: [],
+					defaults: [],
+				},
+				body: [{ nodeType: "Pass", lineno: 3, col_offset: 4 }],
+				decorator_list: [],
+				type_params: [],
+				lineno: 2,
+				col_offset: 0,
+			};
+			const mod: Module = {
+				nodeType: "Module",
+				body: [emptyFunction, outer],
+				lineno: 1,
+				col_offset: 0,
+			};
+			expect(unparse(mod)).toBe("def f():\ndef g():\n    pass");
+		});
+
+		// The parser always attaches numeric col_offset values; a missing one
+		// only occurs on hand-built AST fragments, hence the `any` escape hatch.
+		test("compound statement missing col_offset info is skipped by the indent detector", () => {
+			// biome-ignore lint/suspicious/noExplicitAny: constructing a deliberately malformed node to exercise a defensive check
+			const outer: any = {
+				nodeType: "FunctionDef",
+				name: "f",
+				args: {
+					nodeType: "Arguments",
+					posonlyargs: [],
+					args: [],
+					kwonlyargs: [],
+					kw_defaults: [],
+					defaults: [],
+				},
+				body: [{ nodeType: "Pass", lineno: 1, col_offset: 4 }],
+				decorator_list: [],
+				type_params: [],
+				lineno: 1,
+				// col_offset intentionally omitted
+			};
+			// biome-ignore lint/suspicious/noExplicitAny: constructing a deliberately malformed node to exercise a defensive check
+			const mod: any = {
+				nodeType: "Module",
+				body: [outer],
+				lineno: 1,
+				col_offset: 0,
+			};
+			expect(unparse(mod)).toBe("def f():\n    pass");
+		});
+	});
+
+	describe("F-string conversion codes outside the known set", () => {
+		test("FormattedValue inside a JoinedStr with an unrecognized conversion code writes no conversion marker", () => {
+			const node: JoinedStr = {
+				nodeType: "JoinedStr",
+				kind: 'f"',
+				values: [
+					{
+						nodeType: "FormattedValue",
+						value: {
+							nodeType: "Name",
+							id: "x",
+							ctx: { nodeType: "Load" },
+							lineno: 1,
+							col_offset: 0,
+						},
+						conversion: 0,
+						lineno: 1,
+						col_offset: 0,
+					},
+				],
+				lineno: 1,
+				col_offset: 0,
+			};
+			expect(unparse(node)).toBe('f"{x}"');
+		});
+
+		test("standalone FormattedValue with an unrecognized conversion code writes no conversion marker", () => {
+			const node: FormattedValue = {
+				nodeType: "FormattedValue",
+				value: {
+					nodeType: "Name",
+					id: "x",
+					ctx: { nodeType: "Load" },
+					lineno: 1,
+					col_offset: 0,
+				},
+				conversion: 0,
+				lineno: 1,
+				col_offset: 0,
+			};
+			expect(unparse(node)).toBe("{x}");
+		});
+	});
+
+	describe("String constant with an unrecognized quote-style kind", () => {
+		test("falls back to double-quoted formatting when kind is neither triple nor single/double", () => {
+			const node: Constant = {
+				nodeType: "Constant",
+				value: "hi",
+				kind: "z",
+				lineno: 1,
+				col_offset: 0,
+			};
+			expect(unparse(node)).toBe('"hi"');
+		});
+	});
+
+	describe("Dict unpacking entries constructed directly", () => {
+		test("a null key renders a '**value' unpacking entry (parser has no surface syntax for this)", () => {
+			const node: Dict = {
+				nodeType: "Dict",
+				keys: [
+					{
+						nodeType: "Constant",
+						value: "a",
+						lineno: 1,
+						col_offset: 0,
+					},
+					null,
+				],
+				values: [
+					{
+						nodeType: "Constant",
+						value: 1,
+						lineno: 1,
+						col_offset: 0,
+					},
+					{
+						nodeType: "Name",
+						id: "rest",
+						ctx: { nodeType: "Load" },
+						lineno: 1,
+						col_offset: 0,
+					},
+				],
+				lineno: 1,
+				col_offset: 0,
+			};
+			expect(unparse(node)).toBe('{"a": 1, **rest}');
+		});
+	});
+
+	describe("Match pattern nodes with unusual shapes", () => {
+		test("MatchSingleton with a value outside None/True/False falls back to String()", () => {
+			const node: MatchSingleton = {
+				nodeType: "MatchSingleton",
+				value: 42,
+				lineno: 1,
+				col_offset: 0,
+			};
+			expect(unparse(node)).toBe("42");
+		});
+
+		test("MatchAs with neither a wrapped pattern nor a bound name renders nothing", () => {
+			const node: MatchAs = {
+				nodeType: "MatchAs",
+				lineno: 1,
+				col_offset: 0,
+			};
+			expect(unparse(node)).toBe("");
+		});
+	});
+
+	describe("Keyword-only arguments with a short kw_defaults array", () => {
+		test("a keyword-only arg past the end of kw_defaults renders without a default", () => {
+			const b: Arg = {
+				nodeType: "Arg",
+				arg: "b",
+				lineno: 1,
+				col_offset: 0,
+			};
+			const func: FunctionDef = {
+				nodeType: "FunctionDef",
+				name: "f",
+				args: {
+					nodeType: "Arguments",
+					posonlyargs: [],
+					args: [],
+					kwonlyargs: [
+						{ nodeType: "Arg", arg: "a", lineno: 1, col_offset: 0 },
+						b,
+					],
+					kw_defaults: [
+						{ nodeType: "Constant", value: 1, lineno: 1, col_offset: 0 },
+					],
+					defaults: [],
+				},
+				body: [{ nodeType: "Pass", lineno: 1, col_offset: 0 }],
+				decorator_list: [],
+				type_params: [],
+				lineno: 1,
+				col_offset: 0,
+			};
+			expect(unparse(func)).toBe("def f(*, a=1, b):\n    pass");
 		});
 	});
 });

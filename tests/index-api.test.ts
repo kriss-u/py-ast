@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { dump, parseModule, parsePython, toSource, version } from "../src/index.js";
+import {
+	dump,
+	parseModule,
+	parsePython,
+	toSource,
+	version,
+} from "../src/index.js";
+import type { ASTNodeUnion } from "../src/types.js";
 
 describe("parsePython", () => {
 	it("parses source with default options", () => {
@@ -127,14 +134,14 @@ describe("dump", () => {
 	});
 
 	it("formats an empty array passed directly as compact []", () => {
-		expect(dump([] as any)).toBe("[]");
+		expect(dump([] as unknown as ASTNodeUnion)).toBe("[]");
 	});
 
 	it("formats plain object field values without a nodeType as JSON", () => {
 		const fakeNode = {
 			nodeType: "FakeNode",
 			meta: { foo: "bar" },
-		} as any;
+		} as unknown as ASTNodeUnion;
 		const result = dump(fakeNode);
 		expect(result).toBe('FakeNode(meta={"foo":"bar"})');
 	});

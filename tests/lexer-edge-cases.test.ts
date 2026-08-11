@@ -29,6 +29,12 @@ describe("Lexer string literals", () => {
 		const strTok = tokens.find((t) => t.type === TokenType.STRING);
 		expect(strTok?.value).toBe('"""abc\ndef"""');
 	});
+
+	it("throws on a string with a trailing escaped backslash at EOF", () => {
+		expect(() => new Lexer("'abc\\").tokenize()).toThrow(
+			/Unterminated string literal/,
+		);
+	});
 });
 
 describe("Lexer f-strings", () => {
@@ -69,9 +75,21 @@ describe("Lexer f-strings", () => {
 	});
 
 	it("does not treat a closing quote inside braces as the string end", () => {
-		const tokens = new Lexer('f"{d[\'key\']}"').tokenize();
+		const tokens = new Lexer("f\"{d['key']}\"").tokenize();
 		const strTok = tokens.find((t) => t.type === TokenType.STRING);
 		expect(strTok?.value).toContain("d['key']");
+	});
+
+	it("throws on an f-string with a trailing escaped backslash at EOF", () => {
+		expect(() => new Lexer('f"abc\\').tokenize()).toThrow(
+			/Unterminated f-string literal/,
+		);
+	});
+
+	it("does not go negative on a stray closing brace outside any replacement field", () => {
+		const tokens = new Lexer('f"abc}def"').tokenize();
+		const strTok = tokens.find((t) => t.type === TokenType.STRING);
+		expect(strTok?.value).toBe('f"abc}def"');
 	});
 });
 
@@ -92,6 +110,12 @@ describe("Lexer prefixed strings", () => {
 		expect(() => new Lexer("r'abc\ndef'").tokenize()).toThrow(
 			/Unterminated string literal/,
 		);
+	});
+
+	it("handles a trailing escaped backslash at EOF in a prefixed string", () => {
+		const tokens = new Lexer("r'abc\\").tokenize();
+		const strTok = tokens.find((t) => t.type === TokenType.STRING);
+		expect(strTok?.value).toBe("r'abc\\");
 	});
 });
 
@@ -119,6 +143,24 @@ describe("Lexer numbers", () => {
 		const numTok = tokens.find((t) => t.type === TokenType.NUMBER);
 		expect(numTok?.value).toBe("0xFF");
 	});
+
+	it("strips underscores from the integer part of a decimal literal", () => {
+		const tokens = new Lexer("1_000_000").tokenize();
+		const numTok = tokens.find((t) => t.type === TokenType.NUMBER);
+		expect(numTok?.value).toBe("1000000");
+	});
+
+	it("strips underscores from the fractional part of a decimal literal", () => {
+		const tokens = new Lexer("1.0_1").tokenize();
+		const numTok = tokens.find((t) => t.type === TokenType.NUMBER);
+		expect(numTok?.value).toBe("1.01");
+	});
+
+	it("strips underscores from the exponent of a scientific notation literal", () => {
+		const tokens = new Lexer("1e1_0").tokenize();
+		const numTok = tokens.find((t) => t.type === TokenType.NUMBER);
+		expect(numTok?.value).toBe("1e10");
+	});
 });
 
 describe("Lexer operators", () => {
@@ -142,7 +184,9 @@ describe("Lexer operators", () => {
 		const tokens = new Lexer("x = 1 + \\\n    2\n").tokenize();
 		const types = tokens.map((t) => t.type);
 		expect(types).not.toContain(undefined);
-		expect(types.filter((t) => t === TokenType.NEWLINE).length).toBeGreaterThan(0);
+		expect(types.filter((t) => t === TokenType.NEWLINE).length).toBeGreaterThan(
+			0,
+		);
 	});
 
 	it("throws on a backslash not followed by a newline", () => {

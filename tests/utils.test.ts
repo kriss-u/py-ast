@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { parseCode } from "./test-helpers.js";
+import type {
+	Arguments,
+	BinOp,
+	ClassDef,
+	Constant,
+	FunctionDef,
+	Module,
+	Name,
+	Operator,
+} from "../src/types.js";
 import {
 	ast,
 	getDocstring,
@@ -8,6 +17,7 @@ import {
 	iterChildNodes,
 	iterFields,
 } from "../src/utils.js";
+import { parseCode } from "./test-helpers.js";
 
 describe("getDocstring", () => {
 	it("returns the docstring of a module", () => {
@@ -18,30 +28,30 @@ describe("getDocstring", () => {
 	it("returns the docstring of a function", () => {
 		const tree = parseCode('def f():\n    """func doc"""\n    pass\n');
 		const fn = tree.body[0];
-		expect(getDocstring(fn as any)).toBe("func doc");
+		expect(getDocstring(fn)).toBe("func doc");
 	});
 
 	it("returns the docstring of an async function", () => {
 		const tree = parseCode('async def f():\n    """async doc"""\n    pass\n');
 		const fn = tree.body[0];
-		expect(getDocstring(fn as any)).toBe("async doc");
+		expect(getDocstring(fn)).toBe("async doc");
 	});
 
 	it("returns the docstring of a class", () => {
 		const tree = parseCode('class C:\n    """class doc"""\n    pass\n');
 		const cls = tree.body[0];
-		expect(getDocstring(cls as any)).toBe("class doc");
+		expect(getDocstring(cls)).toBe("class doc");
 	});
 
 	it("returns null for node types without docstrings", () => {
 		const tree = parseCode("x = 1\n");
 		const assign = tree.body[0];
-		expect(getDocstring(assign as any)).toBeNull();
+		expect(getDocstring(assign)).toBeNull();
 	});
 
 	it("returns null when body is empty", () => {
 		const tree = parseCode("class C: ...\n");
-		const cls = tree.body[0] as any;
+		const cls = tree.body[0] as ClassDef;
 		cls.body = [];
 		expect(getDocstring(cls)).toBeNull();
 	});
@@ -49,19 +59,28 @@ describe("getDocstring", () => {
 	it("returns null when the first statement isn't an expression", () => {
 		const tree = parseCode("def f():\n    x = 1\n");
 		const fn = tree.body[0];
-		expect(getDocstring(fn as any)).toBeNull();
+		expect(getDocstring(fn)).toBeNull();
 	});
 
 	it("returns null when the first expression isn't a string constant", () => {
 		const tree = parseCode("def f():\n    1\n");
 		const fn = tree.body[0];
-		expect(getDocstring(fn as any)).toBeNull();
+		expect(getDocstring(fn)).toBeNull();
 	});
 
 	it("returns null when the first expression is a non-string constant-like call", () => {
 		const tree = parseCode("def f():\n    x\n");
 		const fn = tree.body[0];
-		expect(getDocstring(fn as any)).toBeNull();
+		expect(getDocstring(fn)).toBeNull();
+	});
+
+	it("returns null when a docstring-eligible node has no body property at all", () => {
+		const node = {
+			nodeType: "Module",
+			lineno: 1,
+			col_offset: 0,
+		} as unknown as Module;
+		expect(getDocstring(node)).toBeNull();
 	});
 });
 
@@ -69,7 +88,7 @@ describe("iterFields", () => {
 	it("yields fields excluding nodeType and location info", () => {
 		const tree = parseCode("x = 1\n");
 		const assign = tree.body[0];
-		const fields = Array.from(iterFields(assign as any));
+		const fields = Array.from(iterFields(assign));
 		const keys = fields.map(([k]) => k);
 		expect(keys).not.toContain("nodeType");
 		expect(keys).not.toContain("lineno");
@@ -85,7 +104,7 @@ describe("iterChildNodes", () => {
 	it("yields direct child AST nodes from arrays and object fields", () => {
 		const tree = parseCode("x = 1 + 2\n");
 		const assign = tree.body[0];
-		const children = Array.from(iterChildNodes(assign as any));
+		const children = Array.from(iterChildNodes(assign));
 		const types = children.map((c) => c.nodeType);
 		expect(types).toContain("Name");
 		expect(types).toContain("BinOp");
@@ -94,8 +113,27 @@ describe("iterChildNodes", () => {
 	it("skips non-node values", () => {
 		const tree = parseCode("x = 1\n");
 		const assign = tree.body[0];
-		const children = Array.from(iterChildNodes(assign as any));
+		const children = Array.from(iterChildNodes(assign));
 		expect(children.every((c) => isASTNode(c))).toBe(true);
+	});
+
+	it("skips non-node items inside array fields", () => {
+		const tree = parseCode("def f():\n    global x, y\n");
+		const fn = tree.body[0] as FunctionDef;
+		const globalStmt = fn.body[0];
+		expect(globalStmt.nodeType).toBe("Global");
+		const children = Array.from(iterChildNodes(globalStmt));
+		expect(children).toEqual([]);
+	});
+
+	it("skips non-node scalar fields", () => {
+		const constant = {
+			nodeType: "Constant",
+			value: 42,
+			kind: undefined,
+		} as unknown as Constant;
+		const children = Array.from(iterChildNodes(constant));
+		expect(children).toEqual([]);
 	});
 });
 
@@ -132,7 +170,7 @@ describe("getSourceSegment", () => {
 			col_offset: 4,
 			end_lineno: 1,
 			end_col_offset: 9,
-		} as any;
+		} as unknown as BinOp;
 		const segment = getSourceSegment(source, node);
 		expect(segment).toBe("1 + 2");
 	});
@@ -145,7 +183,7 @@ describe("getSourceSegment", () => {
 			col_offset: 4,
 			end_lineno: 3,
 			end_col_offset: 5,
-		} as any;
+		} as unknown as BinOp;
 		const segment = getSourceSegment(source, node);
 		expect(segment).toBe("1 +\n    2");
 	});
@@ -158,7 +196,7 @@ describe("getSourceSegment", () => {
 			col_offset: 4,
 			end_lineno: 4,
 			end_col_offset: 5,
-		} as any;
+		} as unknown as BinOp;
 		const segment = getSourceSegment(source, node);
 		expect(segment).toBe("1 +\n    2 +\n    3");
 	});
@@ -171,13 +209,39 @@ describe("getSourceSegment", () => {
 			col_offset: 4,
 			end_lineno: 3,
 			end_col_offset: 5,
-		} as any;
+		} as unknown as BinOp;
 		const segment = getSourceSegment(source, node, { padded: true });
 		expect(segment?.split("\n")[0]).toBe("    1 +");
 	});
 
+	it("skips missing lines within a multi-line segment's middle and end", () => {
+		const source = "a\nb\n";
+		const node = {
+			nodeType: "BinOp",
+			lineno: 1,
+			col_offset: 0,
+			end_lineno: 10,
+			end_col_offset: 1,
+		} as unknown as BinOp;
+		const segment = getSourceSegment(source, node);
+		expect(segment).toBe("a\nb\n");
+	});
+
+	it("omits the first line of a multi-line segment when its start line doesn't exist", () => {
+		const source = "a\nb\n";
+		const node = {
+			nodeType: "BinOp",
+			lineno: 20,
+			col_offset: 0,
+			end_lineno: 21,
+			end_col_offset: 1,
+		} as unknown as BinOp;
+		const segment = getSourceSegment(source, node);
+		expect(segment).toBe("");
+	});
+
 	it("returns null when location info is missing", () => {
-		const node = { nodeType: "Name", id: "x" } as any;
+		const node = { nodeType: "Name", id: "x" } as unknown as Name;
 		expect(getSourceSegment("x = 1\n", node)).toBeNull();
 	});
 
@@ -189,7 +253,7 @@ describe("getSourceSegment", () => {
 			col_offset: 0,
 			end_lineno: 1,
 			end_col_offset: 1,
-		} as any;
+		} as unknown as Name;
 		expect(getSourceSegment("x = 1\n", node)).toBeNull();
 	});
 
@@ -201,7 +265,7 @@ describe("getSourceSegment", () => {
 			col_offset: 0,
 			end_lineno: 99,
 			end_col_offset: 1,
-		} as any;
+		} as unknown as Name;
 		expect(getSourceSegment("x = 1\n", node)).toBeNull();
 	});
 });
@@ -246,7 +310,11 @@ describe("ast factory", () => {
 	});
 
 	it("builds a BinOp node with an operator node", () => {
-		const node = ast.BinOp(ast.Constant(1), { nodeType: "Add" } as any, ast.Constant(2));
+		const node = ast.BinOp(
+			ast.Constant(1),
+			{ nodeType: "Add" } as Operator,
+			ast.Constant(2),
+		);
 		expect(node.op.nodeType).toBe("Add");
 	});
 
@@ -308,7 +376,7 @@ describe("ast factory", () => {
 			kw_defaults: [],
 			kwarg: undefined,
 			defaults: [],
-		} as any;
+		} as unknown as Arguments;
 		const node = ast.Lambda(emptyArgs, ast.Constant(1));
 		expect(node.nodeType).toBe("Lambda");
 	});

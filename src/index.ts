@@ -197,7 +197,7 @@ export function dump(
 	options: {
 		annotateFields?: boolean;
 		includeAttributes?: boolean;
-		indent?: string | number;
+		indent?: string | number | null;
 		showEmpty?: boolean;
 	} = {},
 ): string {

@@ -205,20 +205,19 @@ class Unparser extends NodeVisitor {
 	 * Starts a new statement line: indents to the current block depth and
 	 * writes `text`. The very first statement of the whole output is written
 	 * without a leading newline (tracked via `isFirstStatement`); every
-	 * subsequent call prefixes a `"\n"` before indenting.
+	 * subsequent call prefixes a `"\n"` before indenting. The very first
+	 * `fill()` call of a run always happens at `indent === 0` — every
+	 * `visit_*` for a compound statement calls `fill()` for its own header
+	 * line before incrementing `context.indent` — so the first call never
+	 * needs indentation of its own.
 	 *
 	 * @param text - Text to write at the start of the new line (defaults to
 	 *   empty, e.g. when the statement itself will `visit()` its content).
 	 */
 	private fill(text: string = ""): void {
 		if (this.context.isFirstStatement) {
-			// For the first statement, don't add a leading newline
 			this.context.isFirstStatement = false;
-			if (this.context.indent > 0) {
-				this.write(this.context.indentString.repeat(this.context.indent), text);
-			} else {
-				this.write(text);
-			}
+			this.write(text);
 		} else {
 			this.write(
 				"\n",
@@ -341,8 +340,6 @@ class Unparser extends NodeVisitor {
 				return Precedence.TERM;
 			case "Pow":
 				return Precedence.POWER;
-			default:
-				return Precedence.ATOM;
 		}
 	}
 
@@ -397,9 +394,11 @@ class Unparser extends NodeVisitor {
 	): [string, string] {
 		// If we have the original quote style, use it exactly
 		if (node.kind) {
-			// Extract quote from the kind (e.g., 'f"' -> '"', "f'" -> "'")
-			const prefixMatch = node.kind.match(/^([fFrRbBuU]*)(.*)/);
-			const quote = prefixMatch ? prefixMatch[2] : '"';
+			// Both capture groups accept an empty match, so this regex always
+			// matches and `prefixMatch` is never null.
+			// biome-ignore lint/style/noNonNullAssertion: regex is provably total, see comment above
+			const prefixMatch = node.kind.match(/^([fFrRbBuU]*)(.*)/)!;
+			const quote = prefixMatch[2];
 			return [node.kind, quote];
 		}
 
@@ -508,8 +507,7 @@ class Unparser extends NodeVisitor {
 	 * Maps an `OperatorNode` to its augmented-assignment spelling (`+=`, `**=`, ...).
 	 *
 	 * @param op - The operator node.
-	 * @returns The augmented-assignment operator text, or `"?="` for an
-	 *   unrecognized operator kind.
+	 * @returns The augmented-assignment operator text.
 	 */
 	private getAugAssignOp(op: OperatorNode): string {
 		switch (op.nodeType) {
@@ -539,8 +537,6 @@ class Unparser extends NodeVisitor {
 				return "&=";
 			case "FloorDiv":
 				return "//=";
-			default:
-				return "?=";
 		}
 	}
 
@@ -946,20 +942,18 @@ class Unparser extends NodeVisitor {
 	// Expression visitors
 	/**
 	 * Renders a binary operator expression (`left op right`), parenthesizing
-	 * the whole expression and/or either operand as needed to preserve
-	 * evaluation order. The right operand gets extra scrutiny: for a
-	 * left-associative operator, a right-hand child of *equal* precedence
-	 * still needs parens (`a - (b - c)` is not the same as `a - b - c`),
-	 * whereas for the right-associative `**` operator an equal-precedence
-	 * right child does not.
+	 * either operand as needed to preserve evaluation order. Parenthesization
+	 * of the whole `BinOp` expression itself (relative to whatever contains
+	 * it) is decided by the caller, via `leftNeedsParens`/`rightNeedsParens`
+	 * at its own parent's call site. The right operand gets extra scrutiny:
+	 * for a left-associative operator, a right-hand child of *equal*
+	 * precedence still needs parens (`a - (b - c)` is not the same as
+	 * `a - b - c`), whereas for the right-associative `**` operator an
+	 * equal-precedence right child does not.
 	 */
 	visit_BinOp(node: Extract<ExprNode, { nodeType: "BinOp" }>): void {
 		const precedence = this.getBinOpPrecedence(node.op);
-		const needParens = this.requireParens(precedence, node);
 
-		if (needParens) this.write("(");
-
-		// Check if left operand needs parentheses
 		const leftNeedsParens = this.requireParens(precedence, node.left);
 		if (leftNeedsParens) this.write("(");
 		this.withPrecedence(precedence, node.left);
@@ -967,8 +961,6 @@ class Unparser extends NodeVisitor {
 
 		this.write(" ", this.getBinOpSymbol(node.op), " ");
 
-		// Check if right operand needs parentheses
-		// For right-associative operators or same precedence, we need to be more careful
 		const rightNeedsParens =
 			this.requireParens(precedence, node.right) ||
 			(this.getPrecedence(node.right) === precedence &&
@@ -976,8 +968,6 @@ class Unparser extends NodeVisitor {
 		if (rightNeedsParens) this.write("(");
 		this.withPrecedence(precedence, node.right);
 		if (rightNeedsParens) this.write(")");
-
-		if (needParens) this.write(")");
 	}
 
 	/**
@@ -997,7 +987,7 @@ class Unparser extends NodeVisitor {
 	 * Maps a binary `OperatorNode` to its source symbol (`+`, `**`, `//`, ...).
 	 *
 	 * @param op - The binary operator node.
-	 * @returns The operator's source text, or `"?"` for an unrecognized kind.
+	 * @returns The operator's source text.
 	 */
 	private getBinOpSymbol(op: OperatorNode): string {
 		switch (op.nodeType) {
@@ -1027,8 +1017,6 @@ class Unparser extends NodeVisitor {
 				return "&";
 			case "FloorDiv":
 				return "//";
-			default:
-				return "?";
 		}
 	}
 
@@ -1052,7 +1040,7 @@ class Unparser extends NodeVisitor {
 	 * Maps a `UnaryOpNode` to its source symbol/keyword (`~`, `not`, `+`, `-`).
 	 *
 	 * @param op - The unary operator node.
-	 * @returns The operator's source text, or `"?"` for an unrecognized kind.
+	 * @returns The operator's source text.
 	 */
 	private getUnaryOpSymbol(op: UnaryOpNode): string {
 		switch (op.nodeType) {
@@ -1064,8 +1052,6 @@ class Unparser extends NodeVisitor {
 				return "+";
 			case "USub":
 				return "-";
-			default:
-				return "?";
 		}
 	}
 
@@ -1073,40 +1059,31 @@ class Unparser extends NodeVisitor {
 	visit_BoolOp(node: Extract<ExprNode, { nodeType: "BoolOp" }>): void {
 		const precedence =
 			node.op.nodeType === "Or" ? Precedence.OR : Precedence.AND;
-		const needParens = this.requireParens(precedence, node);
 		const opSymbol = node.op.nodeType === "Or" ? " or " : " and ";
 
-		if (needParens) this.write("(");
 		this.interleave(
 			opSymbol,
 			(value) => this.withPrecedence(precedence, value),
 			node.values,
 		);
-		if (needParens) this.write(")");
 	}
 
 	/** Renders a chained comparison expression (`left op1 c1 op2 c2 ...`). */
 	visit_Compare(node: Extract<ExprNode, { nodeType: "Compare" }>): void {
 		const precedence = Precedence.CMP;
-		const needParens = this.requireParens(precedence, node);
 
-		if (needParens) this.write("(");
 		this.withPrecedence(precedence, node.left);
 		for (let i = 0; i < node.ops.length; i++) {
 			this.write(" ", this.getCmpOpSymbol(node.ops[i]), " ");
 			this.withPrecedence(precedence, node.comparators[i]);
 		}
-		if (needParens) this.write(")");
 	}
 
 	/** Renders a walrus/named expression (`target := value`). */
 	visit_NamedExpr(node: Extract<ExprNode, { nodeType: "NamedExpr" }>): void {
-		const needParens = this.requireParens(Precedence.TEST, node);
-		if (needParens) this.write("(");
 		this.visit(node.target);
 		this.write(" := ");
 		this.visit(node.value);
-		if (needParens) this.write(")");
 	}
 
 	/** Renders a `lambda [params]: body` expression. */
@@ -1123,14 +1100,11 @@ class Unparser extends NodeVisitor {
 	/** Renders a conditional expression (`body if test else orelse`). */
 	visit_IfExp(node: Extract<ExprNode, { nodeType: "IfExp" }>): void {
 		const precedence = Precedence.TEST;
-		const needParens = this.requireParens(precedence, node);
-		if (needParens) this.write("(");
 		this.withPrecedence(precedence, node.body);
 		this.write(" if ");
 		this.withPrecedence(precedence, node.test);
 		this.write(" else ");
 		this.withPrecedence(precedence, node.orelse);
-		if (needParens) this.write(")");
 	}
 
 	/** Renders an `await value` expression. */
@@ -1253,7 +1227,7 @@ class Unparser extends NodeVisitor {
 	 * Maps a `CmpOpNode` to its source text (`==`, `is not`, `not in`, ...).
 	 *
 	 * @param op - The comparison operator node.
-	 * @returns The operator's source text, or `"?"` for an unrecognized kind.
+	 * @returns The operator's source text.
 	 */
 	private getCmpOpSymbol(op: CmpOpNode): string {
 		switch (op.nodeType) {
@@ -1277,8 +1251,6 @@ class Unparser extends NodeVisitor {
 				return "in";
 			case "NotIn":
 				return "not in";
-			default:
-				return "?";
 		}
 	}
 
@@ -1350,10 +1322,12 @@ class Unparser extends NodeVisitor {
 	private formatString(value: string, kind?: string): string {
 		// If we have quote style information, use it
 		if (kind) {
-			// Extract prefix and quote info
-			const prefixMatch = kind.match(/^([fFrRbBuU]*)(.*)/);
-			const prefix = prefixMatch ? prefixMatch[1] : "";
-			const quoteStyle = prefixMatch ? prefixMatch[2] : '"""';
+			// Both capture groups accept an empty match, so this regex always
+			// matches and `prefixMatch` is never null.
+			// biome-ignore lint/style/noNonNullAssertion: regex is provably total, see comment above
+			const prefixMatch = kind.match(/^([fFrRbBuU]*)(.*)/)!;
+			const prefix = prefixMatch[1];
+			const quoteStyle = prefixMatch[2];
 
 			// For multiline strings, preserve triple quotes
 			if (quoteStyle === '"""' || quoteStyle === "'''") {
@@ -1636,12 +1610,11 @@ class Unparser extends NodeVisitor {
 			for (let i = 0; i < node.kwonlyargs.length; i++) {
 				this.write(", ");
 				this.visit(node.kwonlyargs[i]);
-				if (i < node.kw_defaults.length && node.kw_defaults[i]) {
+				const defaultValue =
+					i < node.kw_defaults.length ? node.kw_defaults[i] : undefined;
+				if (defaultValue) {
 					this.write("=");
-					const defaultValue = node.kw_defaults[i];
-					if (defaultValue) {
-						this.visit(defaultValue);
-					}
+					this.visit(defaultValue);
 				}
 			}
 		}

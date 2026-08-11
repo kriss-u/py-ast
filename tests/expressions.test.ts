@@ -1,5 +1,6 @@
-import { assertNodeType, parseExpression } from "./test-helpers.js";
+import { describe, expect, test } from "vitest";
 import { parse } from "../src/index.js";
+import { assertNodeType, parseExpression } from "./test-helpers.js";
 
 describe("Basic Python Literals", () => {
 	test("integer literals", () => {
@@ -196,13 +197,13 @@ def format_examples():
 		}).not.toThrow();
 
 		const ast = parse(code, { comments: true });
-		expect(ast.nodeType).toBe('Module');
+		expect(ast.nodeType).toBe("Module");
 		expect(ast.body).toHaveLength(1);
-		
+
 		// Check that the function contains the list with f-strings
-		const funcDef = ast.body[0] as any;
-		expect(funcDef.nodeType).toBe('FunctionDef');
-		expect(funcDef.name).toBe('format_examples');
+		const funcDef = ast.body[0];
+		assertNodeType(funcDef, "FunctionDef");
+		expect(funcDef.name).toBe("format_examples");
 	});
 
 	test("main regression: f-strings in list with inline comments", () => {
@@ -217,16 +218,16 @@ def format_examples():
 		}).not.toThrow();
 
 		const ast = parse(code, { comments: true });
-		expect(ast.nodeType).toBe('Module');
-		
+		expect(ast.nodeType).toBe("Module");
+
 		// Should contain one assignment statement
-		const assign = ast.body[0] as any;
-		expect(assign.nodeType).toBe('Assign');
-		expect(assign.value.nodeType).toBe('List');
+		const assign = ast.body[0];
+		assertNodeType(assign, "Assign");
+		assertNodeType(assign.value, "List");
 		expect(assign.value.elts).toHaveLength(2);
-		
+
 		// Both elements should be JoinedStr (f-strings)
-		expect(assign.value.elts[0].nodeType).toBe('JoinedStr');
-		expect(assign.value.elts[1].nodeType).toBe('JoinedStr');
+		expect(assign.value.elts[0].nodeType).toBe("JoinedStr");
+		expect(assign.value.elts[1].nodeType).toBe("JoinedStr");
 	});
 });

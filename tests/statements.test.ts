@@ -1,61 +1,71 @@
+import { describe, expect, test } from "vitest";
+import type { Constant, Name } from "../src/types.js";
 import { assertNodeType, parseStatement } from "./test-helpers.js";
 
 describe("Class Definitions", () => {
 	describe("Metaclass Syntax", () => {
 		test("simple metaclass", () => {
-			const stmt = parseStatement(`class DatabaseConnection(metaclass=SingletonMeta):
-    pass`);
+			const stmt = parseStatement(
+				`class DatabaseConnection(metaclass=SingletonMeta):
+    pass`,
+			);
 			assertNodeType(stmt, "ClassDef");
 			expect(stmt.name).toBe("DatabaseConnection");
 			expect(stmt.bases).toHaveLength(0);
 			expect(stmt.keywords).toHaveLength(1);
 			expect(stmt.keywords[0].arg).toBe("metaclass");
 			expect(stmt.keywords[0].value.nodeType).toBe("Name");
-			expect((stmt.keywords[0].value as any).id).toBe("SingletonMeta");
+			expect((stmt.keywords[0].value as Name).id).toBe("SingletonMeta");
 		});
 
 		test("class with base class and metaclass", () => {
-			const stmt = parseStatement(`class MyClass(BaseClass, metaclass=MyMeta):
-    pass`);
+			const stmt = parseStatement(
+				`class MyClass(BaseClass, metaclass=MyMeta):
+    pass`,
+			);
 			assertNodeType(stmt, "ClassDef");
 			expect(stmt.name).toBe("MyClass");
 			expect(stmt.bases).toHaveLength(1);
 			expect(stmt.bases[0].nodeType).toBe("Name");
-			expect((stmt.bases[0] as any).id).toBe("BaseClass");
+			expect((stmt.bases[0] as Name).id).toBe("BaseClass");
 			expect(stmt.keywords).toHaveLength(1);
 			expect(stmt.keywords[0].arg).toBe("metaclass");
-			expect((stmt.keywords[0].value as any).id).toBe("MyMeta");
+			expect((stmt.keywords[0].value as Name).id).toBe("MyMeta");
 		});
 
 		test("class with multiple bases and keyword arguments", () => {
-			const stmt = parseStatement(`class Complex(Base1, Base2, metaclass=Meta, foo=bar, baz=42):
-    pass`);
+			const stmt = parseStatement(
+				`class Complex(Base1, Base2, metaclass=Meta, foo=bar, baz=42):
+    pass`,
+			);
 			assertNodeType(stmt, "ClassDef");
 			expect(stmt.name).toBe("Complex");
 			expect(stmt.bases).toHaveLength(2);
-			expect((stmt.bases[0] as any).id).toBe("Base1");
-			expect((stmt.bases[1] as any).id).toBe("Base2");
+			expect((stmt.bases[0] as Name).id).toBe("Base1");
+			expect((stmt.bases[1] as Name).id).toBe("Base2");
 			expect(stmt.keywords).toHaveLength(3);
-			
+
 			// Check metaclass keyword
-			const metaclassKw = stmt.keywords.find(kw => kw.arg === "metaclass");
+			const metaclassKw = stmt.keywords.find((kw) => kw.arg === "metaclass");
 			expect(metaclassKw).toBeDefined();
-			expect((metaclassKw!.value as any).id).toBe("Meta");
-			
+			expect((metaclassKw?.value as Name).id).toBe("Meta");
+
 			// Check foo keyword
-			const fooKw = stmt.keywords.find(kw => kw.arg === "foo");
+			const fooKw = stmt.keywords.find((kw) => kw.arg === "foo");
 			expect(fooKw).toBeDefined();
-			expect((fooKw!.value as any).id).toBe("bar");
-			
+			expect((fooKw?.value as Name).id).toBe("bar");
+
 			// Check baz keyword
-			const bazKw = stmt.keywords.find(kw => kw.arg === "baz");
+			const bazKw = stmt.keywords.find((kw) => kw.arg === "baz");
 			expect(bazKw).toBeDefined();
-			expect((bazKw!.value as any).value).toBe(42);
+			expect((bazKw?.value as Constant).value).toBe(42);
 		});
 
 		test("class with only keyword arguments (no bases)", () => {
-			const stmt = parseStatement(`class MyClass(metaclass=SingletonMeta, abstract=True):
-    pass`);
+			const stmt = parseStatement(
+				`class MyClass(metaclass=SingletonMeta, abstract=True):
+    pass`,
+			);
 			assertNodeType(stmt, "ClassDef");
 			expect(stmt.name).toBe("MyClass");
 			expect(stmt.bases).toHaveLength(0);

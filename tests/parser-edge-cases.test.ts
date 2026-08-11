@@ -1,7 +1,7 @@
-import { describe, expect, test } from "vitest";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { describe, expect, test } from "vitest";
 import {
 	copyLocation,
 	fixMissingLocations,
@@ -35,14 +35,16 @@ describe("parser edge cases", () => {
 		});
 
 		test("comment immediately after colon before newline in suite", () => {
-			const ast = parse("if True:  # note\n    pass\n", { comments: true });
-			expect(ast.comments && ast.comments.length).toBeGreaterThan(0);
+			const ast = parse("if True:  # note\n    pass\n", {
+				comments: true,
+			});
+			expect(ast.comments?.length).toBeGreaterThan(0);
 		});
 
 		test("comments before INDENT inside a block", () => {
 			const code = "if True:\n    # pre-indent comment\n    pass\n";
 			const ast = parse(code, { comments: true });
-			expect(ast.comments && ast.comments.length).toBeGreaterThan(0);
+			expect(ast.comments?.length).toBeGreaterThan(0);
 		});
 
 		test("comments nested in function/class/if/for/while/with/try/match bodies", () => {
@@ -88,7 +90,7 @@ describe("parser edge cases", () => {
 				"",
 			].join("\n");
 			const ast = parse(code, { comments: true });
-			expect(ast.comments && ast.comments.length).toBeGreaterThan(10);
+			expect(ast.comments?.length).toBeGreaterThan(10);
 		});
 
 		test("chained assignment collects trailing comment", () => {
@@ -105,26 +107,164 @@ describe("parser edge cases", () => {
 				expressionComments?: { value: string }[];
 			};
 			expect(stmt.nodeType).toBe("Assign");
-			expect(stmt.expressionComments && stmt.expressionComments.length).toBe(
-				1,
-			);
+			expect(stmt.expressionComments?.length).toBe(1);
 		});
 
 		test("comment skipped after comma in list literal", () => {
 			const ast = parse("x = [1,  # c\n    2]\n", { comments: true });
-			expect(ast.comments && ast.comments.length).toBeGreaterThan(0);
+			expect(ast.comments?.length).toBeGreaterThan(0);
 		});
 
 		test("comments inside function parameter list", () => {
 			const code = "def f(\n    a,  # first\n    b,\n):\n    pass\n";
 			const ast = parse(code, { comments: true });
-			expect(ast.comments && ast.comments.length).toBeGreaterThan(0);
+			expect(ast.comments?.length).toBeGreaterThan(0);
 		});
 
 		test("standalone comment on its own line inside parameter list", () => {
 			const code = "def f(\n    a,\n    # standalone\n    b,\n):\n    pass\n";
 			const ast = parse(code, { comments: true });
-			expect(ast.comments && ast.comments.length).toBeGreaterThan(0);
+			expect(ast.comments?.length).toBeGreaterThan(0);
+		});
+
+		test("a second inline comment for a statement that already has one is discarded, at module level", () => {
+			// The parenthesized tuple's trailing comma pulls "# internal" into
+			// the Assign's own inlineComment while still inside expression
+			// parsing; the semicolon then lets a second, genuinely separate
+			// "# external" comment surface only once the statement has
+			// already returned with inlineComment set.
+			const src = "x = (1,  # internal\n)  ;  # external\n";
+			const ast = parse(src, { comments: true });
+			const assign = ast.body[0] as ASTNode & {
+				inlineComment?: { value: string };
+			};
+			expect(assign.inlineComment?.value).toBe("# internal");
+			expect(ast.comments?.some((c) => c.value === "# external")).toBe(false);
+		});
+
+		test("a second inline comment for a statement that already has one is discarded, inside a suite", () => {
+			const src =
+				"if True:\n    x = (1,  # internal\n    )  ;  # external\n    pass\n";
+			const ast = parse(src, { comments: true });
+			const ifStmt = ast.body[0] as ASTNode & { body: ASTNode[] };
+			const assign = ifStmt.body[0] as ASTNode & {
+				inlineComment?: { value: string };
+			};
+			expect(assign.inlineComment?.value).toBe("# internal");
+			expect(ast.comments?.some((c) => c.value === "# external")).toBe(false);
+		});
+	});
+
+	describe("branch coverage: decorators, defs, classes", () => {
+		test("decorator followed by async-non-def throws", () => {
+			expect(() => parseCode("@deco\nasync x = 1\n")).toThrow(
+				/Invalid decorator target/,
+			);
+		});
+
+		test("decorated async def without a return-type annotation", () => {
+			// Only the decorated path routes through parseAsyncFunctionDef;
+			// a bare top-level `async def` goes through parseAsyncStmt instead,
+			// which delegates to parseFunctionDef.
+			const module = parseCode("@deco\nasync def f():\n    pass\n");
+			const fn = module.body[0] as ASTNode & { returns?: ASTNode };
+			expect(fn.nodeType).toBe("AsyncFunctionDef");
+			expect(fn.returns).toBeUndefined();
+		});
+
+		test("class with empty parentheses has no bases or keywords", () => {
+			const module = parseCode("class Foo():\n    pass\n");
+			const cls = module.body[0] as ASTNode & {
+				bases: unknown[];
+				keywords: unknown[];
+			};
+			expect(cls.nodeType).toBe("ClassDef");
+			expect(cls.bases).toEqual([]);
+			expect(cls.keywords).toEqual([]);
+		});
+	});
+
+	describe("branch coverage: tuple/exprlist/subscript edge shapes", () => {
+		test("assignment RHS testlist with three or more elements keeps building past the first comma", () => {
+			// A plain `a, b, c` expression statement is parsed by the
+			// separate parseTestListWithStar; assigning to a testlist RHS
+			// (parseTestList) is the only way to exercise this loop.
+			const module = parseCode("x = 1, 2, 3\n");
+			const assign = module.body[0] as ASTNode & {
+				value: ASTNode & { elts: ASTNode[] };
+			};
+			expect(assign.value.nodeType).toBe("Tuple");
+			expect(assign.value.elts).toHaveLength(3);
+		});
+
+		test("assignment RHS testlist starting at column 0 (via line continuation) uses its own col_offset", () => {
+			const module = parseCode("x = \\\n1, 2, 3\n");
+			const assign = module.body[0] as ASTNode & { value: ASTNode };
+			expect(assign.value.col_offset).toBe(0);
+		});
+
+		test("for-loop target with a trailing comma immediately before 'in'", () => {
+			const module = parseCode("for x, in seq:\n    pass\n");
+			const forStmt = module.body[0] as ASTNode & {
+				target: ASTNode & { elts: ASTNode[] };
+			};
+			expect(forStmt.target.nodeType).toBe("Tuple");
+			expect(forStmt.target.elts).toHaveLength(1);
+		});
+
+		test("comprehension target spanning a line continuation starts at column 0", () => {
+			const module = parseCode("data = [x for\na, b in pairs]\n");
+			const assign = module.body[0] as ASTNode & {
+				value: ASTNode & {
+					generators: { target: ASTNode }[];
+				};
+			};
+			const target = assign.value.generators[0].target;
+			expect(target.nodeType).toBe("Tuple");
+			expect(target.col_offset).toBe(0);
+		});
+
+		test("subscript list with a trailing comma immediately before ']'", () => {
+			const module = parseCode("x[1,]\n");
+			const expr = module.body[0] as ASTNode & {
+				value: ASTNode & { slice: ASTNode & { elts: ASTNode[] } };
+			};
+			expect(expr.value.slice.nodeType).toBe("Tuple");
+			expect(expr.value.slice.elts).toHaveLength(1);
+		});
+
+		test("subscript list spanning a line continuation starts at column 0", () => {
+			const module = parseCode("x[\n0,\n1]\n");
+			const expr = module.body[0] as ASTNode & {
+				value: ASTNode & { slice: ASTNode };
+			};
+			expect(expr.value.slice.col_offset).toBe(0);
+		});
+
+		test("slice with a lower bound and an explicit empty step (trailing colon before ']')", () => {
+			const module = parseCode("x[1:2:]\n");
+			const expr = module.body[0] as ASTNode & {
+				value: ASTNode & { slice: ASTNode & { step?: ASTNode } };
+			};
+			expect(expr.value.slice.nodeType).toBe("Slice");
+			expect(expr.value.slice.step).toBeUndefined();
+		});
+
+		test("slice with a lower bound spanning a line continuation starts at column 0", () => {
+			const module = parseCode("x[\n0:1]\n");
+			const expr = module.body[0] as ASTNode & {
+				value: ASTNode & { slice: ASTNode };
+			};
+			expect(expr.value.slice.col_offset).toBe(0);
+		});
+	});
+
+	describe("branch coverage: suite with an empty single-line body", () => {
+		test("a compound-statement keyword right after ':' yields an empty suite body", () => {
+			const module = parseCode("if True: class Foo: pass\n");
+			const ifStmt = module.body[0] as ASTNode & { body: ASTNode[] };
+			expect(ifStmt.body).toEqual([]);
+			expect(module.body[1]?.nodeType).toBe("ClassDef");
 		});
 	});
 
@@ -200,9 +340,7 @@ describe("parser edge cases", () => {
 		});
 
 		test("cannot assign to a lambda", () => {
-			expect(() => parseCode("(lambda: 1) = 2\n")).toThrow(
-				/cannot assign to/,
-			);
+			expect(() => parseCode("(lambda: 1) = 2\n")).toThrow(/cannot assign to/);
 		});
 
 		test("cannot assign to a literal", () => {
@@ -297,9 +435,9 @@ describe("parser edge cases", () => {
 		});
 
 		test("pattern that falls through to the default wildcard case is rejected", () => {
-			expect(() =>
-				parseCode("match x:\n    case -1:\n        pass\n"),
-			).toThrow(/Expected ':' after case pattern/);
+			expect(() => parseCode("match x:\n    case -1:\n        pass\n")).toThrow(
+				/Expected ':' after case pattern/,
+			);
 		});
 
 		test("blank line right after the match block's indent", () => {
@@ -324,7 +462,7 @@ describe("parser edge cases", () => {
 
 	describe("f-strings", () => {
 		test("nested f-string inside interpolation", () => {
-			const expr = parseCode('f"{f\'{x}\'}"\n');
+			const expr = parseCode("f\"{f'{x}'}\"\n");
 			expect(expr.body[0].nodeType).toBe("Expr");
 		});
 
@@ -361,7 +499,7 @@ describe("parser edge cases", () => {
 		});
 
 		test("unterminated nested f-string throws", () => {
-			expect(() => parseCode("f\"{f'{x}}\"\n")).toThrow(
+			expect(() => parseCode('f"{f\'{x}}"\n')).toThrow(
 				/Unterminated f-string starting at position/,
 			);
 		});
@@ -402,16 +540,14 @@ describe("parser edge cases", () => {
 
 		test("list comprehension: 'async' not followed by 'for' fails", () => {
 			expect(() =>
-				parseCode(
-					"async def f():\n    return [x async for x in y async z]\n",
-				),
+				parseCode("async def f():\n    return [x async for x in y async z]\n"),
 			).toThrow(/Expected '\]' after list comprehension/);
 		});
 
 		test("dict comprehension: second clause's 'async' not followed by 'for' fails", () => {
-			expect(() =>
-				parseCode("{k: v for k, v in x async z}\n"),
-			).toThrow(/Expected '}' after dict comprehension/);
+			expect(() => parseCode("{k: v for k, v in x async z}\n")).toThrow(
+				/Expected '}' after dict comprehension/,
+			);
 		});
 
 		test("set comprehension: second clause's 'async' not followed by 'for' fails", () => {
@@ -507,6 +643,11 @@ describe("parser edge cases", () => {
 			expect(stmt.nodeType).toBe("FunctionDef");
 		});
 
+		test("blank line between trailing comma and closing paren", () => {
+			const stmt = parseStatement("def f(\n    a,\n\n):\n    pass\n");
+			expect(stmt.nodeType).toBe("FunctionDef");
+		});
+
 		test("keyword-only params after bare star", () => {
 			const stmt = parseStatement("def f(a, *, b, c=1):\n    pass\n");
 			expect(stmt.nodeType).toBe("FunctionDef");
@@ -520,7 +661,9 @@ describe("parser edge cases", () => {
 		});
 
 		test("nonlocal with multiple names", () => {
-			const stmt = parseStatement("def f():\n    def g():\n        nonlocal a, b\n");
+			const stmt = parseStatement(
+				"def f():\n    def g():\n        nonlocal a, b\n",
+			);
 			expect(stmt.nodeType).toBe("FunctionDef");
 		});
 
@@ -683,6 +826,46 @@ describe("parser edge cases", () => {
 		test("fixMissingLocations handles non-object input gracefully", () => {
 			const module = parseCode("x = 1\n");
 			expect(() => fixMissingLocations(module)).not.toThrow();
+		});
+
+		test("fixMissingLocations falls back to parent location for a child whose own location keys are absent (array and object fields)", () => {
+			const raw = {
+				nodeType: "Module",
+				lineno: 7,
+				col_offset: 2,
+				end_lineno: 7,
+				end_col_offset: 20,
+				body: [
+					{
+						nodeType: "Wrapper",
+						child: {
+							nodeType: "Constant",
+							value: 1,
+							lineno: undefined,
+							col_offset: undefined,
+						},
+						children: [
+							{
+								nodeType: "Constant",
+								value: 2,
+								lineno: undefined,
+								col_offset: undefined,
+							},
+						],
+					},
+				],
+			} as unknown as ASTNode & {
+				body: (ASTNode & {
+					child: ASTNode;
+					children: ASTNode[];
+				})[];
+			};
+			const fixed = fixMissingLocations(raw) as typeof raw;
+			const wrapper = fixed.body[0];
+			expect(wrapper.child.lineno).toBe(7);
+			expect(wrapper.child.col_offset).toBe(2);
+			expect(wrapper.children[0].lineno).toBe(7);
+			expect(wrapper.children[0].col_offset).toBe(2);
 		});
 
 		test("fixMissingLocations skips primitive items inside array fields", () => {
