@@ -1,3 +1,10 @@
+# [1.10.0](https://github.com/kriss-u/py-ast/compare/v1.9.2...v1.10.0) (2026-08-11)
+
+
+### Features
+
+* add badges on README ([389724e](https://github.com/kriss-u/py-ast/commit/389724e47c27bbc0c15aaf4eca38cd45052ad572))
+
 ## [1.9.2](https://github.com/kriss-u/py-ast/compare/v1.9.1...v1.9.2) (2026-08-10)
 
 
