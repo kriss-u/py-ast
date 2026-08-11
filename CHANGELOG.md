@@ -1,3 +1,21 @@
+# [1.11.0](https://github.com/kriss-u/py-ast/compare/v1.10.1...v1.11.0) (2026-08-11)
+
+
+### Bug Fixes
+
+* add support for lambda *args, **kwargs ([bb9e8a6](https://github.com/kriss-u/py-ast/commit/bb9e8a601232e1cb4658b13f59185ba2da38b33b))
+* match multiple newlines after decorators ([efa202c](https://github.com/kriss-u/py-ast/commit/efa202c02601b104e6c5e711b3d85373ab4c3bb5))
+* parse *args, **kwargs anywhere ([6586b81](https://github.com/kriss-u/py-ast/commit/6586b819425768f2fda84470aee35476d47ae7f4))
+* parse context similar to CPython ([250f37f](https://github.com/kriss-u/py-ast/commit/250f37f8f848bd0739d3fd13e6a2cb9b94b1e7be))
+
+
+### Features
+
+* add support for complex numbers ([bbeaa99](https://github.com/kriss-u/py-ast/commit/bbeaa99057043ed719d8b3c7d6e5df47157b4c77))
+* add support for multiple for/if clauses ([971ce01](https://github.com/kriss-u/py-ast/commit/971ce012e0a106f1dae5fa1ea2e40e546dacff27))
+* add support for nested fstring and augmented assignment ([9382d9e](https://github.com/kriss-u/py-ast/commit/9382d9e20516e9ec428682e7c760340fe102e3a9))
+* add support for walrus syntax ([7749c5e](https://github.com/kriss-u/py-ast/commit/7749c5eb02333f33c91c468e108c5ede2a84f455))
+
 ## [1.10.1](https://github.com/kriss-u/py-ast/compare/v1.10.0...v1.10.1) (2026-08-11)
 
 
