@@ -297,6 +297,24 @@ describe("Unparser Edge Cases", () => {
 	});
 
 	describe("Operator precedence edge cases", () => {
+		test("left-grouped equal-precedence '**' keeps its parens", () => {
+			const ast = parse("(2 ** 3) ** 2");
+			expect(unparse(ast)).toBe("(2 ** 3) ** 2");
+		});
+
+		test("right-grouped equal-precedence '**' drops redundant parens", () => {
+			const ast = parse("2 ** (3 ** 2)");
+			expect(unparse(ast)).toBe("2 ** 3 ** 2");
+		});
+
+		test("unparenthesized chained '**' round-trips without adding parens", () => {
+			testRoundtrip("2 ** 3 ** 2");
+		});
+
+		test("left-grouped '**' round-trips to the same parenthesization", () => {
+			testRoundtrip("(2 ** 3) ** 2");
+		});
+
 		test("tuple as a binary operator operand", () => {
 			const ast = parse("(1, 2) + x");
 			expect(unparse(ast)).toBe("((1, 2)) + x");

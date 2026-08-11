@@ -947,16 +947,20 @@ class Unparser extends NodeVisitor {
 	 * either operand as needed to preserve evaluation order. Parenthesization
 	 * of the whole `BinOp` expression itself (relative to whatever contains
 	 * it) is decided by the caller, via `leftNeedsParens`/`rightNeedsParens`
-	 * at its own parent's call site. The right operand gets extra scrutiny:
-	 * for a left-associative operator, a right-hand child of *equal*
-	 * precedence still needs parens (`a - (b - c)` is not the same as
-	 * `a - b - c`), whereas for the right-associative `**` operator an
-	 * equal-precedence right child does not.
+	 * at its own parent's call site. The operand on the "non-associative"
+	 * side gets extra scrutiny: for a left-associative operator, a
+	 * right-hand child of *equal* precedence still needs parens (`a - (b -
+	 * c)` is not the same as `a - b - c`); for the right-associative `**`
+	 * operator it's the left-hand child that needs parens at equal
+	 * precedence instead (`(2 ** 3) ** 2` is not the same as `2 ** 3 ** 2`).
 	 */
 	visit_BinOp(node: Extract<ExprNode, { nodeType: "BinOp" }>): void {
 		const precedence = this.getBinOpPrecedence(node.op);
 
-		const leftNeedsParens = this.requireParens(precedence, node.left);
+		const leftNeedsParens =
+			this.requireParens(precedence, node.left) ||
+			(this.getPrecedence(node.left) === precedence &&
+				!this.isLeftAssociative(node.op));
 		if (leftNeedsParens) this.write("(");
 		this.withPrecedence(precedence, node.left);
 		if (leftNeedsParens) this.write(")");
