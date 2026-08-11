@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { parse } from "../src/index.js";
+import { parse, PyComplex } from "../src/index.js";
 import { assertNodeType, parseExpression } from "./test-helpers.js";
 
 describe("Basic Python Literals", () => {
@@ -49,6 +49,28 @@ describe("Basic Python Literals", () => {
 		expect(expr.left.nodeType).toBe("Constant");
 		expect(expr.right.nodeType).toBe("Constant");
 		expect(expr.op.nodeType).toBe("Add");
+	});
+
+	test("imaginary literal is a PyComplex, not a truncated number", () => {
+		const expr = parseExpression("4j");
+		assertNodeType(expr, "Constant");
+		expect(expr.value).toBeInstanceOf(PyComplex);
+		expect(expr.value).toEqual(new PyComplex(0, 4));
+	});
+
+	test("imaginary literal variations", () => {
+		const cases: [string, number][] = [
+			["1j", 1],
+			["1.5j", 1.5],
+			["0j", 0],
+			["1e10j", 1e10],
+			["1_000j", 1000],
+		];
+		for (const [source, imag] of cases) {
+			const expr = parseExpression(source);
+			assertNodeType(expr, "Constant");
+			expect(expr.value).toEqual(new PyComplex(0, imag));
+		}
 	});
 
 	test("hex, octal, binary literals", () => {

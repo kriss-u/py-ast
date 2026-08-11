@@ -32,6 +32,7 @@ import type {
 	UnaryOpNode,
 	WithItem,
 } from "./types.js";
+import { PyComplex } from "./types.js";
 
 /**
  * Options controlling how {@link parse} lexes and parses Python source.
@@ -475,7 +476,9 @@ export class Parser {
 				let name = this.consume(TokenType.NAME, "Expected module name").value;
 				// Handle dotted names like 'os.path'
 				while (this.match(TokenType.DOT)) {
-					name += `.${this.consume(TokenType.NAME, "Expected name after '.'").value}`;
+					name += `.${
+						this.consume(TokenType.NAME, "Expected name after '.'").value
+					}`;
 				}
 
 				let asname: string | undefined;
@@ -521,7 +524,9 @@ export class Parser {
 				module = this.advance().value;
 				// Handle dotted module names
 				while (this.match(TokenType.DOT)) {
-					module += `.${this.consume(TokenType.NAME, "Expected name after '.'").value}`;
+					module += `.${
+						this.consume(TokenType.NAME, "Expected name after '.'").value
+					}`;
 				}
 			}
 
@@ -555,8 +560,9 @@ export class Parser {
 
 					// Check if we've reached the end (trailing comma case)
 					if (hasParens && this.check(TokenType.RPAR)) break;
-					if (!hasParens && (this.check(TokenType.NEWLINE) || this.isAtEnd()))
+					if (!hasParens && (this.check(TokenType.NEWLINE) || this.isAtEnd())) {
 						break;
+					}
 
 					const name = this.consume(TokenType.NAME, "Expected name").value;
 					let asname: string | undefined;
@@ -3286,12 +3292,21 @@ export class Parser {
 		if (token.type === TokenType.PERCENTEQUAL) return { nodeType: "Mod" };
 		if (token.type === TokenType.AMPEREQUAL) return { nodeType: "BitAnd" };
 		if (token.type === TokenType.VBAREQUAL) return { nodeType: "BitOr" };
-		if (token.type === TokenType.CIRCUMFLEXEQUAL) return { nodeType: "BitXor" };
-		if (token.type === TokenType.LEFTSHIFTEQUAL) return { nodeType: "LShift" };
-		if (token.type === TokenType.RIGHTSHIFTEQUAL) return { nodeType: "RShift" };
-		if (token.type === TokenType.DOUBLESTAREQUAL) return { nodeType: "Pow" };
-		if (token.type === TokenType.DOUBLESLASHEQUAL)
+		if (token.type === TokenType.CIRCUMFLEXEQUAL) {
+			return { nodeType: "BitXor" };
+		}
+		if (token.type === TokenType.LEFTSHIFTEQUAL) {
+			return { nodeType: "LShift" };
+		}
+		if (token.type === TokenType.RIGHTSHIFTEQUAL) {
+			return { nodeType: "RShift" };
+		}
+		if (token.type === TokenType.DOUBLESTAREQUAL) {
+			return { nodeType: "Pow" };
+		}
+		if (token.type === TokenType.DOUBLESLASHEQUAL) {
 			return { nodeType: "FloorDiv" };
+		}
 		return { nodeType: "MatMult" };
 	}
 
@@ -3404,10 +3419,17 @@ export class Parser {
 	/**
 	 * Converts a raw numeric literal token value to a JS `number`, handling
 	 * hex (`0x`), octal (`0o`), binary (`0b`), float, and decimal-int forms.
+	 * A trailing `j`/`J` (imaginary literal, e.g. `4j`, `1.5e3j`) instead
+	 * yields a {@link PyComplex} with that magnitude as its imaginary part,
+	 * matching CPython's `complex` literal semantics.
 	 * @param value The raw token text of the numeric literal.
-	 * @returns The parsed numeric value.
+	 * @returns The parsed numeric value, or a {@link PyComplex} for imaginary literals.
 	 */
-	private parseNumber(value: string): number {
+	private parseNumber(value: string): number | PyComplex {
+		if (value.endsWith("j") || value.endsWith("J")) {
+			return new PyComplex(0, parseFloat(value.slice(0, -1)));
+		}
+
 		// Handle different number formats
 		if (value.startsWith("0x") || value.startsWith("0X")) {
 			return parseInt(value, 16);
@@ -4223,8 +4245,7 @@ export class Parser {
 					lineno: start.lineno,
 					col_offset: start.col_offset,
 				});
-			}
-			// Check for TypeVarTuple (*Ts)
+			} // Check for TypeVarTuple (*Ts)
 			else if (this.match(TokenType.STAR)) {
 				const name = this.consume(
 					TokenType.NAME,
@@ -4243,8 +4264,7 @@ export class Parser {
 					lineno: start.lineno,
 					col_offset: start.col_offset,
 				});
-			}
-			// Regular TypeVar (T, T: bound, T = default)
+			} // Regular TypeVar (T, T: bound, T = default)
 			else {
 				const name = this.consume(
 					TokenType.NAME,
@@ -4376,20 +4396,35 @@ function evaluateLiteral(node: ExprNode): any {
 		}
 		case "Set":
 			return new Set(node.elts.map(evaluateLiteral));
-		case "UnaryOp":
+		case "UnaryOp": {
+			const operand = evaluateLiteral(node.operand);
 			if (node.op.nodeType === "UAdd") {
-				return +evaluateLiteral(node.operand);
+				return operand instanceof PyComplex ? operand : +operand;
 			} else if (node.op.nodeType === "USub") {
-				return -evaluateLiteral(node.operand);
+				return operand instanceof PyComplex
+					? new PyComplex(-operand.real, -operand.imag)
+					: -operand;
 			}
 			break;
-		case "BinOp":
-			if (node.op.nodeType === "Add") {
-				return evaluateLiteral(node.left) + evaluateLiteral(node.right);
+		}
+		case "BinOp": {
+			const left = evaluateLiteral(node.left);
+			const right = evaluateLiteral(node.right);
+			if (left instanceof PyComplex || right instanceof PyComplex) {
+				const l = left instanceof PyComplex ? left : new PyComplex(left, 0);
+				const r = right instanceof PyComplex ? right : new PyComplex(right, 0);
+				if (node.op.nodeType === "Add") {
+					return new PyComplex(l.real + r.real, l.imag + r.imag);
+				} else if (node.op.nodeType === "Sub") {
+					return new PyComplex(l.real - r.real, l.imag - r.imag);
+				}
+			} else if (node.op.nodeType === "Add") {
+				return left + right;
 			} else if (node.op.nodeType === "Sub") {
-				return evaluateLiteral(node.left) - evaluateLiteral(node.right);
+				return left - right;
 			}
 			break;
+		}
 	}
 
 	throw new Error(`Cannot evaluate ${node.nodeType} in literal context`);

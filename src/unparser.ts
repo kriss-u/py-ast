@@ -11,6 +11,7 @@ import type {
 	StmtNode,
 	UnaryOpNode,
 } from "./types.js";
+import { PyComplex } from "./types.js";
 import { NodeVisitor } from "./visitor.js";
 
 /**
@@ -1347,6 +1348,9 @@ class Unparser extends NodeVisitor {
 			return this.formatString(value, kind);
 		}
 		if (typeof value === "number") {
+			return value.toString();
+		}
+		if (value instanceof PyComplex) {
 			return value.toString();
 		}
 		return String(value);

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { dump, parseModule, parsePython, toSource } from "../src/index.js";
 import type { ASTNodeUnion } from "../src/types.js";
+import { PyComplex } from "../src/types.js";
 
 describe("parsePython", () => {
 	it("parses source with default options", () => {
@@ -71,6 +72,22 @@ describe("dump", () => {
 		const tree = parseModule("x = 1");
 		const result = dump(tree);
 		expect(result).not.toContain("lineno");
+	});
+
+	it("renders a PyComplex constant value via its toString", () => {
+		const tree = parseModule("4j");
+		const result = dump(tree);
+		expect(result).toContain("Constant(value=4j)");
+	});
+
+	it("renders a PyComplex constant with a nonzero real part", () => {
+		const tree = parseModule("4j");
+		const exprStmt = tree.body[0] as unknown as {
+			value: { value: PyComplex };
+		};
+		exprStmt.value.value = new PyComplex(3, 4);
+		const result = dump(tree);
+		expect(result).toContain("Constant(value=(3+4j))");
 	});
 
 	it("formats multi-line output with a numeric indent", () => {

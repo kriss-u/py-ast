@@ -10,6 +10,7 @@ import {
 	parse,
 	parseFile,
 } from "../src/parser.js";
+import { PyComplex } from "../src/types.js";
 import type { ASTNode, Module } from "../src/types.js";
 import { parseCode, parseExpression, parseStatement } from "./test-helpers.js";
 
@@ -806,6 +807,19 @@ describe("parser edge cases", () => {
 		test("literalEval evaluates binary add/sub of numbers", () => {
 			expect(literalEval("1 + 2")).toBe(3);
 			expect(literalEval("5 - 2")).toBe(3);
+		});
+
+		test("literalEval evaluates imaginary literals", () => {
+			expect(literalEval("4j")).toEqual(new PyComplex(0, 4));
+			expect(literalEval("+4j")).toEqual(new PyComplex(0, 4));
+			expect(literalEval("-4j")).toEqual(new PyComplex(-0, -4));
+			expect(literalEval("3 + 4j")).toEqual(new PyComplex(3, 4));
+			expect(literalEval("3 - 4j")).toEqual(new PyComplex(3, -4));
+			expect(literalEval("4j + 3")).toEqual(new PyComplex(3, 4));
+			expect(literalEval("4j - 3")).toEqual(new PyComplex(-3, 4));
+			expect(literalEval("4j + 3j")).toEqual(new PyComplex(0, 7));
+			expect(literalEval("4j - 3j")).toEqual(new PyComplex(0, 1));
+			expect(() => literalEval("4j * 2")).toThrow(/Cannot evaluate/);
 		});
 
 		test("literalEval throws with no expression statement", () => {

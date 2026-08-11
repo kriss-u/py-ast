@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { parse, unparse } from "../src/index.js";
 import type { ASTNodeUnion } from "../src/types.js";
+import { PyComplex } from "../src/types.js";
 import { testRoundtrip, testUnparse } from "./test-helpers.js";
 
 describe("Unparser", () => {
@@ -511,6 +512,28 @@ describe("Unparser", () => {
 			testUnparse("3.14", "3.14");
 			testUnparse("'hello'", "'hello'");
 			testRoundtrip("42");
+		});
+
+		test("imaginary literal constants", () => {
+			testUnparse("4j", "4j");
+			testUnparse("3.5j", "3.5j");
+			testUnparse("0j", "0j");
+			testUnparse("-4j", "-4j");
+			testUnparse("3 + 4j", "3 + 4j");
+			testRoundtrip("4j");
+			testRoundtrip("3.5j");
+			testRoundtrip("-4j");
+		});
+
+		test("complex constant with a nonzero real part", () => {
+			const tree = parse("4j");
+			const exprStmt = tree.body[0] as unknown as {
+				value: { value: PyComplex };
+			};
+			exprStmt.value.value = new PyComplex(3, 4);
+			expect(unparse(tree).trim()).toBe("(3+4j)");
+			exprStmt.value.value = new PyComplex(3, -4);
+			expect(unparse(tree).trim()).toBe("(3-4j)");
 		});
 	});
 
