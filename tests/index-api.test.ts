@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-	dump,
-	parseModule,
-	parsePython,
-	toSource,
-	version,
-} from "../src/index.js";
+import { dump, parseModule, parsePython, toSource } from "../src/index.js";
 import type { ASTNodeUnion } from "../src/types.js";
 
 describe("parsePython", () => {
@@ -144,12 +138,5 @@ describe("dump", () => {
 		} as unknown as ASTNodeUnion;
 		const result = dump(fakeNode);
 		expect(result).toBe('FakeNode(meta={"foo":"bar"})');
-	});
-});
-
-describe("version", () => {
-	it("is a non-empty string", () => {
-		expect(typeof version).toBe("string");
-		expect(version.length).toBeGreaterThan(0);
 	});
 });

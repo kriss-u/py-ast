@@ -284,8 +284,3 @@ export function dump(
 
 	return formatNode(node);
 }
-
-/**
- * The current version of the `py-ast` package.
- */
-export const version = "1.0.0";
