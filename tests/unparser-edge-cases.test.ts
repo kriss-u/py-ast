@@ -351,6 +351,65 @@ describe("Unparser Edge Cases", () => {
 		test("bare named expression statement stays unparenthesized", () => {
 			testUnparse("x := 42", "x := 42");
 		});
+
+		test("named expression as a conditional expression's test requires parens", () => {
+			const ast = parse('x = "a" if (flag := True) else "b"');
+			expect(unparse(ast)).toBe('x = "a" if (flag := True) else "b"');
+		});
+
+		test("named expression as a comparison operand requires parens", () => {
+			const ast = parse("y = [v for v in range(10) if (v := v * 2) > 5]");
+			expect(unparse(ast)).toBe(
+				"y = [v for v in range(10) if (v := v * 2) > 5]",
+			);
+		});
+
+		test("boolean operator preserves parens around a lower-precedence operand", () => {
+			const ast = parse("z = (a or b) and c");
+			expect(unparse(ast)).toBe("z = (a or b) and c");
+		});
+
+		test("comparison preserves parens around a lower-precedence operand", () => {
+			const ast = parse("z = (a or b) == c");
+			expect(unparse(ast)).toBe("z = (a or b) == c");
+		});
+
+		test("comparison preserves parens around a conditional-expression operand", () => {
+			const ast = parse("z = (a if b else c) == d");
+			expect(unparse(ast)).toBe("z = (a if b else c) == d");
+		});
+
+		test("lambda used as a call target keeps its parens", () => {
+			const ast = parse("x = (lambda a, b: a * b)(3, 4)");
+			expect(unparse(ast)).toBe("x = (lambda a, b: a * b)(3, 4)");
+		});
+
+		test("conditional expression used as a call target keeps its parens", () => {
+			const ast = parse("x = (f if cond else g)(1)");
+			expect(unparse(ast)).toBe("x = (f if cond else g)(1)");
+		});
+
+		test("lambda used as an attribute base keeps its parens", () => {
+			const ast = parse("x = (lambda: obj).attr");
+			expect(unparse(ast)).toBe("x = (lambda: obj).attr");
+		});
+
+		test("lambda used as a subscript base keeps its parens", () => {
+			const ast = parse("x = (lambda: seq)[0]");
+			expect(unparse(ast)).toBe("x = (lambda: seq)[0]");
+		});
+	});
+
+	describe("Raw strings", () => {
+		test("raw string backslashes are not re-escaped", () => {
+			const ast = parse(String.raw`x = r"raw\bytes"`);
+			expect(unparse(ast)).toBe(String.raw`x = r"raw\bytes"`);
+		});
+
+		test("raw byte string backslashes are not re-escaped", () => {
+			const ast = parse(String.raw`x = rb"raw\bytes"`);
+			expect(unparse(ast)).toBe(String.raw`x = rb"raw\bytes"`);
+		});
 	});
 
 	describe("F-strings", () => {
