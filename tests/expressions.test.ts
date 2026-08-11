@@ -66,6 +66,59 @@ describe("Basic Python Literals", () => {
 	});
 });
 
+describe("Implicit string literal concatenation", () => {
+	test("two adjacent plain strings fold into one Constant", () => {
+		const expr = parseExpression('"a" "b"');
+		assertNodeType(expr, "Constant");
+		expect(expr.value).toBe("ab");
+	});
+
+	test("three adjacent strings with mixed quote styles fold into one Constant", () => {
+		const expr = parseExpression(`'a' "b" '''c'''`);
+		assertNodeType(expr, "Constant");
+		expect(expr.value).toBe("abc");
+	});
+
+	test("adjacent strings split across parenthesized lines still concatenate", () => {
+		const expr = parseExpression('(\n"a"\n"b"\n)');
+		assertNodeType(expr, "Constant");
+		expect(expr.value).toBe("ab");
+	});
+
+	test("plain string adjacent to an f-string produces a single JoinedStr", () => {
+		const expr = parseExpression('f"a{1}" "b"');
+		assertNodeType(expr, "JoinedStr");
+		expect(expr.values).toMatchObject([
+			{ nodeType: "Constant", value: "a" },
+			{ nodeType: "FormattedValue" },
+			{ nodeType: "Constant", value: "b" },
+		]);
+	});
+
+	test("f-string adjacent to a plain string merges trailing/leading literal text", () => {
+		const expr = parseExpression('"a" f"b{1}c" "d"');
+		assertNodeType(expr, "JoinedStr");
+		// "a" and the f-string's leading "b" literal merge into one Constant,
+		// as do the f-string's trailing "c" literal and the final "d".
+		expect(expr.values).toMatchObject([
+			{ nodeType: "Constant", value: "ab" },
+			{ nodeType: "FormattedValue" },
+			{ nodeType: "Constant", value: "cd" },
+		]);
+	});
+
+	test("assert message built from parenthesized adjacent strings", () => {
+		const module = parse('assert True, (\n"a"\n"b"\n)\n');
+		const assertStmt = module.body[0] as unknown as {
+			nodeType: string;
+			msg: { nodeType: string; value: string };
+		};
+		expect(assertStmt.nodeType).toBe("Assert");
+		expect(assertStmt.msg.nodeType).toBe("Constant");
+		expect(assertStmt.msg.value).toBe("ab");
+	});
+});
+
 describe("Collections", () => {
 	test("list literals", () => {
 		const expr = parseExpression("[1, 2, 3]");

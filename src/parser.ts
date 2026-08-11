@@ -11,6 +11,7 @@ import type {
 	CmpOpNode,
 	Comment,
 	Comprehension,
+	Constant,
 	ExceptHandler,
 	ExprNode,
 	FormattedValue,
@@ -2285,29 +2286,8 @@ export class Parser {
 			};
 		}
 
-		if (this.match(TokenType.STRING)) {
-			const token = this.previous();
-			const value = this.parseString(token.value);
-
-			// Check if this is an f-string
-			if (
-				token.value.toLowerCase().startsWith('f"') ||
-				token.value.toLowerCase().startsWith("f'")
-			) {
-				// Parse f-string with proper interpolation handling
-				return this.parseFString(token);
-			}
-
-			// Determine the quote style from the original token
-			const quoteStyle = this.getStringQuoteStyle(token.value);
-
-			return {
-				nodeType: "Constant",
-				value,
-				kind: quoteStyle,
-				lineno: token.lineno,
-				col_offset: token.col_offset,
-			};
+		if (this.check(TokenType.STRING)) {
+			return this.parseConcatenatedStringLiteral();
 		}
 
 		if (this.match(TokenType.TRUE)) {
@@ -2664,47 +2644,97 @@ export class Parser {
 	}
 
 	/**
-	 * Parses a `lambda`'s (simplified, unannotated) parameter list: plain
-	 * names with optional `=default` values, comma-separated.
-	 * @returns The parsed `Arguments` node (no posonly/kwonly/vararg/kwarg support).
+	 * Parses a `lambda`'s (unannotated) parameter list: positional-only args
+	 * (before `/`), regular args, `*args`/bare `*`, keyword-only args, and
+	 * `**kwargs`, each with an optional default (no annotations, since
+	 * lambda parameters can't be annotated).
+	 * @returns The parsed `Arguments` node.
 	 * @throws {ParseError} On malformed parameter syntax.
 	 */
 	private parseLambdaParameters(): Arguments {
+		const posonlyargs: Arg[] = [];
 		const args: Arg[] = [];
+		let vararg: Arg | undefined;
+		const kwonlyargs: Arg[] = [];
+		const kw_defaults: (ExprNode | null)[] = [];
+		let kwarg: Arg | undefined;
 		const defaults: ExprNode[] = [];
 
-		// Parse lambda parameters: name, name=default, name, name=default, ...
+		let seenStar = false;
+
 		do {
-			if (!this.check(TokenType.NAME)) {
-				break;
-			}
+			if (this.match(TokenType.SLASH)) {
+				// Positional-only separator
+				posonlyargs.push(...args);
+				args.length = 0;
+			} else if (this.match(TokenType.STAR)) {
+				seenStar = true;
 
-			const name = this.advance().value;
-			const arg: Arg = {
-				nodeType: "Arg",
-				arg: name,
-				annotation: undefined,
-				lineno: this.previous().lineno,
-				col_offset: this.previous().col_offset,
-			};
+				if (this.check(TokenType.NAME)) {
+					const name = this.advance().value;
+					vararg = {
+						nodeType: "Arg",
+						arg: name,
+						annotation: undefined,
+						lineno: this.previous().lineno,
+						col_offset: this.previous().col_offset,
+					};
+				}
+				// After *, all following params are keyword-only
+			} else if (this.match(TokenType.DOUBLESTAR)) {
+				const name = this.consume(
+					TokenType.NAME,
+					"Expected parameter name",
+				).value;
 
-			args.push(arg);
+				kwarg = {
+					nodeType: "Arg",
+					arg: name,
+					annotation: undefined,
+					lineno: this.previous().lineno,
+					col_offset: this.previous().col_offset,
+				};
+			} else {
+				const name = this.consume(
+					TokenType.NAME,
+					"Expected parameter name",
+				).value;
 
-			// Check for default value
-			if (this.match(TokenType.EQUAL)) {
-				const defaultValue = this.parseTest();
-				defaults.push(defaultValue);
+				let defaultValue: ExprNode | undefined;
+				if (this.match(TokenType.EQUAL)) {
+					defaultValue = this.parseTest();
+				}
+
+				const arg: Arg = {
+					nodeType: "Arg",
+					arg: name,
+					annotation: undefined,
+					lineno: this.previous().lineno,
+					col_offset: this.previous().col_offset,
+				};
+
+				if (seenStar) {
+					// After *, these are keyword-only
+					kwonlyargs.push(arg);
+					kw_defaults.push(defaultValue || null);
+				} else {
+					// Regular positional arguments
+					args.push(arg);
+					if (defaultValue) {
+						defaults.push(defaultValue);
+					}
+				}
 			}
 		} while (this.match(TokenType.COMMA) && !this.check(TokenType.COLON));
 
 		return {
 			nodeType: "Arguments",
-			posonlyargs: [],
+			posonlyargs,
 			args,
-			vararg: undefined,
-			kwonlyargs: [],
-			kw_defaults: [],
-			kwarg: undefined,
+			vararg,
+			kwonlyargs,
+			kw_defaults,
+			kwarg,
 			defaults,
 		};
 	}
@@ -3316,6 +3346,87 @@ export class Parser {
 			return `${prefix}"`;
 		}
 		return `${prefix}'`;
+	}
+
+	/**
+	 * Parses one or more adjacent `STRING` tokens (Python's implicit string
+	 * literal concatenation, e.g. `"a" "b"` or `f"x" "y"`) as a single
+	 * expression. Plain string tokens fold into one `Constant`; if any token
+	 * is an f-string, the result is a single `JoinedStr` with adjacent
+	 * literal parts merged, matching CPython's `ast` output.
+	 * @returns A `Constant` (all-plain case) or `JoinedStr` (any f-string present) node.
+	 * @throws {ParseError} If an f-string expression is malformed.
+	 */
+	private parseConcatenatedStringLiteral(): ExprNode {
+		const start = this.peek();
+		const parts: ExprNode[] = [];
+		let anyFString = false;
+
+		while (this.match(TokenType.STRING)) {
+			const token = this.previous();
+
+			if (
+				token.value.toLowerCase().startsWith('f"') ||
+				token.value.toLowerCase().startsWith("f'")
+			) {
+				anyFString = true;
+				parts.push(this.parseFString(token));
+			} else {
+				parts.push({
+					nodeType: "Constant",
+					value: this.parseString(token.value),
+					kind: this.getStringQuoteStyle(token.value),
+					lineno: token.lineno,
+					col_offset: token.col_offset,
+				});
+			}
+		}
+
+		if (parts.length === 1) {
+			return parts[0];
+		}
+
+		if (!anyFString) {
+			const combined = parts.map((part) => (part as Constant).value).join("");
+			return {
+				nodeType: "Constant",
+				value: combined,
+				kind: (parts[0] as Constant).kind,
+				lineno: start.lineno,
+				col_offset: start.col_offset,
+			};
+		}
+
+		const values: ExprNode[] = [];
+		for (const part of parts) {
+			if (part.nodeType === "JoinedStr") {
+				values.push(...part.values);
+			} else {
+				values.push(part);
+			}
+		}
+
+		const merged: ExprNode[] = [];
+		for (const value of values) {
+			const last = merged[merged.length - 1];
+			if (
+				last?.nodeType === "Constant" &&
+				value.nodeType === "Constant" &&
+				typeof last.value === "string" &&
+				typeof value.value === "string"
+			) {
+				last.value += value.value;
+			} else {
+				merged.push(value);
+			}
+		}
+
+		return {
+			nodeType: "JoinedStr",
+			values: merged,
+			lineno: start.lineno,
+			col_offset: start.col_offset,
+		};
 	}
 
 	/**
