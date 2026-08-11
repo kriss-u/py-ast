@@ -851,7 +851,10 @@ export class Parser {
 		while (this.match(TokenType.AT)) {
 			const decorator = this.parseTest();
 			decorators.push(decorator);
-			this.match(TokenType.NEWLINE);
+			while (this.match(TokenType.NEWLINE)) {
+				// Consume extra NEWLINEs left behind by blank lines or
+				// comment-only lines between the decorator and its target.
+			}
 		}
 
 		return decorators;

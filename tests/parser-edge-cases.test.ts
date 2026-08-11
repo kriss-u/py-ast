@@ -182,6 +182,35 @@ describe("parser edge cases", () => {
 			expect(cls.bases).toEqual([]);
 			expect(cls.keywords).toEqual([]);
 		});
+
+		test("comment-only line between a decorator and its target does not throw", () => {
+			const module = parseCode(
+				"@deco\n# pragma: valid SAT pragma\ndef f():\n    pass\n",
+			);
+			const fn = module.body[0] as ASTNode & { lineno: number };
+			expect(fn.nodeType).toBe("FunctionDef");
+			expect(fn.lineno).toBe(3);
+		});
+
+		test("blank line between a decorator and its target does not throw", () => {
+			const module = parseCode("@deco\n\ndef f():\n    pass\n");
+			const fn = module.body[0] as ASTNode & { lineno: number };
+			expect(fn.nodeType).toBe("FunctionDef");
+			expect(fn.lineno).toBe(3);
+		});
+
+		test("multiple comment-only lines between stacked decorators do not throw", () => {
+			const module = parseCode(
+				"@deco1\n# note one\n# note two\n@deco2\n\nclass C:\n    pass\n",
+			);
+			const cls = module.body[0] as ASTNode & {
+				decorator_list: unknown[];
+				lineno: number;
+			};
+			expect(cls.nodeType).toBe("ClassDef");
+			expect(cls.decorator_list).toHaveLength(2);
+			expect(cls.lineno).toBe(6);
+		});
 	});
 
 	describe("branch coverage: tuple/exprlist/subscript edge shapes", () => {
