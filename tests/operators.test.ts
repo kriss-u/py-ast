@@ -230,6 +230,40 @@ describe("Lambda Expressions", () => {
 		assertNodeType(expr, "Lambda");
 		expect(expr.args.args).toHaveLength(0);
 	});
+
+	test("lambda with *args", () => {
+		const expr = parseExpression("lambda *args: args");
+		assertNodeType(expr, "Lambda");
+		expect(expr.args.args).toHaveLength(0);
+		expect(expr.args.vararg?.arg).toBe("args");
+	});
+
+	test("lambda with **kwargs", () => {
+		const expr = parseExpression("lambda **kwargs: kwargs");
+		assertNodeType(expr, "Lambda");
+		expect(expr.args.kwarg?.arg).toBe("kwargs");
+	});
+
+	test("lambda with positional-only, keyword-only, *args and **kwargs", () => {
+		const expr = parseExpression(
+			"lambda a, /, b=1, *args, c, d=2, **kwargs: None",
+		);
+		assertNodeType(expr, "Lambda");
+		expect(expr.args.posonlyargs.map((a) => a.arg)).toEqual(["a"]);
+		expect(expr.args.args.map((a) => a.arg)).toEqual(["b"]);
+		expect(expr.args.defaults).toHaveLength(1);
+		expect(expr.args.vararg?.arg).toBe("args");
+		expect(expr.args.kwonlyargs.map((a) => a.arg)).toEqual(["c", "d"]);
+		expect(expr.args.kw_defaults).toEqual([null, expect.anything()]);
+		expect(expr.args.kwarg?.arg).toBe("kwargs");
+	});
+
+	test("lambda with bare * marking keyword-only params, no vararg", () => {
+		const expr = parseExpression("lambda *, c: c");
+		assertNodeType(expr, "Lambda");
+		expect(expr.args.vararg).toBeUndefined();
+		expect(expr.args.kwonlyargs.map((a) => a.arg)).toEqual(["c"]);
+	});
 });
 
 describe("Walrus Operator", () => {
@@ -238,5 +272,12 @@ describe("Walrus Operator", () => {
 		assertNodeType(expr, "NamedExpr");
 		expect(expr.target.nodeType).toBe("Name");
 		expect(expr.value.nodeType).toBe("Constant");
+	});
+
+	test("named expression target gets Store context, matching CPython", () => {
+		const expr = parseExpression("(x := 42)");
+		assertNodeType(expr, "NamedExpr");
+		assertNodeType(expr.target, "Name");
+		expect(expr.target.ctx.nodeType).toBe("Store");
 	});
 });

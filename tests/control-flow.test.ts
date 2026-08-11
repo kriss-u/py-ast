@@ -325,6 +325,51 @@ describe("With Statements", () => {
     pass`);
 		assertNodeType(stmt, "AsyncWith");
 	});
+
+	test("parenthesized with-items (PEP 617)", () => {
+		const stmt = parseStatement(`with (context1 as var1, context2 as var2):
+    pass`);
+		assertNodeType(stmt, "With");
+		expect(stmt.items).toHaveLength(2);
+		expect(stmt.items[0].optional_vars?.nodeType).toBe("Name");
+		expect(stmt.items[1].optional_vars?.nodeType).toBe("Name");
+	});
+
+	test("parenthesized with-items with trailing comma", () => {
+		const stmt = parseStatement(`with (
+    context1 as var1,
+    context2 as var2,
+):
+    pass`);
+		assertNodeType(stmt, "With");
+		expect(stmt.items).toHaveLength(2);
+	});
+
+	test("parenthesized with-items without 'as' (not a tuple)", () => {
+		const stmt = parseStatement(`with (context1, context2):
+    pass`);
+		assertNodeType(stmt, "With");
+		expect(stmt.items).toHaveLength(2);
+		expect(stmt.items[0].context_expr.nodeType).toBe("Name");
+		expect(stmt.items[1].context_expr.nodeType).toBe("Name");
+	});
+
+	test("parenthesized tuple context manager is still a single item", () => {
+		const stmt = parseStatement(`with (context1, context2) as var:
+    pass`);
+		assertNodeType(stmt, "With");
+		expect(stmt.items).toHaveLength(1);
+		expect(stmt.items[0].context_expr.nodeType).toBe("Tuple");
+		expect(stmt.items[0].optional_vars?.nodeType).toBe("Name");
+	});
+
+	test("parenthesized generator expression context manager", () => {
+		const stmt = parseStatement(`with (x for x in range(3)):
+    pass`);
+		assertNodeType(stmt, "With");
+		expect(stmt.items).toHaveLength(1);
+		expect(stmt.items[0].context_expr.nodeType).toBe("GeneratorExp");
+	});
 });
 
 describe("Try Statements", () => {

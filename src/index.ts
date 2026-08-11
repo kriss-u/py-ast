@@ -73,6 +73,12 @@ export type {
 	WithItem,
 } from "./types.js";
 /**
+ * Represents a Python `complex` value on a {@link Constant} node's `value`
+ * (produced by parsing an imaginary literal like `4j`), since JS has no
+ * native complex number type.
+ */
+export { PyComplex } from "./types.js";
+/**
  * Convert an AST node back into Python source code.
  * @see {@link ./unparser.js} for the implementation.
  */
@@ -107,6 +113,7 @@ export { NodeTransformer, NodeVisitor, walk } from "./visitor.js";
 // Convenience functions similar to Python's ast module
 import { parse } from "./parser.js";
 import type { ASTNodeUnion, Module } from "./types.js";
+import { PyComplex } from "./types.js";
 import { unparse } from "./unparser.js";
 
 /**
@@ -212,6 +219,10 @@ export function dump(
 	function formatNode(node: any, level: number = 0): string {
 		if (!node || typeof node !== "object") {
 			return JSON.stringify(node);
+		}
+
+		if (node instanceof PyComplex) {
+			return node.toString();
 		}
 
 		if (Array.isArray(node)) {

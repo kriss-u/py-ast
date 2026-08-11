@@ -96,6 +96,19 @@ describe("Assignment Statements", () => {
 		expect(stmt.value.nodeType).toBe("Tuple");
 	});
 
+	test("list-target assignment gets recursive Store context, matching CPython", () => {
+		const stmt = parseStatement("[a, b] = [1, 2]");
+		assertNodeType(stmt, "Assign");
+		const target = stmt.targets[0];
+		assertNodeType(target, "List");
+		expect(target.ctx.nodeType).toBe("Store");
+		expect(
+			target.elts.every(
+				(elt) => elt.nodeType === "Name" && elt.ctx.nodeType === "Store",
+			),
+		).toBe(true);
+	});
+
 	test("starred assignment", () => {
 		const stmt = parseStatement("x, *y, z = values");
 		assertNodeType(stmt, "Assign");
@@ -188,6 +201,34 @@ describe("Augmented Assignment", () => {
 		const stmt = parseStatement("x @= matrix");
 		assertNodeType(stmt, "AugAssign");
 		expect(stmt.op.nodeType).toBe("MatMult");
+	});
+
+	test("valid single-target forms", () => {
+		expect(() => parseStatement("x += 1")).not.toThrow();
+		expect(() => parseStatement("x.attr += 1")).not.toThrow();
+		expect(() => parseStatement("x[0] += 1")).not.toThrow();
+	});
+
+	test("cannot augmented-assign to a tuple target", () => {
+		expect(() => parseStatement("x, y += 1")).toThrow(
+			/tuple.*illegal expression for augmented assignment/,
+		);
+	});
+
+	test("cannot augmented-assign to a list target", () => {
+		expect(() => parseStatement("[x, y] += 1")).toThrow(
+			/list.*illegal expression for augmented assignment/,
+		);
+	});
+
+	test("cannot augmented-assign to a starred target", () => {
+		expect(() => parseStatement("*x += 1")).toThrow(
+			/starred.*illegal expression for augmented assignment/,
+		);
+	});
+
+	test("cannot augmented-assign to a literal", () => {
+		expect(() => parseStatement("1 += 1")).toThrow(/cannot assign to literal/);
 	});
 });
 

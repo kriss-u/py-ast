@@ -324,6 +324,12 @@ export class Lexer {
 			return;
 		}
 
+		// Leading-dot float literals (e.g. `.5`)
+		if (c === "." && this.isDigit(this.peekNext())) {
+			this.scanNumber();
+			return;
+		}
+
 		// Identifiers and keywords - check for f-strings first
 		if (this.isAlpha(c) || c === "_") {
 			// Check for f-string
@@ -724,11 +730,13 @@ export class Lexer {
 			this.advance();
 		}
 
-		// Handle decimal point
+		// Handle decimal point. A digit before the dot means the dot always
+		// starts a fractional part, even with no digits after it (e.g. `5.`);
+		// a digit is only required after the dot when there were no digits
+		// before it (handled by the leading-dot dispatch in `scanToken`).
 		if (
 			this.peek() === "." &&
-			this.position.index + 1 < this.source.length &&
-			this.isDigit(this.peekNext())
+			(value.length > 0 || this.isDigit(this.peekNext()))
 		) {
 			value += this.peek();
 			this.advance();

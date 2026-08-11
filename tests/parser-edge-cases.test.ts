@@ -10,8 +10,9 @@ import {
 	parse,
 	parseFile,
 } from "../src/parser.js";
+import { PyComplex } from "../src/types.js";
 import type { ASTNode, Module } from "../src/types.js";
-import { parseCode, parseStatement } from "./test-helpers.js";
+import { parseCode, parseExpression, parseStatement } from "./test-helpers.js";
 
 describe("parser edge cases", () => {
 	describe("comment handling at module level", () => {
@@ -181,6 +182,35 @@ describe("parser edge cases", () => {
 			expect(cls.nodeType).toBe("ClassDef");
 			expect(cls.bases).toEqual([]);
 			expect(cls.keywords).toEqual([]);
+		});
+
+		test("comment-only line between a decorator and its target does not throw", () => {
+			const module = parseCode(
+				"@deco\n# pragma: valid SAT pragma\ndef f():\n    pass\n",
+			);
+			const fn = module.body[0] as ASTNode & { lineno: number };
+			expect(fn.nodeType).toBe("FunctionDef");
+			expect(fn.lineno).toBe(3);
+		});
+
+		test("blank line between a decorator and its target does not throw", () => {
+			const module = parseCode("@deco\n\ndef f():\n    pass\n");
+			const fn = module.body[0] as ASTNode & { lineno: number };
+			expect(fn.nodeType).toBe("FunctionDef");
+			expect(fn.lineno).toBe(3);
+		});
+
+		test("multiple comment-only lines between stacked decorators do not throw", () => {
+			const module = parseCode(
+				"@deco1\n# note one\n# note two\n@deco2\n\nclass C:\n    pass\n",
+			);
+			const cls = module.body[0] as ASTNode & {
+				decorator_list: unknown[];
+				lineno: number;
+			};
+			expect(cls.nodeType).toBe("ClassDef");
+			expect(cls.decorator_list).toHaveLength(2);
+			expect(cls.lineno).toBe(6);
 		});
 	});
 
@@ -671,6 +701,18 @@ describe("parser edge cases", () => {
 			const ast = parseCode("if (n := 10) > 5:\n    pass\n");
 			expect(ast.body[0].nodeType).toBe("If");
 		});
+
+		test("setContext no-op branch: a non-target-shaped walrus target is left structurally unchanged", () => {
+			// The parser (like this walrus production specifically) doesn't restrict
+			// `:=`'s target to a bare NAME the way CPython does; setContext's fallback
+			// branch simply leaves non-Name/Attribute/Subscript/Starred/List/Tuple
+			// nodes untouched rather than crashing.
+			const expr = parseExpression("(a + b := 5)");
+			expect(expr.nodeType).toBe("NamedExpr");
+			if (expr.nodeType === "NamedExpr") {
+				expect(expr.target.nodeType).toBe("BinOp");
+			}
+		});
 	});
 
 	describe("chained comparisons and starred assignment", () => {
@@ -765,6 +807,19 @@ describe("parser edge cases", () => {
 		test("literalEval evaluates binary add/sub of numbers", () => {
 			expect(literalEval("1 + 2")).toBe(3);
 			expect(literalEval("5 - 2")).toBe(3);
+		});
+
+		test("literalEval evaluates imaginary literals", () => {
+			expect(literalEval("4j")).toEqual(new PyComplex(0, 4));
+			expect(literalEval("+4j")).toEqual(new PyComplex(0, 4));
+			expect(literalEval("-4j")).toEqual(new PyComplex(-0, -4));
+			expect(literalEval("3 + 4j")).toEqual(new PyComplex(3, 4));
+			expect(literalEval("3 - 4j")).toEqual(new PyComplex(3, -4));
+			expect(literalEval("4j + 3")).toEqual(new PyComplex(3, 4));
+			expect(literalEval("4j - 3")).toEqual(new PyComplex(-3, 4));
+			expect(literalEval("4j + 3j")).toEqual(new PyComplex(0, 7));
+			expect(literalEval("4j - 3j")).toEqual(new PyComplex(0, 1));
+			expect(() => literalEval("4j * 2")).toThrow(/Cannot evaluate/);
 		});
 
 		test("literalEval throws with no expression statement", () => {

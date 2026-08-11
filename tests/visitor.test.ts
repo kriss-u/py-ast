@@ -26,7 +26,7 @@ describe("walk", () => {
 			"Module",
 			"Assign",
 			"Name",
-			"Load",
+			"Store",
 			"BinOp",
 			"Constant",
 			"Add",

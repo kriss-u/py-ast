@@ -11,7 +11,10 @@ import type {
 	CmpOpNode,
 	Comment,
 	Comprehension,
+	Constant,
+	Del,
 	ExceptHandler,
+	ExprContextNode,
 	ExprNode,
 	FormattedValue,
 	JoinedStr,
@@ -29,6 +32,7 @@ import type {
 	UnaryOpNode,
 	WithItem,
 } from "./types.js";
+import { PyComplex } from "./types.js";
 
 /**
  * Options controlling how {@link parse} lexes and parses Python source.
@@ -414,6 +418,10 @@ export class Parser {
 			while (this.match(TokenType.COMMA)) {
 				targets.push(this.parseExpr());
 			}
+			for (const target of targets) {
+				this.validateAssignmentTarget(target);
+				this.setContext(target, this.createDel());
+			}
 			return {
 				nodeType: "Delete",
 				targets,
@@ -468,7 +476,9 @@ export class Parser {
 				let name = this.consume(TokenType.NAME, "Expected module name").value;
 				// Handle dotted names like 'os.path'
 				while (this.match(TokenType.DOT)) {
-					name += `.${this.consume(TokenType.NAME, "Expected name after '.'").value}`;
+					name += `.${
+						this.consume(TokenType.NAME, "Expected name after '.'").value
+					}`;
 				}
 
 				let asname: string | undefined;
@@ -514,7 +524,9 @@ export class Parser {
 				module = this.advance().value;
 				// Handle dotted module names
 				while (this.match(TokenType.DOT)) {
-					module += `.${this.consume(TokenType.NAME, "Expected name after '.'").value}`;
+					module += `.${
+						this.consume(TokenType.NAME, "Expected name after '.'").value
+					}`;
 				}
 			}
 
@@ -548,8 +560,9 @@ export class Parser {
 
 					// Check if we've reached the end (trailing comma case)
 					if (hasParens && this.check(TokenType.RPAR)) break;
-					if (!hasParens && (this.check(TokenType.NEWLINE) || this.isAtEnd()))
+					if (!hasParens && (this.check(TokenType.NEWLINE) || this.isAtEnd())) {
 						break;
+					}
 
 					const name = this.consume(TokenType.NAME, "Expected name").value;
 					let asname: string | undefined;
@@ -689,6 +702,10 @@ export class Parser {
 				}
 			}
 
+			for (const target of targets) {
+				this.setContext(target, this.createStore());
+			}
+
 			const assignNode: StmtNode & { expressionComments?: Comment[] } = {
 				nodeType: "Assign",
 				targets,
@@ -717,7 +734,8 @@ export class Parser {
 			return assignNode;
 		} else if (this.matchAugAssign()) {
 			// Augmented assignment
-			this.validateAssignmentTarget(expr);
+			this.validateAugAssignTarget(expr);
+			this.setContext(expr, this.createStore());
 			const op = this.parseAugAssignOp();
 			const value = this.parseTest();
 			return {
@@ -730,6 +748,8 @@ export class Parser {
 			};
 		} else if (this.match(TokenType.COLON)) {
 			// Annotated assignment
+			this.validateAssignmentTarget(expr);
+			this.setContext(expr, this.createStore());
 			const annotation = this.parseTest();
 			let value: ExprNode | undefined;
 
@@ -851,7 +871,10 @@ export class Parser {
 		while (this.match(TokenType.AT)) {
 			const decorator = this.parseTest();
 			decorators.push(decorator);
-			this.match(TokenType.NEWLINE);
+			while (this.match(TokenType.NEWLINE)) {
+				// Consume extra NEWLINEs left behind by blank lines or
+				// comment-only lines between the decorator and its target.
+			}
 		}
 
 		return decorators;
@@ -1201,23 +1224,7 @@ export class Parser {
 	 * @throws {ParseError} On malformed statement syntax.
 	 */
 	private parseWithStmt(start: Token): StmtNode {
-		const items: WithItem[] = [];
-
-		// Parse with items
-		do {
-			const context_expr = this.parseTest();
-			let optional_vars: ExprNode | undefined;
-
-			if (this.match(TokenType.AS)) {
-				optional_vars = this.parseExpr();
-			}
-
-			items.push({
-				nodeType: "WithItem",
-				context_expr,
-				optional_vars,
-			});
-		} while (this.match(TokenType.COMMA));
+		const items = this.parseWithItems();
 
 		this.consume(TokenType.COLON, "Expected ':' after with clause");
 		const body = this.parseSuite();
@@ -1229,6 +1236,77 @@ export class Parser {
 			lineno: start.lineno,
 			col_offset: start.col_offset,
 		};
+	}
+
+	/**
+	 * Parses the with-item list of a `with` statement, including CPython's
+	 * PEP 617 parenthesized form (`with (a as x, b as y):`). Because a
+	 * leading `(` is ambiguous with a plain parenthesized/tuple
+	 * context-manager expression (e.g. `with (a, b) as x:`), this
+	 * speculatively parses `'(' with_item (',' with_item)* ','? ')'`
+	 * and only commits to it if it is immediately followed by `:` —
+	 * otherwise it backtracks and parses a single, possibly parenthesized,
+	 * expression per item instead, matching CPython's PEG grammar.
+	 * @returns The parsed list of `WithItem` nodes.
+	 */
+	private parseWithItems(): WithItem[] {
+		if (this.check(TokenType.LPAR)) {
+			const savedPos = this.current;
+			const savedComments = this.pendingComments.length;
+
+			try {
+				this.advance(); // consume '('
+				const items = this.parseWithItemList(true);
+
+				if (this.check(TokenType.RPAR)) {
+					this.advance(); // consume ')'
+					if (this.check(TokenType.COLON)) {
+						return items;
+					}
+				}
+			} catch {
+				// Not a parenthesized with-item list (e.g. `with (x for x in y):`,
+				// where the outer parens belong to a single expression) — fall
+				// through to backtrack and reparse as a plain expression below.
+			}
+
+			this.current = savedPos;
+			this.pendingComments.length = savedComments;
+		}
+
+		return this.parseWithItemList(false);
+	}
+
+	/**
+	 * Parses a comma-separated list of with-items (`expr ['as' target]`).
+	 * @param allowTrailingComma When `true`, a trailing comma may be
+	 *   followed directly by the closing `)` of a parenthesized with-item
+	 *   list, per PEP 617.
+	 * @returns The parsed list of `WithItem` nodes.
+	 */
+	private parseWithItemList(allowTrailingComma: boolean): WithItem[] {
+		const items: WithItem[] = [];
+
+		do {
+			if (allowTrailingComma && this.check(TokenType.RPAR)) break;
+
+			const context_expr = this.parseTest();
+			let optional_vars: ExprNode | undefined;
+
+			if (this.match(TokenType.AS)) {
+				optional_vars = this.parseExpr();
+				this.validateAssignmentTarget(optional_vars);
+				this.setContext(optional_vars, this.createStore());
+			}
+
+			items.push({
+				nodeType: "WithItem",
+				context_expr,
+				optional_vars,
+			});
+		} while (this.match(TokenType.COMMA));
+
+		return items;
 	}
 
 	/**
@@ -1774,6 +1852,7 @@ export class Parser {
 
 		// Check for named expression (walrus operator :=)
 		if (this.match(TokenType.COLONEQUAL)) {
+			this.setContext(expr, this.createStore());
 			const value = this.parseAndTest();
 			return {
 				nodeType: "NamedExpr",
@@ -2282,29 +2361,8 @@ export class Parser {
 			};
 		}
 
-		if (this.match(TokenType.STRING)) {
-			const token = this.previous();
-			const value = this.parseString(token.value);
-
-			// Check if this is an f-string
-			if (
-				token.value.toLowerCase().startsWith('f"') ||
-				token.value.toLowerCase().startsWith("f'")
-			) {
-				// Parse f-string with proper interpolation handling
-				return this.parseFString(token);
-			}
-
-			// Determine the quote style from the original token
-			const quoteStyle = this.getStringQuoteStyle(token.value);
-
-			return {
-				nodeType: "Constant",
-				value,
-				kind: quoteStyle,
-				lineno: token.lineno,
-				col_offset: token.col_offset,
-			};
+		if (this.check(TokenType.STRING)) {
+			return this.parseConcatenatedStringLiteral();
 		}
 
 		if (this.match(TokenType.TRUE)) {
@@ -2661,60 +2719,113 @@ export class Parser {
 	}
 
 	/**
-	 * Parses a `lambda`'s (simplified, unannotated) parameter list: plain
-	 * names with optional `=default` values, comma-separated.
-	 * @returns The parsed `Arguments` node (no posonly/kwonly/vararg/kwarg support).
+	 * Parses a `lambda`'s (unannotated) parameter list: positional-only args
+	 * (before `/`), regular args, `*args`/bare `*`, keyword-only args, and
+	 * `**kwargs`, each with an optional default (no annotations, since
+	 * lambda parameters can't be annotated).
+	 * @returns The parsed `Arguments` node.
 	 * @throws {ParseError} On malformed parameter syntax.
 	 */
 	private parseLambdaParameters(): Arguments {
+		const posonlyargs: Arg[] = [];
 		const args: Arg[] = [];
+		let vararg: Arg | undefined;
+		const kwonlyargs: Arg[] = [];
+		const kw_defaults: (ExprNode | null)[] = [];
+		let kwarg: Arg | undefined;
 		const defaults: ExprNode[] = [];
 
-		// Parse lambda parameters: name, name=default, name, name=default, ...
+		let seenStar = false;
+
 		do {
-			if (!this.check(TokenType.NAME)) {
-				break;
-			}
+			if (this.match(TokenType.SLASH)) {
+				// Positional-only separator
+				posonlyargs.push(...args);
+				args.length = 0;
+			} else if (this.match(TokenType.STAR)) {
+				seenStar = true;
 
-			const name = this.advance().value;
-			const arg: Arg = {
-				nodeType: "Arg",
-				arg: name,
-				annotation: undefined,
-				lineno: this.previous().lineno,
-				col_offset: this.previous().col_offset,
-			};
+				if (this.check(TokenType.NAME)) {
+					const name = this.advance().value;
+					vararg = {
+						nodeType: "Arg",
+						arg: name,
+						annotation: undefined,
+						lineno: this.previous().lineno,
+						col_offset: this.previous().col_offset,
+					};
+				}
+				// After *, all following params are keyword-only
+			} else if (this.match(TokenType.DOUBLESTAR)) {
+				const name = this.consume(
+					TokenType.NAME,
+					"Expected parameter name",
+				).value;
 
-			args.push(arg);
+				kwarg = {
+					nodeType: "Arg",
+					arg: name,
+					annotation: undefined,
+					lineno: this.previous().lineno,
+					col_offset: this.previous().col_offset,
+				};
+			} else {
+				const name = this.consume(
+					TokenType.NAME,
+					"Expected parameter name",
+				).value;
 
-			// Check for default value
-			if (this.match(TokenType.EQUAL)) {
-				const defaultValue = this.parseTest();
-				defaults.push(defaultValue);
+				let defaultValue: ExprNode | undefined;
+				if (this.match(TokenType.EQUAL)) {
+					defaultValue = this.parseTest();
+				}
+
+				const arg: Arg = {
+					nodeType: "Arg",
+					arg: name,
+					annotation: undefined,
+					lineno: this.previous().lineno,
+					col_offset: this.previous().col_offset,
+				};
+
+				if (seenStar) {
+					// After *, these are keyword-only
+					kwonlyargs.push(arg);
+					kw_defaults.push(defaultValue || null);
+				} else {
+					// Regular positional arguments
+					args.push(arg);
+					if (defaultValue) {
+						defaults.push(defaultValue);
+					}
+				}
 			}
 		} while (this.match(TokenType.COMMA) && !this.check(TokenType.COLON));
 
 		return {
 			nodeType: "Arguments",
-			posonlyargs: [],
+			posonlyargs,
 			args,
-			vararg: undefined,
-			kwonlyargs: [],
-			kw_defaults: [],
-			kwarg: undefined,
+			vararg,
+			kwonlyargs,
+			kw_defaults,
+			kwarg,
 			defaults,
 		};
 	}
 
 	/**
-	 * Parses an `exprlist` (assignment-target form used by `for`/`del`):
-	 * a single expr, or a comma-separated sequence collapsed into a `Tuple`
-	 * with `Store` context, stopping before a trailing `in`.
+	 * Parses an `exprlist` (the `for`/comprehension assignment-target form):
+	 * a single expr, or a comma-separated sequence collapsed into a `Tuple`,
+	 * stopping before a trailing `in`. Every `Name`/`Attribute`/`Subscript`/
+	 * `Starred`/`List`/`Tuple` in the result (recursively) is given `Store`
+	 * context, matching CPython's target semantics.
 	 * @returns The single expression, or a `Tuple` node.
 	 * @throws {ParseError} On malformed expression syntax.
 	 */
 	private parseExprList(): ExprNode {
 		const expr = this.parseExpr();
+		let result: ExprNode;
 
 		if (this.match(TokenType.COMMA)) {
 			const elts = [expr];
@@ -2727,16 +2838,19 @@ export class Parser {
 				}
 			}
 
-			return {
+			result = {
 				nodeType: "Tuple",
 				elts,
 				ctx: this.createStore(),
 				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
 			};
+		} else {
+			result = expr;
 		}
 
-		return expr;
+		this.setContext(result, this.createStore());
+		return result;
 	}
 
 	/**
@@ -2915,6 +3029,39 @@ export class Parser {
 			};
 		}
 
+		if (this.match(TokenType.DOUBLESTAR)) {
+			// Dictionary starting with a `**expr` unpacking. Per CPython's
+			// grammar, the unpacked expression binds at `bitor` precedence
+			// (no ternary/lambda/comparison), unlike a `key: value` entry's
+			// value, which allows the full `expression` (test) grammar.
+			const firstValue = this.parseOrExpr();
+
+			const keys: (ExprNode | null)[] = [null];
+			const values = [firstValue];
+
+			while (this.match(TokenType.COMMA)) {
+				if (this.check(TokenType.RBRACE)) break; // Handle trailing comma
+				if (this.match(TokenType.DOUBLESTAR)) {
+					keys.push(null);
+					values.push(this.parseOrExpr());
+				} else {
+					keys.push(this.parseTest());
+					this.consume(TokenType.COLON, "Expected ':' in dictionary");
+					values.push(this.parseTest());
+				}
+			}
+
+			this.consume(TokenType.RBRACE, "Expected '}' after dictionary");
+
+			return {
+				nodeType: "Dict",
+				keys,
+				values,
+				lineno: start.lineno,
+				col_offset: start.col_offset,
+			};
+		}
+
 		const first = this.parseTest();
 
 		if (this.match(TokenType.COLON)) {
@@ -2937,14 +3084,19 @@ export class Parser {
 			}
 
 			// Regular dictionary
-			const keys = [first];
+			const keys: (ExprNode | null)[] = [first];
 			const values = [firstValue];
 
 			while (this.match(TokenType.COMMA)) {
 				if (this.check(TokenType.RBRACE)) break; // Handle trailing comma
-				keys.push(this.parseTest());
-				this.consume(TokenType.COLON, "Expected ':' in dictionary");
-				values.push(this.parseTest());
+				if (this.match(TokenType.DOUBLESTAR)) {
+					keys.push(null);
+					values.push(this.parseOrExpr());
+				} else {
+					keys.push(this.parseTest());
+					this.consume(TokenType.COLON, "Expected ':' in dictionary");
+					values.push(this.parseTest());
+				}
 			}
 
 			this.consume(TokenType.RBRACE, "Expected '}' after dictionary");
@@ -3140,12 +3292,21 @@ export class Parser {
 		if (token.type === TokenType.PERCENTEQUAL) return { nodeType: "Mod" };
 		if (token.type === TokenType.AMPEREQUAL) return { nodeType: "BitAnd" };
 		if (token.type === TokenType.VBAREQUAL) return { nodeType: "BitOr" };
-		if (token.type === TokenType.CIRCUMFLEXEQUAL) return { nodeType: "BitXor" };
-		if (token.type === TokenType.LEFTSHIFTEQUAL) return { nodeType: "LShift" };
-		if (token.type === TokenType.RIGHTSHIFTEQUAL) return { nodeType: "RShift" };
-		if (token.type === TokenType.DOUBLESTAREQUAL) return { nodeType: "Pow" };
-		if (token.type === TokenType.DOUBLESLASHEQUAL)
+		if (token.type === TokenType.CIRCUMFLEXEQUAL) {
+			return { nodeType: "BitXor" };
+		}
+		if (token.type === TokenType.LEFTSHIFTEQUAL) {
+			return { nodeType: "LShift" };
+		}
+		if (token.type === TokenType.RIGHTSHIFTEQUAL) {
+			return { nodeType: "RShift" };
+		}
+		if (token.type === TokenType.DOUBLESTAREQUAL) {
+			return { nodeType: "Pow" };
+		}
+		if (token.type === TokenType.DOUBLESLASHEQUAL) {
 			return { nodeType: "FloorDiv" };
+		}
 		return { nodeType: "MatMult" };
 	}
 
@@ -3217,13 +3378,58 @@ export class Parser {
 		return { nodeType: "Store" };
 	}
 
+	/** Creates a `Del` expression-context node. */
+	private createDel(): Del {
+		return { nodeType: "Del" };
+	}
+
+	/**
+	 * Recursively rewrites the `ctx` of a target expression and its nested
+	 * elements to `ctx`, mirroring CPython's `set_context`. Assignment/`for`/
+	 * `with`/comprehension targets are parsed with the same expression
+	 * grammar as any other expression (which defaults every `Name` etc. to
+	 * `Load`), so this pass corrects them in place once the surrounding
+	 * construct (`Store` for a target, `Del` for `del`) is known.
+	 * @param expr The target expression (or one of its nested elements).
+	 * @param ctx The context to assign.
+	 */
+	private setContext(expr: ExprNode, ctx: ExprContextNode): void {
+		switch (expr.nodeType) {
+			case "Name":
+			case "Attribute":
+			case "Subscript":
+				expr.ctx = ctx;
+				break;
+			case "Starred":
+				expr.ctx = ctx;
+				this.setContext(expr.value, ctx);
+				break;
+			case "List":
+			case "Tuple":
+				expr.ctx = ctx;
+				for (const elt of expr.elts) {
+					this.setContext(elt, ctx);
+				}
+				break;
+			default:
+				break;
+		}
+	}
+
 	/**
 	 * Converts a raw numeric literal token value to a JS `number`, handling
 	 * hex (`0x`), octal (`0o`), binary (`0b`), float, and decimal-int forms.
+	 * A trailing `j`/`J` (imaginary literal, e.g. `4j`, `1.5e3j`) instead
+	 * yields a {@link PyComplex} with that magnitude as its imaginary part,
+	 * matching CPython's `complex` literal semantics.
 	 * @param value The raw token text of the numeric literal.
-	 * @returns The parsed numeric value.
+	 * @returns The parsed numeric value, or a {@link PyComplex} for imaginary literals.
 	 */
-	private parseNumber(value: string): number {
+	private parseNumber(value: string): number | PyComplex {
+		if (value.endsWith("j") || value.endsWith("J")) {
+			return new PyComplex(0, parseFloat(value.slice(0, -1)));
+		}
+
 		// Handle different number formats
 		if (value.startsWith("0x") || value.startsWith("0X")) {
 			return parseInt(value, 16);
@@ -3316,6 +3522,87 @@ export class Parser {
 	}
 
 	/**
+	 * Parses one or more adjacent `STRING` tokens (Python's implicit string
+	 * literal concatenation, e.g. `"a" "b"` or `f"x" "y"`) as a single
+	 * expression. Plain string tokens fold into one `Constant`; if any token
+	 * is an f-string, the result is a single `JoinedStr` with adjacent
+	 * literal parts merged, matching CPython's `ast` output.
+	 * @returns A `Constant` (all-plain case) or `JoinedStr` (any f-string present) node.
+	 * @throws {ParseError} If an f-string expression is malformed.
+	 */
+	private parseConcatenatedStringLiteral(): ExprNode {
+		const start = this.peek();
+		const parts: ExprNode[] = [];
+		let anyFString = false;
+
+		while (this.match(TokenType.STRING)) {
+			const token = this.previous();
+
+			if (
+				token.value.toLowerCase().startsWith('f"') ||
+				token.value.toLowerCase().startsWith("f'")
+			) {
+				anyFString = true;
+				parts.push(this.parseFString(token));
+			} else {
+				parts.push({
+					nodeType: "Constant",
+					value: this.parseString(token.value),
+					kind: this.getStringQuoteStyle(token.value),
+					lineno: token.lineno,
+					col_offset: token.col_offset,
+				});
+			}
+		}
+
+		if (parts.length === 1) {
+			return parts[0];
+		}
+
+		if (!anyFString) {
+			const combined = parts.map((part) => (part as Constant).value).join("");
+			return {
+				nodeType: "Constant",
+				value: combined,
+				kind: (parts[0] as Constant).kind,
+				lineno: start.lineno,
+				col_offset: start.col_offset,
+			};
+		}
+
+		const values: ExprNode[] = [];
+		for (const part of parts) {
+			if (part.nodeType === "JoinedStr") {
+				values.push(...part.values);
+			} else {
+				values.push(part);
+			}
+		}
+
+		const merged: ExprNode[] = [];
+		for (const value of values) {
+			const last = merged[merged.length - 1];
+			if (
+				last?.nodeType === "Constant" &&
+				value.nodeType === "Constant" &&
+				typeof last.value === "string" &&
+				typeof value.value === "string"
+			) {
+				last.value += value.value;
+			} else {
+				merged.push(value);
+			}
+		}
+
+		return {
+			nodeType: "JoinedStr",
+			values: merged,
+			lineno: start.lineno,
+			col_offset: start.col_offset,
+		};
+	}
+
+	/**
 	 * Parses an f-string token into a `JoinedStr` node: splits the content
 	 * into literal text segments (`Constant` nodes) and `{expr}` segments
 	 * (delegated to {@link parseExpressionInFString}), tracking brace/quote
@@ -3337,6 +3624,36 @@ export class Parser {
 		// (case-insensitively), so both cases strip the same way.
 		content = content.slice(2, -1);
 
+		const values = this.scanFStringSegments(content, token, 2); // +2 for f" prefix
+
+		return {
+			nodeType: "JoinedStr",
+			values,
+			kind: quoteStyle,
+			lineno: token.lineno,
+			col_offset: token.col_offset,
+		};
+	}
+
+	/**
+	 * Scans f-string-style content (either an f-string's own body, or a
+	 * `FormattedValue`'s format spec text, which follows the same
+	 * literal/`{expr}` interleaving rules and can itself nest further
+	 * `{expr}` segments) into a `JoinedStr`'s `values` array.
+	 * @param content The unquoted f-string body, or format-spec text, to scan.
+	 * @param token The originating f-string token, used for node position.
+	 * @param colOffsetBase Offset added to `token.col_offset` for literal
+	 * `Constant` positions; only meaningful when `content` is the f-string's
+	 * own body starting at a known offset within the token. Format-spec text
+	 * has no such fixed offset within the source, so callers scanning a spec
+	 * pass `0` and positions fall back to the token's own start.
+	 * @returns The interleaved `Constant`/`FormattedValue` nodes.
+	 */
+	private scanFStringSegments(
+		content: string,
+		token: Token,
+		colOffsetBase: number,
+	): ExprNode[] {
 		const values: ExprNode[] = [];
 		let i = 0;
 		let literalStart = 0;
@@ -3349,7 +3666,7 @@ export class Parser {
 						nodeType: "Constant",
 						value: content.slice(literalStart, i),
 						lineno: token.lineno,
-						col_offset: token.col_offset + literalStart + 2, // +2 for f" prefix
+						col_offset: token.col_offset + literalStart + colOffsetBase,
 					});
 				}
 
@@ -3371,17 +3688,11 @@ export class Parser {
 				nodeType: "Constant",
 				value: content.slice(literalStart),
 				lineno: token.lineno,
-				col_offset: token.col_offset + literalStart + 2,
+				col_offset: token.col_offset + literalStart + colOffsetBase,
 			});
 		}
 
-		return {
-			nodeType: "JoinedStr",
-			values,
-			kind: quoteStyle,
-			lineno: token.lineno,
-			col_offset: token.col_offset,
-		};
+		return values;
 	}
 
 	/**
@@ -3556,14 +3867,7 @@ export class Parser {
 				// Has format spec after conversion
 				formatSpec = {
 					nodeType: "JoinedStr",
-					values: [
-						{
-							nodeType: "Constant",
-							value: conversionMatch[3],
-							lineno: token.lineno,
-							col_offset: token.col_offset,
-						},
-					],
+					values: this.scanFStringSegments(conversionMatch[3], token, 0),
 					lineno: token.lineno,
 					col_offset: token.col_offset,
 				};
@@ -3575,14 +3879,7 @@ export class Parser {
 				expression = formatMatch[1];
 				formatSpec = {
 					nodeType: "JoinedStr",
-					values: [
-						{
-							nodeType: "Constant",
-							value: formatMatch[2],
-							lineno: token.lineno,
-							col_offset: token.col_offset,
-						},
-					],
+					values: this.scanFStringSegments(formatMatch[2], token, 0),
 					lineno: token.lineno,
 					col_offset: token.col_offset,
 				};
@@ -3821,6 +4118,37 @@ export class Parser {
 	}
 
 	/**
+	 * Checks that an expression is a valid target for augmented assignment
+	 * (`+=`, `-=`, etc.), matching CPython's stricter rule: only a single
+	 * `Name`, `Attribute`, or `Subscript` is allowed — unlike plain
+	 * assignment, tuples, lists, and starred targets are rejected.
+	 * @param expr The expression to validate as an augmented-assignment target.
+	 * @throws {ParseError} If `expr` is not a `Name`, `Attribute`, or `Subscript`.
+	 */
+	private validateAugAssignTarget(expr: ExprNode): void {
+		switch (expr.nodeType) {
+			case "Name":
+			case "Attribute":
+			case "Subscript":
+				return;
+			case "Tuple":
+				throw this.error(
+					`'tuple' is an illegal expression for augmented assignment`,
+				);
+			case "List":
+				throw this.error(
+					`'list' is an illegal expression for augmented assignment`,
+				);
+			case "Starred":
+				throw this.error(
+					`'starred' is an illegal expression for augmented assignment`,
+				);
+			default:
+				this.validateAssignmentTarget(expr);
+		}
+	}
+
+	/**
 	 * Parses a `test`, or a starred expression (`*expr`) used as an element
 	 * of a list/tuple/call-argument context.
 	 * @returns The parsed expression, or a `Starred` node.
@@ -3917,8 +4245,7 @@ export class Parser {
 					lineno: start.lineno,
 					col_offset: start.col_offset,
 				});
-			}
-			// Check for TypeVarTuple (*Ts)
+			} // Check for TypeVarTuple (*Ts)
 			else if (this.match(TokenType.STAR)) {
 				const name = this.consume(
 					TokenType.NAME,
@@ -3937,8 +4264,7 @@ export class Parser {
 					lineno: start.lineno,
 					col_offset: start.col_offset,
 				});
-			}
-			// Regular TypeVar (T, T: bound, T = default)
+			} // Regular TypeVar (T, T: bound, T = default)
 			else {
 				const name = this.consume(
 					TokenType.NAME,
@@ -4070,20 +4396,35 @@ function evaluateLiteral(node: ExprNode): any {
 		}
 		case "Set":
 			return new Set(node.elts.map(evaluateLiteral));
-		case "UnaryOp":
+		case "UnaryOp": {
+			const operand = evaluateLiteral(node.operand);
 			if (node.op.nodeType === "UAdd") {
-				return +evaluateLiteral(node.operand);
+				return operand instanceof PyComplex ? operand : +operand;
 			} else if (node.op.nodeType === "USub") {
-				return -evaluateLiteral(node.operand);
+				return operand instanceof PyComplex
+					? new PyComplex(-operand.real, -operand.imag)
+					: -operand;
 			}
 			break;
-		case "BinOp":
-			if (node.op.nodeType === "Add") {
-				return evaluateLiteral(node.left) + evaluateLiteral(node.right);
+		}
+		case "BinOp": {
+			const left = evaluateLiteral(node.left);
+			const right = evaluateLiteral(node.right);
+			if (left instanceof PyComplex || right instanceof PyComplex) {
+				const l = left instanceof PyComplex ? left : new PyComplex(left, 0);
+				const r = right instanceof PyComplex ? right : new PyComplex(right, 0);
+				if (node.op.nodeType === "Add") {
+					return new PyComplex(l.real + r.real, l.imag + r.imag);
+				} else if (node.op.nodeType === "Sub") {
+					return new PyComplex(l.real - r.real, l.imag - r.imag);
+				}
+			} else if (node.op.nodeType === "Add") {
+				return left + right;
 			} else if (node.op.nodeType === "Sub") {
-				return evaluateLiteral(node.left) - evaluateLiteral(node.right);
+				return left - right;
 			}
 			break;
+		}
 	}
 
 	throw new Error(`Cannot evaluate ${node.nodeType} in literal context`);

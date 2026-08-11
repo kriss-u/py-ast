@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { parse } from "../src/index.js";
+import { parse, PyComplex } from "../src/index.js";
 import { assertNodeType, parseExpression } from "./test-helpers.js";
 
 describe("Basic Python Literals", () => {
@@ -51,6 +51,28 @@ describe("Basic Python Literals", () => {
 		expect(expr.op.nodeType).toBe("Add");
 	});
 
+	test("imaginary literal is a PyComplex, not a truncated number", () => {
+		const expr = parseExpression("4j");
+		assertNodeType(expr, "Constant");
+		expect(expr.value).toBeInstanceOf(PyComplex);
+		expect(expr.value).toEqual(new PyComplex(0, 4));
+	});
+
+	test("imaginary literal variations", () => {
+		const cases: [string, number][] = [
+			["1j", 1],
+			["1.5j", 1.5],
+			["0j", 0],
+			["1e10j", 1e10],
+			["1_000j", 1000],
+		];
+		for (const [source, imag] of cases) {
+			const expr = parseExpression(source);
+			assertNodeType(expr, "Constant");
+			expect(expr.value).toEqual(new PyComplex(0, imag));
+		}
+	});
+
 	test("hex, octal, binary literals", () => {
 		const hexExpr = parseExpression("0xFF");
 		assertNodeType(hexExpr, "Constant");
@@ -63,6 +85,59 @@ describe("Basic Python Literals", () => {
 		const binExpr = parseExpression("0b101");
 		assertNodeType(binExpr, "Constant");
 		expect(binExpr.value).toBe(5);
+	});
+});
+
+describe("Implicit string literal concatenation", () => {
+	test("two adjacent plain strings fold into one Constant", () => {
+		const expr = parseExpression('"a" "b"');
+		assertNodeType(expr, "Constant");
+		expect(expr.value).toBe("ab");
+	});
+
+	test("three adjacent strings with mixed quote styles fold into one Constant", () => {
+		const expr = parseExpression(`'a' "b" '''c'''`);
+		assertNodeType(expr, "Constant");
+		expect(expr.value).toBe("abc");
+	});
+
+	test("adjacent strings split across parenthesized lines still concatenate", () => {
+		const expr = parseExpression('(\n"a"\n"b"\n)');
+		assertNodeType(expr, "Constant");
+		expect(expr.value).toBe("ab");
+	});
+
+	test("plain string adjacent to an f-string produces a single JoinedStr", () => {
+		const expr = parseExpression('f"a{1}" "b"');
+		assertNodeType(expr, "JoinedStr");
+		expect(expr.values).toMatchObject([
+			{ nodeType: "Constant", value: "a" },
+			{ nodeType: "FormattedValue" },
+			{ nodeType: "Constant", value: "b" },
+		]);
+	});
+
+	test("f-string adjacent to a plain string merges trailing/leading literal text", () => {
+		const expr = parseExpression('"a" f"b{1}c" "d"');
+		assertNodeType(expr, "JoinedStr");
+		// "a" and the f-string's leading "b" literal merge into one Constant,
+		// as do the f-string's trailing "c" literal and the final "d".
+		expect(expr.values).toMatchObject([
+			{ nodeType: "Constant", value: "ab" },
+			{ nodeType: "FormattedValue" },
+			{ nodeType: "Constant", value: "cd" },
+		]);
+	});
+
+	test("assert message built from parenthesized adjacent strings", () => {
+		const module = parse('assert True, (\n"a"\n"b"\n)\n');
+		const assertStmt = module.body[0] as unknown as {
+			nodeType: string;
+			msg: { nodeType: string; value: string };
+		};
+		expect(assertStmt.nodeType).toBe("Assert");
+		expect(assertStmt.msg.nodeType).toBe("Constant");
+		expect(assertStmt.msg.value).toBe("ab");
 	});
 });
 
@@ -91,6 +166,56 @@ describe("Collections", () => {
 		assertNodeType(expr, "Dict");
 		expect(expr.keys).toHaveLength(2);
 		expect(expr.values).toHaveLength(2);
+	});
+
+	test("dict literals with ** unpacking", () => {
+		const expr = parseExpression("{**a, **b, 1: 2, **c}");
+		assertNodeType(expr, "Dict");
+		expect(expr.keys).toEqual([
+			null,
+			null,
+			expect.objectContaining({ nodeType: "Constant" }),
+			null,
+		]);
+		expect(expr.values).toHaveLength(4);
+		expect(expr.values[0]).toMatchObject({ nodeType: "Name", id: "a" });
+		expect(expr.values[1]).toMatchObject({ nodeType: "Name", id: "b" });
+		expect(expr.values[3]).toMatchObject({ nodeType: "Name", id: "c" });
+	});
+
+	test("dict literal with ** unpacking after a key:value entry", () => {
+		const expr = parseExpression("{1: 2, **a}");
+		assertNodeType(expr, "Dict");
+		expect(expr.keys).toEqual([
+			expect.objectContaining({ nodeType: "Constant" }),
+			null,
+		]);
+		expect(expr.values[1]).toMatchObject({ nodeType: "Name", id: "a" });
+	});
+
+	test("dict literal with only ** unpacking", () => {
+		const expr = parseExpression("{**a}");
+		assertNodeType(expr, "Dict");
+		expect(expr.keys).toEqual([null]);
+		expect(expr.values).toHaveLength(1);
+		expect(expr.values[0]).toMatchObject({ nodeType: "Name", id: "a" });
+	});
+
+	test("dict literal with parenthesized ternary after **", () => {
+		const expr = parseExpression("{**(a if b else c)}");
+		assertNodeType(expr, "Dict");
+		expect(expr.keys).toEqual([null]);
+		expect(expr.values[0].nodeType).toBe("IfExp");
+	});
+
+	test("dict literal rejects unparenthesized ternary after ** (matches CPython bitor precedence)", () => {
+		expect(() => parseExpression("{**a if b else c}")).toThrow();
+	});
+
+	test("dict literal with trailing comma after ** unpacking", () => {
+		const expr = parseExpression("{**a,}");
+		assertNodeType(expr, "Dict");
+		expect(expr.keys).toEqual([null]);
 	});
 
 	test("empty collections", () => {
@@ -229,5 +354,62 @@ def format_examples():
 		// Both elements should be JoinedStr (f-strings)
 		expect(assign.value.elts[0].nodeType).toBe("JoinedStr");
 		expect(assign.value.elts[1].nodeType).toBe("JoinedStr");
+	});
+
+	test("format spec with a nested replacement field parses as a JoinedStr", () => {
+		const expr = parseExpression('f"{name!r:>{10}}"');
+		assertNodeType(expr, "JoinedStr");
+		const formattedValue = expr.values[0];
+		assertNodeType(formattedValue, "FormattedValue");
+		expect(formattedValue.conversion).toBe(114); // 'r'
+
+		const formatSpec = formattedValue.format_spec;
+		assertNodeType(formatSpec, "JoinedStr");
+		expect(formatSpec.values).toHaveLength(2);
+		expect(formatSpec.values[0]).toMatchObject({
+			nodeType: "Constant",
+			value: ">",
+		});
+
+		const nested = formatSpec.values[1];
+		assertNodeType(nested, "FormattedValue");
+		expect(nested.conversion).toBe(-1);
+		expect(nested.value).toMatchObject({ nodeType: "Constant", value: 10 });
+		expect(nested.format_spec).toBeUndefined();
+	});
+
+	test("format spec with multiple levels of nested replacement fields", () => {
+		const expr = parseExpression('f"{x:{y:{z}}}"');
+		assertNodeType(expr, "JoinedStr");
+
+		const outer = expr.values[0];
+		assertNodeType(outer, "FormattedValue");
+		assertNodeType(outer.value, "Name");
+		expect(outer.value.id).toBe("x");
+
+		const middleSpec = outer.format_spec;
+		assertNodeType(middleSpec, "JoinedStr");
+		const middle = middleSpec.values[0];
+		assertNodeType(middle, "FormattedValue");
+		assertNodeType(middle.value, "Name");
+		expect(middle.value.id).toBe("y");
+
+		const innerSpec = middle.format_spec;
+		assertNodeType(innerSpec, "JoinedStr");
+		const inner = innerSpec.values[0];
+		assertNodeType(inner, "FormattedValue");
+		assertNodeType(inner.value, "Name");
+		expect(inner.value.id).toBe("z");
+		expect(inner.format_spec).toBeUndefined();
+	});
+
+	test("empty format spec parses as an empty JoinedStr", () => {
+		const expr = parseExpression('f"{x:}"');
+		assertNodeType(expr, "JoinedStr");
+		const formattedValue = expr.values[0];
+		assertNodeType(formattedValue, "FormattedValue");
+		const formatSpec = formattedValue.format_spec;
+		assertNodeType(formatSpec, "JoinedStr");
+		expect(formatSpec.values).toHaveLength(0);
 	});
 });

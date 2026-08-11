@@ -514,7 +514,34 @@ export interface JoinedStr extends Located {
 	kind?: string;
 }
 
-/** A literal constant: string, number, boolean, `None`, bytes, tuple of constants, or `Ellipsis`. */
+/**
+ * A Python `complex` value, produced by parsing an imaginary literal
+ * (e.g. `4j`, `3.5j`). Python's grammar only ever produces a *literal* for
+ * the pure-imaginary case, so `real` is `0` for any value the parser
+ * constructs; `real` is still exposed so the class can represent a full
+ * complex value (e.g. one built up via `evaluateLiteral` from `3 + 4j`),
+ * mirroring CPython's `complex` type.
+ */
+export class PyComplex {
+	constructor(
+		public readonly real: number,
+		public readonly imag: number,
+	) {}
+
+	/**
+	 * Renders the value the way CPython's `repr()`/`ast.unparse` would, e.g.
+	 * `4j`, `-4j`, or `(3+4j)`.
+	 */
+	toString(): string {
+		if (this.real === 0) {
+			return `${this.imag}j`;
+		}
+		const sign = this.imag < 0 ? "" : "+";
+		return `(${this.real}${sign}${this.imag}j)`;
+	}
+}
+
+/** A literal constant: string, number, boolean, `None`, bytes, complex, tuple of constants, or `Ellipsis`. */
 export interface Constant extends Located {
 	nodeType: "Constant";
 	// biome-ignore lint/suspicious/noExplicitAny: could be any type

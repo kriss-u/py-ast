@@ -11,6 +11,7 @@ import type {
 	StmtNode,
 	UnaryOpNode,
 } from "./types.js";
+import { PyComplex } from "./types.js";
 import { NodeVisitor } from "./visitor.js";
 
 /**
@@ -294,6 +295,7 @@ class Unparser extends NodeVisitor {
 				return Precedence.YIELD;
 			case "IfExp":
 			case "NamedExpr":
+			case "Lambda":
 				return Precedence.TEST;
 			case "BoolOp":
 				return node.op.nodeType === "Or" ? Precedence.OR : Precedence.AND;
@@ -1063,7 +1065,7 @@ class Unparser extends NodeVisitor {
 
 		this.interleave(
 			opSymbol,
-			(value) => this.withPrecedence(precedence, value),
+			(value) => this.visitParenthesizedIfNeeded(precedence, value),
 			node.values,
 		);
 	}
@@ -1072,11 +1074,45 @@ class Unparser extends NodeVisitor {
 	visit_Compare(node: Extract<ExprNode, { nodeType: "Compare" }>): void {
 		const precedence = Precedence.CMP;
 
-		this.withPrecedence(precedence, node.left);
+		this.visitParenthesizedIfNeeded(precedence, node.left);
 		for (let i = 0; i < node.ops.length; i++) {
 			this.write(" ", this.getCmpOpSymbol(node.ops[i]), " ");
-			this.withPrecedence(precedence, node.comparators[i]);
+			this.visitParenthesizedIfNeeded(precedence, node.comparators[i]);
 		}
+	}
+
+	/**
+	 * Renders `node` under `precedence`, wrapping it in parentheses first if
+	 * its own precedence is too low to appear unparenthesized there. Used by
+	 * visitors (`BoolOp`, `Compare`) whose grammar productions don't already
+	 * bind tighter than every lower-precedence child on their own (unlike
+	 * `BinOp`/`UnaryOp`, which parenthesize inline as they render each side).
+	 *
+	 * @param precedence - Minimum precedence required by the surrounding
+	 *   expression.
+	 * @param node - Child expression to render.
+	 */
+	private visitParenthesizedIfNeeded(
+		precedence: Precedence,
+		node: ExprNode,
+	): void {
+		const needsParens = this.requireParens(precedence, node);
+		if (needsParens) this.write("(");
+		this.withPrecedence(precedence, node);
+		if (needsParens) this.write(")");
+	}
+
+	/**
+	 * Renders `node` as the base of a postfix trailer (`base(...)`,
+	 * `base.attr`, `base[...]`), parenthesizing it if it isn't already an
+	 * atom — e.g. a `Lambda`, `IfExp`, or `NamedExpr` used as a call target
+	 * (`(lambda x: x)(1)`) would otherwise merge into the trailer and change
+	 * meaning (`lambda x: x(1)`).
+	 *
+	 * @param node - The expression the trailer is applied to.
+	 */
+	private visitAtomBase(node: ExprNode): void {
+		this.visitParenthesizedIfNeeded(Precedence.ATOM, node);
 	}
 
 	/** Renders a walrus/named expression (`target := value`). */
@@ -1097,12 +1133,23 @@ class Unparser extends NodeVisitor {
 		this.visit(node.body);
 	}
 
-	/** Renders a conditional expression (`body if test else orelse`). */
+	/**
+	 * Renders a conditional expression (`body if test else orelse`).
+	 * The `test` slot requires parentheses around a bare `NamedExpr`
+	 * (`x if y := 1 else z` is a `SyntaxError` in CPython) since the
+	 * grammar there only accepts an `or_test`, not a `namedexpr_test`.
+	 */
 	visit_IfExp(node: Extract<ExprNode, { nodeType: "IfExp" }>): void {
 		const precedence = Precedence.TEST;
 		this.withPrecedence(precedence, node.body);
 		this.write(" if ");
-		this.withPrecedence(precedence, node.test);
+		if (node.test.nodeType === "NamedExpr") {
+			this.write("(");
+			this.visit(node.test);
+			this.write(")");
+		} else {
+			this.withPrecedence(precedence, node.test);
+		}
 		this.write(" else ");
 		this.withPrecedence(precedence, node.orelse);
 	}
@@ -1256,7 +1303,7 @@ class Unparser extends NodeVisitor {
 
 	/** Renders a call expression (`func(args, kw=value, ...)`). */
 	visit_Call(node: Extract<ExprNode, { nodeType: "Call" }>): void {
-		this.visit(node.func);
+		this.visitAtomBase(node.func);
 		this.write("(");
 		this.interleave(", ", (arg) => this.visit(arg), node.args);
 		if (node.args.length > 0 && node.keywords.length > 0) {
@@ -1303,6 +1350,9 @@ class Unparser extends NodeVisitor {
 		if (typeof value === "number") {
 			return value.toString();
 		}
+		if (value instanceof PyComplex) {
+			return value.toString();
+		}
 		return String(value);
 	}
 
@@ -1328,6 +1378,7 @@ class Unparser extends NodeVisitor {
 			const prefixMatch = kind.match(/^([fFrRbBuU]*)(.*)/)!;
 			const prefix = prefixMatch[1];
 			const quoteStyle = prefixMatch[2];
+			const isRaw = /[rR]/.test(prefix);
 
 			// For multiline strings, preserve triple quotes
 			if (quoteStyle === '"""' || quoteStyle === "'''") {
@@ -1336,6 +1387,13 @@ class Unparser extends NodeVisitor {
 					return `${prefix}${quoteStyle}${value}${quoteStyle}`;
 				}
 				// If it doesn't have newlines but was originally triple-quoted, preserve that
+				return `${prefix}${quoteStyle}${value}${quoteStyle}`;
+			}
+
+			// Raw strings don't process escape sequences, so backslashes in
+			// `value` are already the literal source text - re-escaping them
+			// would double them up and change the string's actual content.
+			if (isRaw) {
 				return `${prefix}${quoteStyle}${value}${quoteStyle}`;
 			}
 
@@ -1376,7 +1434,7 @@ class Unparser extends NodeVisitor {
 
 	/** Renders attribute access (`value.attr`). */
 	visit_Attribute(node: Extract<ExprNode, { nodeType: "Attribute" }>): void {
-		this.visit(node.value);
+		this.visitAtomBase(node.value);
 		this.write(".", node.attr);
 	}
 
@@ -1387,7 +1445,7 @@ class Unparser extends NodeVisitor {
 	 * wrapped in the parentheses `visit_Tuple` would normally add.
 	 */
 	visit_Subscript(node: Extract<ExprNode, { nodeType: "Subscript" }>): void {
-		this.visit(node.value);
+		this.visitAtomBase(node.value);
 		this.write("[");
 		// Special handling for tuples in subscripts - don't add parentheses
 		if (node.slice.nodeType === "Tuple") {

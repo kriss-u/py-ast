@@ -161,6 +161,36 @@ describe("Lexer numbers", () => {
 		const numTok = tokens.find((t) => t.type === TokenType.NUMBER);
 		expect(numTok?.value).toBe("1e10");
 	});
+
+	it("scans a leading-dot float literal (.5)", () => {
+		const tokens = new Lexer(".5").tokenize();
+		const numTok = tokens.find((t) => t.type === TokenType.NUMBER);
+		expect(numTok?.value).toBe(".5");
+	});
+
+	it("scans a trailing-dot float literal (5.) with no digits after the dot", () => {
+		const tokens = new Lexer("5.").tokenize();
+		const numTok = tokens.find((t) => t.type === TokenType.NUMBER);
+		expect(numTok?.value).toBe("5.");
+	});
+
+	it("scans a trailing-dot float followed by an exponent (5.e3)", () => {
+		const tokens = new Lexer("5.e3").tokenize();
+		const numTok = tokens.find((t) => t.type === TokenType.NUMBER);
+		expect(numTok?.value).toBe("5.e3");
+	});
+
+	it("treats a second dot after a trailing-dot float as attribute access (5..real)", () => {
+		const tokens = new Lexer("5..real").tokenize();
+		expect(tokens.map((t) => t.type)).toEqual([
+			TokenType.NUMBER,
+			TokenType.DOT,
+			TokenType.NAME,
+			TokenType.EOF,
+		]);
+		const numTok = tokens.find((t) => t.type === TokenType.NUMBER);
+		expect(numTok?.value).toBe("5.");
+	});
 });
 
 describe("Lexer operators", () => {
