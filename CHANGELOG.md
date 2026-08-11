@@ -1,3 +1,11 @@
+## [1.11.1](https://github.com/kriss-u/py-ast/compare/v1.11.0...v1.11.1) (2026-08-11)
+
+
+### Bug Fixes
+
+* correctly associate the order of operations ([7e51cb0](https://github.com/kriss-u/py-ast/commit/7e51cb0c3c64ededaf40fb469299da5d2baf2c63))
+* parse statements inside f-strings correctly ([49c3da1](https://github.com/kriss-u/py-ast/commit/49c3da1a7ae3a0b757d756b931a88f2054d0988b))
+
 # [1.11.0](https://github.com/kriss-u/py-ast/compare/v1.10.1...v1.11.0) (2026-08-11)
 
 
