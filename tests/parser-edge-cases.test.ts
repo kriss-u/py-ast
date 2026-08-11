@@ -11,7 +11,7 @@ import {
 	parseFile,
 } from "../src/parser.js";
 import type { ASTNode, Module } from "../src/types.js";
-import { parseCode, parseStatement } from "./test-helpers.js";
+import { parseCode, parseExpression, parseStatement } from "./test-helpers.js";
 
 describe("parser edge cases", () => {
 	describe("comment handling at module level", () => {
@@ -699,6 +699,18 @@ describe("parser edge cases", () => {
 		test("walrus operator in expression", () => {
 			const ast = parseCode("if (n := 10) > 5:\n    pass\n");
 			expect(ast.body[0].nodeType).toBe("If");
+		});
+
+		test("setContext no-op branch: a non-target-shaped walrus target is left structurally unchanged", () => {
+			// The parser (like this walrus production specifically) doesn't restrict
+			// `:=`'s target to a bare NAME the way CPython does; setContext's fallback
+			// branch simply leaves non-Name/Attribute/Subscript/Starred/List/Tuple
+			// nodes untouched rather than crashing.
+			const expr = parseExpression("(a + b := 5)");
+			expect(expr.nodeType).toBe("NamedExpr");
+			if (expr.nodeType === "NamedExpr") {
+				expect(expr.target.nodeType).toBe("BinOp");
+			}
 		});
 	});
 

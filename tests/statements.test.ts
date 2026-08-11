@@ -96,6 +96,15 @@ describe("Assignment Statements", () => {
 		expect(stmt.value.nodeType).toBe("Tuple");
 	});
 
+	test("list-target assignment gets recursive Store context, matching CPython", () => {
+		const stmt = parseStatement("[a, b] = [1, 2]");
+		assertNodeType(stmt, "Assign");
+		const target = stmt.targets[0];
+		assertNodeType(target, "List");
+		expect(target.ctx.nodeType).toBe("Store");
+		expect(target.elts.every((elt) => elt.nodeType === "Name" && elt.ctx.nodeType === "Store")).toBe(true);
+	});
+
 	test("starred assignment", () => {
 		const stmt = parseStatement("x, *y, z = values");
 		assertNodeType(stmt, "Assign");

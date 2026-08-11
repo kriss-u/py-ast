@@ -12,7 +12,9 @@ import type {
 	Comment,
 	Comprehension,
 	Constant,
+	Del,
 	ExceptHandler,
+	ExprContextNode,
 	ExprNode,
 	FormattedValue,
 	JoinedStr,
@@ -415,6 +417,10 @@ export class Parser {
 			while (this.match(TokenType.COMMA)) {
 				targets.push(this.parseExpr());
 			}
+			for (const target of targets) {
+				this.validateAssignmentTarget(target);
+				this.setContext(target, this.createDel());
+			}
 			return {
 				nodeType: "Delete",
 				targets,
@@ -690,6 +696,10 @@ export class Parser {
 				}
 			}
 
+			for (const target of targets) {
+				this.setContext(target, this.createStore());
+			}
+
 			const assignNode: StmtNode & { expressionComments?: Comment[] } = {
 				nodeType: "Assign",
 				targets,
@@ -719,6 +729,7 @@ export class Parser {
 		} else if (this.matchAugAssign()) {
 			// Augmented assignment
 			this.validateAssignmentTarget(expr);
+			this.setContext(expr, this.createStore());
 			const op = this.parseAugAssignOp();
 			const value = this.parseTest();
 			return {
@@ -731,6 +742,8 @@ export class Parser {
 			};
 		} else if (this.match(TokenType.COLON)) {
 			// Annotated assignment
+			this.validateAssignmentTarget(expr);
+			this.setContext(expr, this.createStore());
 			const annotation = this.parseTest();
 			let value: ExprNode | undefined;
 
@@ -1214,6 +1227,8 @@ export class Parser {
 
 			if (this.match(TokenType.AS)) {
 				optional_vars = this.parseExpr();
+				this.validateAssignmentTarget(optional_vars);
+				this.setContext(optional_vars, this.createStore());
 			}
 
 			items.push({
@@ -1778,6 +1793,7 @@ export class Parser {
 
 		// Check for named expression (walrus operator :=)
 		if (this.match(TokenType.COLONEQUAL)) {
+			this.setContext(expr, this.createStore());
 			const value = this.parseAndTest();
 			return {
 				nodeType: "NamedExpr",
@@ -2740,14 +2756,17 @@ export class Parser {
 	}
 
 	/**
-	 * Parses an `exprlist` (assignment-target form used by `for`/`del`):
-	 * a single expr, or a comma-separated sequence collapsed into a `Tuple`
-	 * with `Store` context, stopping before a trailing `in`.
+	 * Parses an `exprlist` (the `for`/comprehension assignment-target form):
+	 * a single expr, or a comma-separated sequence collapsed into a `Tuple`,
+	 * stopping before a trailing `in`. Every `Name`/`Attribute`/`Subscript`/
+	 * `Starred`/`List`/`Tuple` in the result (recursively) is given `Store`
+	 * context, matching CPython's target semantics.
 	 * @returns The single expression, or a `Tuple` node.
 	 * @throws {ParseError} On malformed expression syntax.
 	 */
 	private parseExprList(): ExprNode {
 		const expr = this.parseExpr();
+		let result: ExprNode;
 
 		if (this.match(TokenType.COMMA)) {
 			const elts = [expr];
@@ -2760,16 +2779,19 @@ export class Parser {
 				}
 			}
 
-			return {
+			result = {
 				nodeType: "Tuple",
 				elts,
 				ctx: this.createStore(),
 				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
 			};
+		} else {
+			result = expr;
 		}
 
-		return expr;
+		this.setContext(result, this.createStore());
+		return result;
 	}
 
 	/**
@@ -3286,6 +3308,44 @@ export class Parser {
 	/** Creates a `Store` expression-context node. */
 	private createStore(): Store {
 		return { nodeType: "Store" };
+	}
+
+	/** Creates a `Del` expression-context node. */
+	private createDel(): Del {
+		return { nodeType: "Del" };
+	}
+
+	/**
+	 * Recursively rewrites the `ctx` of a target expression and its nested
+	 * elements to `ctx`, mirroring CPython's `set_context`. Assignment/`for`/
+	 * `with`/comprehension targets are parsed with the same expression
+	 * grammar as any other expression (which defaults every `Name` etc. to
+	 * `Load`), so this pass corrects them in place once the surrounding
+	 * construct (`Store` for a target, `Del` for `del`) is known.
+	 * @param expr The target expression (or one of its nested elements).
+	 * @param ctx The context to assign.
+	 */
+	private setContext(expr: ExprNode, ctx: ExprContextNode): void {
+		switch (expr.nodeType) {
+			case "Name":
+			case "Attribute":
+			case "Subscript":
+				expr.ctx = ctx;
+				break;
+			case "Starred":
+				expr.ctx = ctx;
+				this.setContext(expr.value, ctx);
+				break;
+			case "List":
+			case "Tuple":
+				expr.ctx = ctx;
+				for (const elt of expr.elts) {
+					this.setContext(elt, ctx);
+				}
+				break;
+			default:
+				break;
+		}
 	}
 
 	/**

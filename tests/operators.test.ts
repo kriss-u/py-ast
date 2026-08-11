@@ -273,4 +273,11 @@ describe("Walrus Operator", () => {
 		expect(expr.target.nodeType).toBe("Name");
 		expect(expr.value.nodeType).toBe("Constant");
 	});
+
+	test("named expression target gets Store context, matching CPython", () => {
+		const expr = parseExpression("(x := 42)");
+		assertNodeType(expr, "NamedExpr");
+		assertNodeType(expr.target, "Name");
+		expect(expr.target.ctx.nodeType).toBe("Store");
+	});
 });
