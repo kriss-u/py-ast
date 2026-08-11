@@ -1,4 +1,6 @@
+import { describe, expect, test } from "vitest";
 import { parse, unparse } from "../src/index.js";
+import type { ASTNodeUnion } from "../src/types.js";
 import { testRoundtrip, testUnparse } from "./test-helpers.js";
 
 describe("Unparser", () => {
@@ -459,11 +461,26 @@ describe("Unparser", () => {
 		});
 
 		test("async generator expressions", () => {
-			testUnparse("(x async for x in async_items)", "(x async for x in async_items)");
-			testUnparse("(x async for x in async_items if x > 0)", "(x async for x in async_items if x > 0)");
-			testUnparse("(x for x in items async for y in async_items)", "(x for x in items async for y in async_items)");
-			testUnparse("(x async for x in async_items for y in items)", "(x async for x in async_items for y in items)");
-			testUnparse("(x async for x in async_items async for y in async_items2)", "(x async for x in async_items async for y in async_items2)");
+			testUnparse(
+				"(x async for x in async_items)",
+				"(x async for x in async_items)",
+			);
+			testUnparse(
+				"(x async for x in async_items if x > 0)",
+				"(x async for x in async_items if x > 0)",
+			);
+			testUnparse(
+				"(x for x in items async for y in async_items)",
+				"(x for x in items async for y in async_items)",
+			);
+			testUnparse(
+				"(x async for x in async_items for y in items)",
+				"(x async for x in async_items for y in items)",
+			);
+			testUnparse(
+				"(x async for x in async_items async for y in async_items2)",
+				"(x async for x in async_items async for y in async_items2)",
+			);
 		});
 	});
 
@@ -568,7 +585,7 @@ describe("Unparser", () => {
 		test("error handling", () => {
 			// Test with malformed AST should not crash
 			expect(() => {
-				unparse({} as any);
+				unparse({} as unknown as ASTNodeUnion);
 			}).not.toThrow();
 		});
 	});

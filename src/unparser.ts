@@ -13,6 +13,13 @@ import type {
 } from "./types.js";
 import { NodeVisitor } from "./visitor.js";
 
+/**
+ * Relative binding power of Python operators/expression forms, used to decide
+ * whether an expression must be wrapped in parentheses when unparsed inside
+ * a larger expression. Higher values bind tighter (e.g. `POWER` binds tighter
+ * than `TERM`). `BOR` is an alias for `EXPR` because `|` sits at the bottom of
+ * the binary-operator precedence chain in CPython's grammar.
+ */
 enum Precedence {
 	TUPLE = 0,
 	YIELD = 1,
@@ -34,6 +41,14 @@ enum Precedence {
 	ATOM = 16,
 }
 
+/**
+ * Mutable state threaded through a single `unparse` call. `source` accumulates
+ * the emitted text as an array of fragments (joined once at the end);
+ * `precedence` tracks the minimum precedence the currently-visited expression
+ * must have to avoid parenthesization; `indent`/`indentString` track the
+ * current block nesting; `isFirstStatement` suppresses the leading newline
+ * before the very first statement written.
+ */
 interface UnparseContext {
 	precedence: Precedence;
 	source: string[];
@@ -46,7 +61,13 @@ interface UnparseContext {
 }
 
 /**
- * Detect indentation style from the AST by looking at function/class definitions
+ * Infer the indentation string used by the original source by walking the
+ * AST for the first indented block (function/class/if/for/while/with/try)
+ * and comparing the `col_offset` of its first body statement to its own
+ * `col_offset`. Falls back to four spaces if no usable offset is found.
+ *
+ * @param node - Root AST node to search.
+ * @returns The detected indentation unit, e.g. `"    "` or `"\t"`.
  */
 function detectIndentStyle(node: ASTNodeUnion): string {
 	// Default to 4 spaces if we can't detect
@@ -104,7 +125,14 @@ function detectIndentStyle(node: ASTNodeUnion): string {
 }
 
 /**
- * Unparse an AST node back to Python source code
+ * Convert an AST node back into Python source code.
+ *
+ * @param node - The AST node to unparse (typically a `Module`, but any node
+ *   reachable from the visitor is supported).
+ * @param options - Unparsing options.
+ * @param options.indent - Indentation unit to use for nested blocks. If
+ *   omitted, it is auto-detected from `node` via {@link detectIndentStyle}.
+ * @returns The generated Python source text.
  */
 export function unparse(
 	node: ASTNodeUnion,
@@ -126,12 +154,31 @@ export function unparse(
 	return context.source.join("");
 }
 
+/**
+ * Tree-walking unparser that converts AST nodes into Python source text.
+ * Extends {@link NodeVisitor} and implements one `visit_<NodeType>` method
+ * per AST node kind; each writes its fragment(s) directly onto the shared
+ * {@link UnparseContext}. Instances are single-use, driven by {@link unparse}.
+ */
 class Unparser extends NodeVisitor {
+	/**
+	 * @param context - Shared mutable state (output buffer, indentation,
+	 *   current precedence) that all `visit_*` methods read from and write to.
+	 */
 	constructor(private context: UnparseContext) {
 		super();
 	}
 
-	// Override visit to handle inline comments for statement nodes
+	/**
+	 * Dispatches to the matching `visit_<NodeType>` method (via the base
+	 * {@link NodeVisitor}), then appends any trailing inline comment attached
+	 * to the node. Statement nodes may carry an `inlineComment` produced by
+	 * the parser for `# comment` text following them on the same line.
+	 *
+	 * @param node - The AST node to render.
+	 * @returns Whatever the underlying `visit_*` method returns (unused by
+	 *   callers here; typed `any` to satisfy the base visitor's signature).
+	 */
 	// biome-ignore lint/suspicious/noExplicitAny: Visitor pattern requires dynamic return types
 	visit(node: ASTNodeUnion): any {
 		const result = super.visit(node);
@@ -144,19 +191,33 @@ class Unparser extends NodeVisitor {
 		return result;
 	}
 
+	/**
+	 * Appends raw text fragments to the output buffer without any newline or
+	 * indentation handling.
+	 *
+	 * @param text - One or more text fragments to append in order.
+	 */
 	private write(...text: string[]): void {
 		this.context.source.push(...text);
 	}
 
+	/**
+	 * Starts a new statement line: indents to the current block depth and
+	 * writes `text`. The very first statement of the whole output is written
+	 * without a leading newline (tracked via `isFirstStatement`); every
+	 * subsequent call prefixes a `"\n"` before indenting. The very first
+	 * `fill()` call of a run always happens at `indent === 0` — every
+	 * `visit_*` for a compound statement calls `fill()` for its own header
+	 * line before incrementing `context.indent` — so the first call never
+	 * needs indentation of its own.
+	 *
+	 * @param text - Text to write at the start of the new line (defaults to
+	 *   empty, e.g. when the statement itself will `visit()` its content).
+	 */
 	private fill(text: string = ""): void {
 		if (this.context.isFirstStatement) {
-			// For the first statement, don't add a leading newline
 			this.context.isFirstStatement = false;
-			if (this.context.indent > 0) {
-				this.write(this.context.indentString.repeat(this.context.indent), text);
-			} else {
-				this.write(text);
-			}
+			this.write(text);
 		} else {
 			this.write(
 				"\n",
@@ -166,6 +227,15 @@ class Unparser extends NodeVisitor {
 		}
 	}
 
+	/**
+	 * Renders each item of `seq` via `f`, writing `inter` between consecutive
+	 * items (but not before the first or after the last) — mirrors Python's
+	 * `str.join` for sequences of AST nodes.
+	 *
+	 * @param inter - Separator text written between items.
+	 * @param f - Callback that renders a single item.
+	 * @param seq - Items to render.
+	 */
 	private interleave<T>(inter: string, f: (item: T) => void, seq: T[]): void {
 		for (let i = 0; i < seq.length; i++) {
 			if (i > 0) {
@@ -175,6 +245,16 @@ class Unparser extends NodeVisitor {
 		}
 	}
 
+	/**
+	 * Visits `node` with `precedence` temporarily installed as the ambient
+	 * minimum precedence, restoring the previous value afterward. Used by
+	 * operator visitors to tell the child expression what precedence context
+	 * it is being rendered in, so the child can decide (via
+	 * {@link requireParens}) whether it needs its own parentheses.
+	 *
+	 * @param precedence - Precedence level of the enclosing operator.
+	 * @param node - Child expression to render under that precedence.
+	 */
 	private withPrecedence(precedence: Precedence, node: ExprNode): void {
 		const oldPrecedence = this.context.precedence;
 		this.context.precedence = precedence;
@@ -182,10 +262,29 @@ class Unparser extends NodeVisitor {
 		this.context.precedence = oldPrecedence;
 	}
 
+	/**
+	 * Decides whether `node` must be parenthesized to be rendered correctly
+	 * at a context requiring at least `precedence` binding power — true when
+	 * the node's own precedence is strictly lower.
+	 *
+	 * @param precedence - Minimum precedence required by the surrounding
+	 *   expression.
+	 * @param node - Candidate child expression.
+	 * @returns `true` if parentheses are required around `node`.
+	 */
 	private requireParens(precedence: Precedence, node: ExprNode): boolean {
 		return this.getPrecedence(node) < precedence;
 	}
 
+	/**
+	 * Looks up the {@link Precedence} of an expression node's operator/form.
+	 * Nodes with no meaningful operator precedence (literals, calls,
+	 * subscripts, etc.) are treated as {@link Precedence.ATOM}, the tightest
+	 * level, so they never need parenthesization on their own account.
+	 *
+	 * @param node - Expression node to classify.
+	 * @returns The node's binding precedence.
+	 */
 	private getPrecedence(node: ExprNode): Precedence {
 		switch (node.nodeType) {
 			case "Tuple":
@@ -194,6 +293,7 @@ class Unparser extends NodeVisitor {
 			case "YieldFrom":
 				return Precedence.YIELD;
 			case "IfExp":
+			case "NamedExpr":
 				return Precedence.TEST;
 			case "BoolOp":
 				return node.op.nodeType === "Or" ? Precedence.OR : Precedence.AND;
@@ -210,6 +310,14 @@ class Unparser extends NodeVisitor {
 		}
 	}
 
+	/**
+	 * Maps a binary `OperatorNode` to its {@link Precedence} level, following
+	 * Python's operator precedence table (bitwise OR lowest, power highest
+	 * among binary operators).
+	 *
+	 * @param op - The binary operator node.
+	 * @returns The operator's binding precedence.
+	 */
 	private getBinOpPrecedence(op: OperatorNode): Precedence {
 		switch (op.nodeType) {
 			case "BitOr":
@@ -232,18 +340,18 @@ class Unparser extends NodeVisitor {
 				return Precedence.TERM;
 			case "Pow":
 				return Precedence.POWER;
-			default:
-				return Precedence.ATOM;
 		}
 	}
 
 	// Module visitors
+	/** Renders a `Module` node: each top-level statement, in order. */
 	visit_Module(node: Extract<ModuleNode, { nodeType: "Module" }>): void {
 		for (const stmt of node.body) {
 			this.visit(stmt);
 		}
 	}
 
+	/** Renders an `Interactive` node (REPL-style statement list). */
 	visit_Interactive(
 		node: Extract<ModuleNode, { nodeType: "Interactive" }>,
 	): void {
@@ -252,13 +360,19 @@ class Unparser extends NodeVisitor {
 		}
 	}
 
+	/** Renders an `Expression` node (a bare expression used as `eval` input). */
 	visit_Expression(
 		node: Extract<ModuleNode, { nodeType: "Expression" }>,
 	): void {
 		this.visit(node.body);
 	}
 
-	// Helper method to write decorators
+	/**
+	 * Writes each decorator in `decorators` on its own `@decorator` line
+	 * immediately above the following `def`/`class`.
+	 *
+	 * @param decorators - Decorator expressions, outermost first.
+	 */
 	private writeDecorators(decorators: ExprNode[]): void {
 		for (const decorator of decorators) {
 			this.fill("@");
@@ -266,16 +380,25 @@ class Unparser extends NodeVisitor {
 		}
 	}
 
-	// Helper method to choose quotes for f-strings to avoid conflicts
-	// Helper method to choose quotes for f-strings - preserve original style
+	/**
+	 * Determines the opening/closing quote text for an f-string, preserving
+	 * the original quote style (including prefix casing and triple-quotes)
+	 * captured in `node.kind` when available, so round-tripped f-strings
+	 * don't silently change from `f'...'` to `f"..."` or vice versa.
+	 *
+	 * @param node - The `JoinedStr` (f-string) node.
+	 * @returns A tuple of `[openingDelimiter, closingQuote]`, e.g. `['f"', '"']`.
+	 */
 	private chooseFStringQuotes(
 		node: Extract<ExprNode, { nodeType: "JoinedStr" }>,
 	): [string, string] {
 		// If we have the original quote style, use it exactly
 		if (node.kind) {
-			// Extract quote from the kind (e.g., 'f"' -> '"', "f'" -> "'")
-			const prefixMatch = node.kind.match(/^([fFrRbBuU]*)(.*)/);
-			const quote = prefixMatch ? prefixMatch[2] : '"';
+			// Both capture groups accept an empty match, so this regex always
+			// matches and `prefixMatch` is never null.
+			// biome-ignore lint/style/noNonNullAssertion: regex is provably total, see comment above
+			const prefixMatch = node.kind.match(/^([fFrRbBuU]*)(.*)/)!;
+			const quote = prefixMatch[2];
 			return [node.kind, quote];
 		}
 
@@ -284,6 +407,7 @@ class Unparser extends NodeVisitor {
 	}
 
 	// Statement visitors
+	/** Renders a `def` statement: decorators, signature, and indented body. */
 	visit_FunctionDef(
 		node: Extract<StmtNode, { nodeType: "FunctionDef" }>,
 	): void {
@@ -306,6 +430,7 @@ class Unparser extends NodeVisitor {
 		this.context.indent--;
 	}
 
+	/** Renders a `class` statement: decorators, name, bases/keywords, and indented body. */
 	visit_ClassDef(node: Extract<StmtNode, { nodeType: "ClassDef" }>): void {
 		this.writeDecorators(node.decorator_list);
 		this.fill("class ");
@@ -328,6 +453,7 @@ class Unparser extends NodeVisitor {
 		this.context.indent--;
 	}
 
+	/** Renders a `return` statement, with or without a return value. */
 	visit_Return(node: Extract<StmtNode, { nodeType: "Return" }>): void {
 		this.fill("return");
 		if (node.value) {
@@ -336,6 +462,12 @@ class Unparser extends NodeVisitor {
 		}
 	}
 
+	/**
+	 * Renders an assignment statement (`a = b = value`). Also re-emits any
+	 * standalone/inline comments recorded on `expressionComments` that
+	 * weren't already handled via `inlineComment`, so comments attached
+	 * around a multi-target or wrapped assignment aren't dropped.
+	 */
 	visit_Assign(node: Extract<StmtNode, { nodeType: "Assign" }>): void {
 		this.fill();
 		this.interleave(" = ", (target) => this.visit(target), node.targets);
@@ -363,6 +495,7 @@ class Unparser extends NodeVisitor {
 		}
 	}
 
+	/** Renders an augmented assignment statement (`a += value`, `a **= value`, ...). */
 	visit_AugAssign(node: Extract<StmtNode, { nodeType: "AugAssign" }>): void {
 		this.fill();
 		this.visit(node.target);
@@ -370,6 +503,12 @@ class Unparser extends NodeVisitor {
 		this.visit(node.value);
 	}
 
+	/**
+	 * Maps an `OperatorNode` to its augmented-assignment spelling (`+=`, `**=`, ...).
+	 *
+	 * @param op - The operator node.
+	 * @returns The augmented-assignment operator text.
+	 */
 	private getAugAssignOp(op: OperatorNode): string {
 		switch (op.nodeType) {
 			case "Add":
@@ -398,11 +537,10 @@ class Unparser extends NodeVisitor {
 				return "&=";
 			case "FloorDiv":
 				return "//=";
-			default:
-				return "?=";
 		}
 	}
 
+	/** Renders a `for target in iter:` loop, including an optional `else:` clause. */
 	visit_For(node: Extract<StmtNode, { nodeType: "For" }>): void {
 		this.fill("for ");
 		this.visit(node.target);
@@ -424,6 +562,7 @@ class Unparser extends NodeVisitor {
 		}
 	}
 
+	/** Renders a `while test:` loop, including an optional `else:` clause. */
 	visit_While(node: Extract<StmtNode, { nodeType: "While" }>): void {
 		this.fill("while ");
 		this.visit(node.test);
@@ -443,6 +582,14 @@ class Unparser extends NodeVisitor {
 		}
 	}
 
+	/**
+	 * Renders an `if` statement. When `orelse` is exactly a single nested
+	 * `If` node, it is collapsed into an `elif` clause rather than a nested
+	 * `else:\n    if ...:`, matching idiomatic Python source. This collapsing
+	 * is only applied one level deep: a further `elif` chained off that first
+	 * `elif`'s own `orelse` is rendered as a nested `else:`/`if` block instead
+	 * of a second `elif`.
+	 */
 	visit_If(node: Extract<StmtNode, { nodeType: "If" }>): void {
 		this.fill("if ");
 		this.visit(node.test);
@@ -485,18 +632,27 @@ class Unparser extends NodeVisitor {
 		}
 	}
 
+	/** Renders a `pass` statement. */
 	visit_Pass(_node: Extract<StmtNode, { nodeType: "Pass" }>): void {
 		this.fill("pass");
 	}
 
+	/** Renders a `break` statement. */
 	visit_Break(_node: Extract<StmtNode, { nodeType: "Break" }>): void {
 		this.fill("break");
 	}
 
+	/** Renders a `continue` statement. */
 	visit_Continue(_node: Extract<StmtNode, { nodeType: "Continue" }>): void {
 		this.fill("continue");
 	}
 
+	/**
+	 * Renders a standalone `Comment` pseudo-statement (`# ...` text tracked
+	 * by the parser as its own node, distinct from the `inlineComment`
+	 * attached to other statements). Inline comments append to the current
+	 * line; standalone ones start a new indented line.
+	 */
 	visit_Comment(node: Extract<StmtNode, { nodeType: "Comment" }>): void {
 		if (node.inline) {
 			// For inline comments, append to current line with a space
@@ -507,16 +663,19 @@ class Unparser extends NodeVisitor {
 		}
 	}
 
+	/** Renders a `del target, ...` statement. */
 	visit_Delete(node: Extract<StmtNode, { nodeType: "Delete" }>): void {
 		this.fill("del ");
 		this.interleave(", ", (target) => this.visit(target), node.targets);
 	}
 
+	/** Renders a `nonlocal name, ...` statement. */
 	visit_Nonlocal(node: Extract<StmtNode, { nodeType: "Nonlocal" }>): void {
 		this.fill("nonlocal ");
 		this.interleave(", ", (name) => this.write(name), node.names);
 	}
 
+	/** Renders a PEP 695 `type Name[params] = value` alias statement. */
 	visit_TypeAlias(node: Extract<StmtNode, { nodeType: "TypeAlias" }>): void {
 		this.fill("type ");
 		this.visit(node.name);
@@ -529,6 +688,7 @@ class Unparser extends NodeVisitor {
 		this.visit(node.value);
 	}
 
+	/** Renders a `match subject:` statement with its indented `case` blocks. */
 	visit_Match(node: Extract<StmtNode, { nodeType: "Match" }>): void {
 		this.fill("match ");
 		this.visit(node.subject);
@@ -540,6 +700,7 @@ class Unparser extends NodeVisitor {
 		this.context.indent--;
 	}
 
+	/** Renders one `case pattern [if guard]:` clause of a `match` statement. */
 	visit_MatchCase(
 		node: Extract<import("./types.js").MatchCase, { nodeType: "MatchCase" }>,
 	): void {
@@ -557,16 +718,22 @@ class Unparser extends NodeVisitor {
 		this.context.indent--;
 	}
 
+	/** Renders an expression-statement (an expression evaluated for its side effects). */
 	visit_Expr(node: Extract<StmtNode, { nodeType: "Expr" }>): void {
 		this.fill();
 		this.visit(node.value);
 	}
 
+	/** Renders an `import module [as alias], ...` statement. */
 	visit_Import(node: Extract<StmtNode, { nodeType: "Import" }>): void {
 		this.fill("import ");
 		this.interleave(", ", (alias) => this.visit(alias), node.names);
 	}
 
+	/**
+	 * Renders a `from module import name, ...` statement, including relative
+	 * import dots for `node.level` (e.g. `level: 2` -> `from ..module import ...`).
+	 */
 	visit_ImportFrom(node: Extract<StmtNode, { nodeType: "ImportFrom" }>): void {
 		this.fill("from ");
 		if (node.level && node.level > 0) {
@@ -579,11 +746,13 @@ class Unparser extends NodeVisitor {
 		this.interleave(", ", (alias) => this.visit(alias), node.names);
 	}
 
+	/** Renders a `global name, ...` statement. */
 	visit_Global(node: Extract<StmtNode, { nodeType: "Global" }>): void {
 		this.fill("global ");
 		this.interleave(", ", (name) => this.write(name), node.names);
 	}
 
+	/** Renders a `raise [exc [from cause]]` statement. */
 	visit_Raise(node: Extract<StmtNode, { nodeType: "Raise" }>): void {
 		this.fill("raise");
 		if (node.exc) {
@@ -596,6 +765,7 @@ class Unparser extends NodeVisitor {
 		}
 	}
 
+	/** Renders a `try:` statement with its `except`, `else:`, and `finally:` clauses. */
 	visit_Try(node: Extract<StmtNode, { nodeType: "Try" }>): void {
 		this.fill("try:");
 		this.context.indent++;
@@ -627,6 +797,11 @@ class Unparser extends NodeVisitor {
 		}
 	}
 
+	/**
+	 * Renders a `try:` statement using PEP 654 `except*` exception-group
+	 * handlers, rather than delegating to `visit_ExceptHandler` (which emits
+	 * plain `except`), since `TryStar` handlers always use the `except*` form.
+	 */
 	visit_TryStar(node: Extract<StmtNode, { nodeType: "TryStar" }>): void {
 		this.fill("try:");
 		this.context.indent++;
@@ -673,6 +848,7 @@ class Unparser extends NodeVisitor {
 		}
 	}
 
+	/** Renders an `assert test[, msg]` statement. */
 	visit_Assert(node: Extract<StmtNode, { nodeType: "Assert" }>): void {
 		this.fill("assert ");
 		this.visit(node.test);
@@ -682,6 +858,7 @@ class Unparser extends NodeVisitor {
 		}
 	}
 
+	/** Renders a `with item, ...:` statement and its indented body. */
 	visit_With(node: Extract<StmtNode, { nodeType: "With" }>): void {
 		this.fill("with ");
 		this.interleave(", ", (item) => this.visit(item), node.items);
@@ -693,6 +870,7 @@ class Unparser extends NodeVisitor {
 		this.context.indent--;
 	}
 
+	/** Renders an `async with item, ...:` statement and its indented body. */
 	visit_AsyncWith(node: Extract<StmtNode, { nodeType: "AsyncWith" }>): void {
 		this.fill("async with ");
 		this.interleave(", ", (item) => this.visit(item), node.items);
@@ -704,6 +882,7 @@ class Unparser extends NodeVisitor {
 		this.context.indent--;
 	}
 
+	/** Renders an `async for target in iter:` loop, including an optional `else:` clause. */
 	visit_AsyncFor(node: Extract<StmtNode, { nodeType: "AsyncFor" }>): void {
 		this.fill("async for ");
 		this.visit(node.target);
@@ -725,6 +904,7 @@ class Unparser extends NodeVisitor {
 		}
 	}
 
+	/** Renders an `async def` statement: decorators, signature, and indented body. */
 	visit_AsyncFunctionDef(
 		node: Extract<StmtNode, { nodeType: "AsyncFunctionDef" }>,
 	): void {
@@ -747,6 +927,7 @@ class Unparser extends NodeVisitor {
 		this.context.indent--;
 	}
 
+	/** Renders an annotated assignment (`target: annotation[ = value]`). */
 	visit_AnnAssign(node: Extract<StmtNode, { nodeType: "AnnAssign" }>): void {
 		this.fill();
 		this.visit(node.target);
@@ -759,13 +940,20 @@ class Unparser extends NodeVisitor {
 	}
 
 	// Expression visitors
+	/**
+	 * Renders a binary operator expression (`left op right`), parenthesizing
+	 * either operand as needed to preserve evaluation order. Parenthesization
+	 * of the whole `BinOp` expression itself (relative to whatever contains
+	 * it) is decided by the caller, via `leftNeedsParens`/`rightNeedsParens`
+	 * at its own parent's call site. The right operand gets extra scrutiny:
+	 * for a left-associative operator, a right-hand child of *equal*
+	 * precedence still needs parens (`a - (b - c)` is not the same as
+	 * `a - b - c`), whereas for the right-associative `**` operator an
+	 * equal-precedence right child does not.
+	 */
 	visit_BinOp(node: Extract<ExprNode, { nodeType: "BinOp" }>): void {
 		const precedence = this.getBinOpPrecedence(node.op);
-		const needParens = this.requireParens(precedence, node);
 
-		if (needParens) this.write("(");
-
-		// Check if left operand needs parentheses
 		const leftNeedsParens = this.requireParens(precedence, node.left);
 		if (leftNeedsParens) this.write("(");
 		this.withPrecedence(precedence, node.left);
@@ -773,8 +961,6 @@ class Unparser extends NodeVisitor {
 
 		this.write(" ", this.getBinOpSymbol(node.op), " ");
 
-		// Check if right operand needs parentheses
-		// For right-associative operators or same precedence, we need to be more careful
 		const rightNeedsParens =
 			this.requireParens(precedence, node.right) ||
 			(this.getPrecedence(node.right) === precedence &&
@@ -782,15 +968,27 @@ class Unparser extends NodeVisitor {
 		if (rightNeedsParens) this.write("(");
 		this.withPrecedence(precedence, node.right);
 		if (rightNeedsParens) this.write(")");
-
-		if (needParens) this.write(")");
 	}
 
+	/**
+	 * Reports whether a binary operator is left-associative in Python.
+	 * All binary operators are left-associative except `**` (power), which
+	 * is right-associative (`2 ** 3 ** 2 == 2 ** (3 ** 2)`).
+	 *
+	 * @param op - The binary operator node.
+	 * @returns `true` unless `op` is `Pow`.
+	 */
 	private isLeftAssociative(op: OperatorNode): boolean {
 		// Most binary operators are left-associative, except power
 		return op.nodeType !== "Pow";
 	}
 
+	/**
+	 * Maps a binary `OperatorNode` to its source symbol (`+`, `**`, `//`, ...).
+	 *
+	 * @param op - The binary operator node.
+	 * @returns The operator's source text.
+	 */
 	private getBinOpSymbol(op: OperatorNode): string {
 		switch (op.nodeType) {
 			case "Add":
@@ -819,11 +1017,14 @@ class Unparser extends NodeVisitor {
 				return "&";
 			case "FloorDiv":
 				return "//";
-			default:
-				return "?";
 		}
 	}
 
+	/**
+	 * Renders a unary operator expression (`-x`, `~x`, `not x`, `+x`).
+	 * `not` is written with a trailing space (word operator); the symbolic
+	 * operators (`-`, `~`, `+`) are written flush against the operand.
+	 */
 	visit_UnaryOp(node: Extract<ExprNode, { nodeType: "UnaryOp" }>): void {
 		const precedence = Precedence.FACTOR;
 		const needParens = this.requireParens(precedence, node);
@@ -835,6 +1036,12 @@ class Unparser extends NodeVisitor {
 		if (needParens) this.write(")");
 	}
 
+	/**
+	 * Maps a `UnaryOpNode` to its source symbol/keyword (`~`, `not`, `+`, `-`).
+	 *
+	 * @param op - The unary operator node.
+	 * @returns The operator's source text.
+	 */
 	private getUnaryOpSymbol(op: UnaryOpNode): string {
 		switch (op.nodeType) {
 			case "Invert":
@@ -845,48 +1052,41 @@ class Unparser extends NodeVisitor {
 				return "+";
 			case "USub":
 				return "-";
-			default:
-				return "?";
 		}
 	}
 
+	/** Renders a boolean operator expression, joining `values` with `" and "`/`" or "`. */
 	visit_BoolOp(node: Extract<ExprNode, { nodeType: "BoolOp" }>): void {
 		const precedence =
 			node.op.nodeType === "Or" ? Precedence.OR : Precedence.AND;
-		const needParens = this.requireParens(precedence, node);
 		const opSymbol = node.op.nodeType === "Or" ? " or " : " and ";
 
-		if (needParens) this.write("(");
 		this.interleave(
 			opSymbol,
 			(value) => this.withPrecedence(precedence, value),
 			node.values,
 		);
-		if (needParens) this.write(")");
 	}
 
+	/** Renders a chained comparison expression (`left op1 c1 op2 c2 ...`). */
 	visit_Compare(node: Extract<ExprNode, { nodeType: "Compare" }>): void {
 		const precedence = Precedence.CMP;
-		const needParens = this.requireParens(precedence, node);
 
-		if (needParens) this.write("(");
 		this.withPrecedence(precedence, node.left);
 		for (let i = 0; i < node.ops.length; i++) {
 			this.write(" ", this.getCmpOpSymbol(node.ops[i]), " ");
 			this.withPrecedence(precedence, node.comparators[i]);
 		}
-		if (needParens) this.write(")");
 	}
 
+	/** Renders a walrus/named expression (`target := value`). */
 	visit_NamedExpr(node: Extract<ExprNode, { nodeType: "NamedExpr" }>): void {
-		const needParens = this.requireParens(Precedence.TEST, node);
-		if (needParens) this.write("(");
 		this.visit(node.target);
 		this.write(" := ");
 		this.visit(node.value);
-		if (needParens) this.write(")");
 	}
 
+	/** Renders a `lambda [params]: body` expression. */
 	visit_Lambda(node: Extract<ExprNode, { nodeType: "Lambda" }>): void {
 		this.write("lambda");
 		if (node.args.args.length > 0 || node.args.vararg || node.args.kwarg) {
@@ -897,23 +1097,23 @@ class Unparser extends NodeVisitor {
 		this.visit(node.body);
 	}
 
+	/** Renders a conditional expression (`body if test else orelse`). */
 	visit_IfExp(node: Extract<ExprNode, { nodeType: "IfExp" }>): void {
 		const precedence = Precedence.TEST;
-		const needParens = this.requireParens(precedence, node);
-		if (needParens) this.write("(");
 		this.withPrecedence(precedence, node.body);
 		this.write(" if ");
 		this.withPrecedence(precedence, node.test);
 		this.write(" else ");
 		this.withPrecedence(precedence, node.orelse);
-		if (needParens) this.write(")");
 	}
 
+	/** Renders an `await value` expression. */
 	visit_Await(node: Extract<ExprNode, { nodeType: "Await" }>): void {
 		this.write("await ");
 		this.withPrecedence(Precedence.AWAIT, node.value);
 	}
 
+	/** Renders a `yield [value]` expression. */
 	visit_Yield(node: Extract<ExprNode, { nodeType: "Yield" }>): void {
 		this.write("yield");
 		if (node.value) {
@@ -922,16 +1122,19 @@ class Unparser extends NodeVisitor {
 		}
 	}
 
+	/** Renders a `yield from value` expression. */
 	visit_YieldFrom(node: Extract<ExprNode, { nodeType: "YieldFrom" }>): void {
 		this.write("yield from ");
 		this.visit(node.value);
 	}
 
+	/** Renders a starred expression (`*value`), e.g. in call args or assignment targets. */
 	visit_Starred(node: Extract<ExprNode, { nodeType: "Starred" }>): void {
 		this.write("*");
 		this.visit(node.value);
 	}
 
+	/** Renders a slice (`lower:upper[:step]`) used inside a `Subscript`. */
 	visit_Slice(node: Extract<ExprNode, { nodeType: "Slice" }>): void {
 		if (node.lower) {
 			this.visit(node.lower);
@@ -946,6 +1149,7 @@ class Unparser extends NodeVisitor {
 		}
 	}
 
+	/** Renders an f-string (`JoinedStr`), preserving its original quote style. */
 	visit_JoinedStr(node: Extract<ExprNode, { nodeType: "JoinedStr" }>): void {
 		const [openQuote, closeQuote] = this.chooseFStringQuotes(node);
 		this.write(openQuote);
@@ -953,6 +1157,15 @@ class Unparser extends NodeVisitor {
 		this.write(closeQuote);
 	}
 
+	/**
+	 * Writes the interior parts of an f-string (between the quotes), handling
+	 * literal text segments and `{expr[!conv][:format_spec]}` replacement
+	 * fields inline. Extracted from {@link visit_JoinedStr} because nested
+	 * format specs that are themselves f-strings (e.g. `f"{x:{width}}"`) need
+	 * their content written without an extra pair of surrounding quotes.
+	 *
+	 * @param node - The `JoinedStr` node whose `values` to render.
+	 */
 	private writeJoinedStrContent(
 		node: Extract<ExprNode, { nodeType: "JoinedStr" }>,
 	): void {
@@ -982,6 +1195,13 @@ class Unparser extends NodeVisitor {
 		}
 	}
 
+	/**
+	 * Renders a standalone `FormattedValue` (a `{expr[!conv][:format_spec]}`
+	 * replacement field visited outside of a `JoinedStr` context). The
+	 * `conversion` field holds the ASCII code point of the conversion letter
+	 * (115 = `s`, 114 = `r`, 97 = `a`) as produced by CPython's `ast` module;
+	 * `-1` means no conversion.
+	 */
 	visit_FormattedValue(
 		node: Extract<ExprNode, { nodeType: "FormattedValue" }>,
 	): void {
@@ -1003,6 +1223,12 @@ class Unparser extends NodeVisitor {
 		this.write("}");
 	}
 
+	/**
+	 * Maps a `CmpOpNode` to its source text (`==`, `is not`, `not in`, ...).
+	 *
+	 * @param op - The comparison operator node.
+	 * @returns The operator's source text.
+	 */
 	private getCmpOpSymbol(op: CmpOpNode): string {
 		switch (op.nodeType) {
 			case "Eq":
@@ -1025,11 +1251,10 @@ class Unparser extends NodeVisitor {
 				return "in";
 			case "NotIn":
 				return "not in";
-			default:
-				return "?";
 		}
 	}
 
+	/** Renders a call expression (`func(args, kw=value, ...)`). */
 	visit_Call(node: Extract<ExprNode, { nodeType: "Call" }>): void {
 		this.visit(node.func);
 		this.write("(");
@@ -1041,6 +1266,7 @@ class Unparser extends NodeVisitor {
 		this.write(")");
 	}
 
+	/** Renders a call keyword argument (`name=value`), or `**value` when `arg` is absent. */
 	visit_Keyword(node: Keyword): void {
 		if (node.arg) {
 			this.write(node.arg, "=");
@@ -1050,10 +1276,21 @@ class Unparser extends NodeVisitor {
 		this.visit(node.value);
 	}
 
+	/** Renders a literal constant (`None`/`True`/`False`/number/string/ellipsis). */
 	visit_Constant(node: Extract<ExprNode, { nodeType: "Constant" }>): void {
 		this.write(this.formatConstant(node.value, node.kind));
 	}
 
+	/**
+	 * Formats a `Constant` node's raw JS value as Python source text.
+	 * `value` is typed `any` because a `Constant` may hold any JSON-like
+	 * literal produced by the parser (string, number, boolean, `null`, or the
+	 * sentinel `"..."` for `Ellipsis`).
+	 *
+	 * @param value - The constant's runtime value.
+	 * @param kind - Original string-prefix/quote-style hint (see {@link formatString}).
+	 * @returns The Python source representation of `value`.
+	 */
 	// biome-ignore lint/suspicious/noExplicitAny: Could be of any type
 	private formatConstant(value: any, kind?: string): string {
 		if (value === null) return "None";
@@ -1069,13 +1306,28 @@ class Unparser extends NodeVisitor {
 		return String(value);
 	}
 
+	/**
+	 * Formats a string constant with its original quote style preserved where
+	 * known: triple-quoted strings (`"""`/`'''`) are re-emitted as
+	 * triple-quoted regardless of whether they contain newlines, and
+	 * single/double-quoted strings keep their original quote character
+	 * (escaping only that character in the body). Falls back to double quotes
+	 * when no `kind` hint is available.
+	 *
+	 * @param value - The raw (unescaped) string value.
+	 * @param kind - Original prefix+quote text captured by the parser, e.g.
+	 *   `'"'`, `"'''"`, or `"rb\""`.
+	 * @returns The quoted, escaped Python string literal.
+	 */
 	private formatString(value: string, kind?: string): string {
 		// If we have quote style information, use it
 		if (kind) {
-			// Extract prefix and quote info
-			const prefixMatch = kind.match(/^([fFrRbBuU]*)(.*)/);
-			const prefix = prefixMatch ? prefixMatch[1] : "";
-			const quoteStyle = prefixMatch ? prefixMatch[2] : '"""';
+			// Both capture groups accept an empty match, so this regex always
+			// matches and `prefixMatch` is never null.
+			// biome-ignore lint/style/noNonNullAssertion: regex is provably total, see comment above
+			const prefixMatch = kind.match(/^([fFrRbBuU]*)(.*)/)!;
+			const prefix = prefixMatch[1];
+			const quoteStyle = prefixMatch[2];
 
 			// For multiline strings, preserve triple quotes
 			if (quoteStyle === '"""' || quoteStyle === "'''") {
@@ -1099,6 +1351,15 @@ class Unparser extends NodeVisitor {
 		return `"${this.escapeString(value, '"')}"`;
 	}
 
+	/**
+	 * Escapes backslashes, newlines, carriage returns, tabs, and the given
+	 * quote character in `value` so it can be embedded in a single-quoted
+	 * (non-triple) Python string literal.
+	 *
+	 * @param value - Raw string content to escape.
+	 * @param quote - The quote character (`"` or `'`) the string will be wrapped in.
+	 * @returns The escaped string body (without surrounding quotes).
+	 */
 	private escapeString(value: string, quote: string): string {
 		return value
 			.replace(/\\/g, "\\\\")
@@ -1108,15 +1369,23 @@ class Unparser extends NodeVisitor {
 			.replace(new RegExp(`\\${quote}`, "g"), `\\${quote}`);
 	}
 
+	/** Renders a bare identifier reference. */
 	visit_Name(node: Extract<ExprNode, { nodeType: "Name" }>): void {
 		this.write(node.id);
 	}
 
+	/** Renders attribute access (`value.attr`). */
 	visit_Attribute(node: Extract<ExprNode, { nodeType: "Attribute" }>): void {
 		this.visit(node.value);
 		this.write(".", node.attr);
 	}
 
+	/**
+	 * Renders a subscript expression (`value[slice]`). A `Tuple` slice (as in
+	 * `a[1, 2]` or `a[i, j:k]`) is unpacked and its elements interleaved with
+	 * `", "` directly, rather than delegating to `visit_Tuple`, so it isn't
+	 * wrapped in the parentheses `visit_Tuple` would normally add.
+	 */
 	visit_Subscript(node: Extract<ExprNode, { nodeType: "Subscript" }>): void {
 		this.visit(node.value);
 		this.write("[");
@@ -1129,12 +1398,18 @@ class Unparser extends NodeVisitor {
 		this.write("]");
 	}
 
+	/** Renders a list display (`[elt, ...]`). */
 	visit_List(node: Extract<ExprNode, { nodeType: "List" }>): void {
 		this.write("[");
 		this.interleave(", ", (elt) => this.visit(elt), node.elts);
 		this.write("]");
 	}
 
+	/**
+	 * Renders a tuple display. A single-element tuple gets an explicit
+	 * trailing comma (`(x,)`) since `(x)` alone would just be `x` in
+	 * parentheses, not a tuple.
+	 */
 	visit_Tuple(node: Extract<ExprNode, { nodeType: "Tuple" }>): void {
 		this.write("(");
 		this.interleave(", ", (elt) => this.visit(elt), node.elts);
@@ -1144,6 +1419,11 @@ class Unparser extends NodeVisitor {
 		this.write(")");
 	}
 
+	/**
+	 * Renders a dict display (`{key: value, ...}`). A `null` key (paired with
+	 * its value) represents a `**value` unpacking entry rather than an
+	 * explicit `key: value` pair.
+	 */
 	visit_Dict(node: Extract<ExprNode, { nodeType: "Dict" }>): void {
 		this.write("{");
 		for (let i = 0; i < node.keys.length; i++) {
@@ -1160,12 +1440,14 @@ class Unparser extends NodeVisitor {
 		this.write("}");
 	}
 
+	/** Renders a set display (`{elt, ...}`). */
 	visit_Set(node: Extract<ExprNode, { nodeType: "Set" }>): void {
 		this.write("{");
 		this.interleave(", ", (elt) => this.visit(elt), node.elts);
 		this.write("}");
 	}
 
+	/** Renders a list comprehension (`[elt for ... ]`). */
 	visit_ListComp(node: Extract<ExprNode, { nodeType: "ListComp" }>): void {
 		this.write("[");
 		this.visit(node.elt);
@@ -1175,6 +1457,7 @@ class Unparser extends NodeVisitor {
 		this.write("]");
 	}
 
+	/** Renders a set comprehension (`{elt for ... }`). */
 	visit_SetComp(node: Extract<ExprNode, { nodeType: "SetComp" }>): void {
 		this.write("{");
 		this.visit(node.elt);
@@ -1184,6 +1467,7 @@ class Unparser extends NodeVisitor {
 		this.write("}");
 	}
 
+	/** Renders a dict comprehension (`{key: value for ... }`). */
 	visit_DictComp(node: Extract<ExprNode, { nodeType: "DictComp" }>): void {
 		this.write("{");
 		this.visit(node.key);
@@ -1195,6 +1479,7 @@ class Unparser extends NodeVisitor {
 		this.write("}");
 	}
 
+	/** Renders a generator expression (`(elt for ... )`). */
 	visit_GeneratorExp(
 		node: Extract<ExprNode, { nodeType: "GeneratorExp" }>,
 	): void {
@@ -1206,6 +1491,12 @@ class Unparser extends NodeVisitor {
 		this.write(")");
 	}
 
+	/**
+	 * Renders one `[async] for target in iter [if cond ...]` clause of a
+	 * comprehension. Writes its own leading space (` for `/` async for `) so
+	 * multiple clauses concatenate correctly when a comprehension has more
+	 * than one `for`.
+	 */
 	visit_Comprehension(
 		node: Extract<
 			import("./types.js").Comprehension,
@@ -1227,6 +1518,10 @@ class Unparser extends NodeVisitor {
 	}
 
 	// Handle helper types
+	/**
+	 * Renders one `except [type [as name]]:` clause of a `Try` statement
+	 * (plain `except`, not the `except*` form — see {@link visit_TryStar}).
+	 */
 	visit_ExceptHandler(
 		node: Extract<
 			import("./types.js").ExceptHandler,
@@ -1250,6 +1545,7 @@ class Unparser extends NodeVisitor {
 		this.context.indent--;
 	}
 
+	/** Renders one `name [as asname]` entry of an `import`/`from ... import` clause. */
 	visit_Alias(
 		node: Extract<import("./types.js").Alias, { nodeType: "Alias" }>,
 	): void {
@@ -1260,6 +1556,7 @@ class Unparser extends NodeVisitor {
 		}
 	}
 
+	/** Renders one `context_expr [as optional_vars]` entry of a `with`/`async with` clause. */
 	visit_WithItem(
 		node: Extract<import("./types.js").WithItem, { nodeType: "WithItem" }>,
 	): void {
@@ -1271,6 +1568,15 @@ class Unparser extends NodeVisitor {
 	}
 
 	// Handle arguments
+	/**
+	 * Renders a function/lambda parameter list: positional-only params (with
+	 * trailing `/`), regular params, `*args`, keyword-only params, and
+	 * `**kwargs`, each with defaults aligned to the correct (rightmost)
+	 * parameters. Does not write the surrounding parentheses — callers
+	 * (`visit_FunctionDef`, `visit_Lambda`, etc.) are responsible for those.
+	 *
+	 * @param node - The `Arguments` node describing the full parameter list.
+	 */
 	visit_arguments(node: Arguments): void {
 		const all_args = [...node.posonlyargs, ...node.args];
 
@@ -1298,16 +1604,17 @@ class Unparser extends NodeVisitor {
 		}
 
 		if (node.kwonlyargs.length > 0) {
-			if (!node.vararg && all_args.length > 0) this.write(", *");
+			if (!node.vararg) {
+				this.write(all_args.length > 0 ? ", *" : "*");
+			}
 			for (let i = 0; i < node.kwonlyargs.length; i++) {
 				this.write(", ");
 				this.visit(node.kwonlyargs[i]);
-				if (i < node.kw_defaults.length && node.kw_defaults[i]) {
+				const defaultValue =
+					i < node.kw_defaults.length ? node.kw_defaults[i] : undefined;
+				if (defaultValue) {
 					this.write("=");
-					const defaultValue = node.kw_defaults[i];
-					if (defaultValue) {
-						this.visit(defaultValue);
-					}
+					this.visit(defaultValue);
 				}
 			}
 		}
@@ -1321,6 +1628,7 @@ class Unparser extends NodeVisitor {
 		}
 	}
 
+	/** Renders a single parameter (`name[: annotation]`) within a parameter list. */
 	visit_Arg(node: Arg): void {
 		this.write(node.arg);
 		if (node.annotation) {
@@ -1330,12 +1638,14 @@ class Unparser extends NodeVisitor {
 	}
 
 	// Pattern visitors
+	/** Renders a `match` literal/value pattern (`case value:`). */
 	visit_MatchValue(
 		node: Extract<import("./types.js").PatternNode, { nodeType: "MatchValue" }>,
 	): void {
 		this.visit(node.value);
 	}
 
+	/** Renders a `match` singleton pattern (`case None:`/`True`/`False`). */
 	visit_MatchSingleton(
 		node: Extract<
 			import("./types.js").PatternNode,
@@ -1348,6 +1658,7 @@ class Unparser extends NodeVisitor {
 		else this.write(String(node.value));
 	}
 
+	/** Renders a `match` sequence pattern (`case [p1, p2, ...]:`). */
 	visit_MatchSequence(
 		node: Extract<
 			import("./types.js").PatternNode,
@@ -1359,6 +1670,9 @@ class Unparser extends NodeVisitor {
 		this.write("]");
 	}
 
+	/**
+	 * Renders a `match` mapping pattern (`case {key: pattern, ..., **rest}:`).
+	 */
 	visit_MatchMapping(
 		node: Extract<
 			import("./types.js").PatternNode,
@@ -1380,6 +1694,10 @@ class Unparser extends NodeVisitor {
 		this.write("}");
 	}
 
+	/**
+	 * Renders a `match` class pattern (`case Cls(p1, p2, kw=p3, ...):`),
+	 * combining positional sub-patterns and keyword sub-patterns.
+	 */
 	visit_MatchClass(
 		node: Extract<import("./types.js").PatternNode, { nodeType: "MatchClass" }>,
 	): void {
@@ -1395,6 +1713,7 @@ class Unparser extends NodeVisitor {
 		this.write(")");
 	}
 
+	/** Renders a `match` star pattern (`*name` or bare `*` inside a sequence pattern). */
 	visit_MatchStar(
 		node: Extract<import("./types.js").PatternNode, { nodeType: "MatchStar" }>,
 	): void {
@@ -1404,6 +1723,10 @@ class Unparser extends NodeVisitor {
 		}
 	}
 
+	/**
+	 * Renders a `match` "as" pattern (`pattern as name`), or a bare capture
+	 * name / wildcard `_` when `pattern` is absent.
+	 */
 	visit_MatchAs(
 		node: Extract<import("./types.js").PatternNode, { nodeType: "MatchAs" }>,
 	): void {
@@ -1416,6 +1739,7 @@ class Unparser extends NodeVisitor {
 		}
 	}
 
+	/** Renders an "or" pattern (`p1 | p2 | ...`). */
 	visit_MatchOr(
 		node: Extract<import("./types.js").PatternNode, { nodeType: "MatchOr" }>,
 	): void {
@@ -1423,6 +1747,12 @@ class Unparser extends NodeVisitor {
 	}
 
 	// Helper method for type parameters
+	/**
+	 * Writes a PEP 695 type-parameter list (`[T, *Ts, **P]`) if `type_params`
+	 * is non-empty; writes nothing otherwise.
+	 *
+	 * @param type_params - Type parameters declared on a `def`/`class`/`type` statement.
+	 */
 	private writeTypeParams(
 		type_params: import("./types.js").TypeParamNode[],
 	): void {
@@ -1434,6 +1764,7 @@ class Unparser extends NodeVisitor {
 	}
 
 	// Type parameter visitors
+	/** Renders a PEP 695 `TypeVar` param (`T[: bound][ = default]`). */
 	visit_TypeVar(
 		node: Extract<import("./types.js").TypeParamNode, { nodeType: "TypeVar" }>,
 	): void {
@@ -1448,6 +1779,7 @@ class Unparser extends NodeVisitor {
 		}
 	}
 
+	/** Renders a PEP 695 `ParamSpec` param (`**P[ = default]`). */
 	visit_ParamSpec(
 		node: Extract<
 			import("./types.js").TypeParamNode,
@@ -1462,6 +1794,7 @@ class Unparser extends NodeVisitor {
 		}
 	}
 
+	/** Renders a PEP 695 `TypeVarTuple` param (`*Ts[ = default]`). */
 	visit_TypeVarTuple(
 		node: Extract<
 			import("./types.js").TypeParamNode,
@@ -1477,6 +1810,7 @@ class Unparser extends NodeVisitor {
 	}
 
 	// FunctionType module visitor
+	/** Renders a `FunctionType` module node: a bare `(argtypes) -> returns` type signature. */
 	visit_FunctionType(
 		node: Extract<
 			import("./types.js").ModuleNode,

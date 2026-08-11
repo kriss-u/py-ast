@@ -1,5 +1,5 @@
-import { assertNodeType, parseStatement, parseCode } from "./test-helpers.js";
-import type { StmtNode } from "../src/types.js";
+import { describe, expect, test } from "vitest";
+import { assertNodeType, parseCode, parseStatement } from "./test-helpers.js";
 
 describe("Pattern Matching", () => {
 	describe("Dictionary/Mapping Patterns", () => {
@@ -12,12 +12,11 @@ match data:
 			const ast = parseCode(code);
 			const matchStmt = ast.body[0];
 			assertNodeType(matchStmt, "Match");
-			
-			const caseStmt = (matchStmt as Extract<StmtNode, { nodeType: "Match" }>).cases[0];
+
+			const caseStmt = matchStmt.cases[0];
 			assertNodeType(caseStmt.pattern, "MatchMapping");
-			const pattern = caseStmt.pattern as Extract<import("../src/types.js").PatternNode, { nodeType: "MatchMapping" }>;
-			expect(pattern.keys).toHaveLength(1);
-			expect(pattern.patterns).toHaveLength(1);
+			expect(caseStmt.pattern.keys).toHaveLength(1);
+			expect(caseStmt.pattern.patterns).toHaveLength(1);
 		});
 
 		test("complex dictionary pattern with multiple keys", () => {
@@ -29,12 +28,11 @@ match data:
 			const ast = parseCode(code);
 			const matchStmt = ast.body[0];
 			assertNodeType(matchStmt, "Match");
-			
-			const caseStmt = (matchStmt as Extract<StmtNode, { nodeType: "Match" }>).cases[0];
+
+			const caseStmt = matchStmt.cases[0];
 			assertNodeType(caseStmt.pattern, "MatchMapping");
-			const pattern = caseStmt.pattern as Extract<import("../src/types.js").PatternNode, { nodeType: "MatchMapping" }>;
-			expect(pattern.keys).toHaveLength(3);
-			expect(pattern.patterns).toHaveLength(3);
+			expect(caseStmt.pattern.keys).toHaveLength(3);
+			expect(caseStmt.pattern.patterns).toHaveLength(3);
 		});
 
 		test("dictionary pattern with guard", () => {
@@ -46,11 +44,14 @@ match data:
 			const ast = parseCode(code);
 			const matchStmt = ast.body[0];
 			assertNodeType(matchStmt, "Match");
-			
-			const caseStmt = (matchStmt as Extract<StmtNode, { nodeType: "Match" }>).cases[0];
+
+			const caseStmt = matchStmt.cases[0];
 			assertNodeType(caseStmt.pattern, "MatchMapping");
 			expect(caseStmt.guard).toBeTruthy();
-			assertNodeType(caseStmt.guard!, "Compare");
+			if (!caseStmt.guard) {
+				throw new Error("expected guard to be defined");
+			}
+			assertNodeType(caseStmt.guard, "Compare");
 		});
 
 		test("dictionary pattern with rest capture", () => {
@@ -62,11 +63,10 @@ match data:
 			const ast = parseCode(code);
 			const matchStmt = ast.body[0];
 			assertNodeType(matchStmt, "Match");
-			
-			const caseStmt = (matchStmt as Extract<StmtNode, { nodeType: "Match" }>).cases[0];
+
+			const caseStmt = matchStmt.cases[0];
 			assertNodeType(caseStmt.pattern, "MatchMapping");
-			const pattern = caseStmt.pattern as Extract<import("../src/types.js").PatternNode, { nodeType: "MatchMapping" }>;
-			expect(pattern.rest).toBe("rest");
+			expect(caseStmt.pattern.rest).toBe("rest");
 		});
 	});
 
@@ -80,11 +80,10 @@ match value:
 			const ast = parseCode(code);
 			const matchStmt = ast.body[0];
 			assertNodeType(matchStmt, "Match");
-			
-			const caseStmt = (matchStmt as Extract<StmtNode, { nodeType: "Match" }>).cases[0];
+
+			const caseStmt = matchStmt.cases[0];
 			assertNodeType(caseStmt.pattern, "MatchClass");
-			const pattern = caseStmt.pattern as Extract<import("../src/types.js").PatternNode, { nodeType: "MatchClass" }>;
-			expect(pattern.patterns).toHaveLength(1);
+			expect(caseStmt.pattern.patterns).toHaveLength(1);
 		});
 
 		test("class pattern with multiple arguments", () => {
@@ -96,11 +95,10 @@ match point:
 			const ast = parseCode(code);
 			const matchStmt = ast.body[0];
 			assertNodeType(matchStmt, "Match");
-			
-			const caseStmt = (matchStmt as Extract<StmtNode, { nodeType: "Match" }>).cases[0];
+
+			const caseStmt = matchStmt.cases[0];
 			assertNodeType(caseStmt.pattern, "MatchClass");
-			const pattern = caseStmt.pattern as Extract<import("../src/types.js").PatternNode, { nodeType: "MatchClass" }>;
-			expect(pattern.patterns).toHaveLength(2);
+			expect(caseStmt.pattern.patterns).toHaveLength(2);
 		});
 
 		test("class pattern with keyword arguments", () => {
@@ -112,12 +110,11 @@ match point:
 			const ast = parseCode(code);
 			const matchStmt = ast.body[0];
 			assertNodeType(matchStmt, "Match");
-			
-			const caseStmt = (matchStmt as Extract<StmtNode, { nodeType: "Match" }>).cases[0];
+
+			const caseStmt = matchStmt.cases[0];
 			assertNodeType(caseStmt.pattern, "MatchClass");
-			const pattern = caseStmt.pattern as Extract<import("../src/types.js").PatternNode, { nodeType: "MatchClass" }>;
-			expect(pattern.kwd_attrs).toHaveLength(2);
-			expect(pattern.kwd_patterns).toHaveLength(2);
+			expect(caseStmt.pattern.kwd_attrs).toHaveLength(2);
+			expect(caseStmt.pattern.kwd_patterns).toHaveLength(2);
 		});
 
 		test("class pattern with mixed positional and keyword arguments", () => {
@@ -129,13 +126,12 @@ match data:
 			const ast = parseCode(code);
 			const matchStmt = ast.body[0];
 			assertNodeType(matchStmt, "Match");
-			
-			const caseStmt = (matchStmt as Extract<StmtNode, { nodeType: "Match" }>).cases[0];
+
+			const caseStmt = matchStmt.cases[0];
 			assertNodeType(caseStmt.pattern, "MatchClass");
-			const pattern = caseStmt.pattern as Extract<import("../src/types.js").PatternNode, { nodeType: "MatchClass" }>;
-			expect(pattern.patterns).toHaveLength(1);
-			expect(pattern.kwd_attrs).toHaveLength(1);
-			expect(pattern.kwd_patterns).toHaveLength(1);
+			expect(caseStmt.pattern.patterns).toHaveLength(1);
+			expect(caseStmt.pattern.kwd_attrs).toHaveLength(1);
+			expect(caseStmt.pattern.kwd_patterns).toHaveLength(1);
 		});
 	});
 
@@ -154,7 +150,7 @@ match x:
 		const ast = parseCode(code);
 		const matchStmt = ast.body[0];
 		assertNodeType(matchStmt, "Match");
-		expect((matchStmt as any).cases).toHaveLength(1);
+		expect(matchStmt.cases).toHaveLength(1);
 	});
 });
 
@@ -170,13 +166,14 @@ except* ValueError as e:
 			const ast = parseCode(code);
 			const tryStmt = ast.body[0];
 			assertNodeType(tryStmt, "TryStar");
-			
-			expect((tryStmt as any).handlers).toHaveLength(1);
-			const handler = (tryStmt as any).handlers[0];
+
+			expect(tryStmt.handlers).toHaveLength(1);
+			const handler = tryStmt.handlers[0];
 			assertNodeType(handler, "ExceptHandler");
-			expect((handler as any).type?.nodeType).toBe("Name");
-			expect((handler as any).type?.id).toBe("ValueError");
-			expect((handler as any).name).toBe("e");
+			expect(handler.type?.nodeType).toBe("Name");
+			assertNodeType(handler.type, "Name");
+			expect(handler.type.id).toBe("ValueError");
+			expect(handler.name).toBe("e");
 		});
 
 		test("multiple except* handlers", () => {
@@ -191,7 +188,7 @@ except* TypeError as te:
 			const ast = parseCode(code);
 			const tryStmt = ast.body[0];
 			assertNodeType(tryStmt, "TryStar");
-			expect((tryStmt as any).handlers).toHaveLength(2);
+			expect(tryStmt.handlers).toHaveLength(2);
 		});
 
 		test("except* with finally", () => {
@@ -206,7 +203,7 @@ finally:
 			const ast = parseCode(code);
 			const tryStmt = ast.body[0];
 			assertNodeType(tryStmt, "TryStar");
-			expect((tryStmt as any).finalbody).toHaveLength(1);
+			expect(tryStmt.finalbody).toHaveLength(1);
 		});
 	});
 });

@@ -10,10 +10,12 @@
 		"includes": [
 			"src/**/*.ts",
 			"src/**/*.js",
+			"tests/**/*.ts",
 			"*.md",
 			"*.json",
 			"*.ts",
 			"*.js",
+			".claude/**/*.json",
 			"!dist",
 			"!scripts",
 			"demo/**/*.mjs"

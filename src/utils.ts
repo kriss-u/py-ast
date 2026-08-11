@@ -1,7 +1,13 @@
 import type { ASTNodeUnion, ExprNode, StmtNode } from "./types.js";
 
 /**
- * Get the docstring from a function, class, or module node
+ * Get the docstring from a function, class, or module node.
+ *
+ * The docstring is the string literal that forms the first statement in the
+ * node's body, matching CPython's `ast.get_docstring` semantics.
+ * @param node The function, class, or module node to inspect
+ * @returns The docstring text, or `null` if the node has no body, isn't a
+ * function/class/module, or its first statement isn't a string constant
  */
 export function getDocstring(node: ASTNodeUnion): string | null {
 	if (
@@ -29,6 +35,12 @@ export function getDocstring(node: ASTNodeUnion): string | null {
 
 /**
  * Iterate over all fields of a node.
+ *
+ * Skips the location bookkeeping properties (`nodeType`, `lineno`,
+ * `col_offset`, `end_lineno`, `end_col_offset`) and yields the node's
+ * remaining own properties as `[name, value]` pairs.
+ * @param node The AST node whose fields should be iterated
+ * @returns A generator of `[fieldName, fieldValue]` tuples
  */
 // biome-ignore lint/suspicious/noExplicitAny: Generator yields node field values which can be any type
 export function* iterFields(node: ASTNodeUnion): Generator<[string, any]> {
@@ -46,7 +58,12 @@ export function* iterFields(node: ASTNodeUnion): Generator<[string, any]> {
 }
 
 /**
- * Iterate over all direct child nodes
+ * Iterate over all direct child nodes.
+ *
+ * Walks the node's fields (via {@link iterFields}) and yields any values, or
+ * array elements, that are themselves AST nodes.
+ * @param node The AST node whose children should be iterated
+ * @returns A generator of the node's direct child AST nodes
  */
 export function* iterChildNodes(node: ASTNodeUnion): Generator<ASTNodeUnion> {
 	for (const [, value] of iterFields(node)) {
@@ -63,7 +80,13 @@ export function* iterChildNodes(node: ASTNodeUnion): Generator<ASTNodeUnion> {
 }
 
 /**
- * Check if a value is an AST node
+ * Check if a value is an AST node.
+ *
+ * A value is considered an AST node if it is a non-null object carrying a
+ * `nodeType` property; this is a type guard that narrows to
+ * {@link ASTNodeUnion}.
+ * @param value The value to test
+ * @returns `true` if `value` is an AST node, `false` otherwise
  */
 // biome-ignore lint/suspicious/noExplicitAny: Type guard function needs to accept any value
 export function isASTNode(value: any): value is ASTNodeUnion {
@@ -71,7 +94,16 @@ export function isASTNode(value: any): value is ASTNodeUnion {
 }
 
 /**
- * Get source segment from source code using node location info
+ * Get source segment from source code using node location info.
+ *
+ * Slices `source` using the node's `lineno`/`col_offset`/`end_lineno`/
+ * `end_col_offset` attributes, matching CPython's `ast.get_source_segment`.
+ * @param source The original source code the node was parsed from
+ * @param node The AST node whose corresponding source text should be extracted
+ * @param options.padded When `true`, pad the first line with leading spaces
+ * so its column offsets line up with the original source (default: `false`)
+ * @returns The extracted source text, or `null` if the node lacks complete
+ * location information
  */
 export function getSourceSegment(
 	source: string,
@@ -130,88 +162,221 @@ export function getSourceSegment(
 }
 
 /**
- * Type for expression context values
+ * Expression context values, mirroring Python's `ast.Load`, `ast.Store`, and
+ * `ast.Del` context node types.
  */
 type ContextType = "Load" | "Store" | "Del";
 
 /**
- * Type for constant values
+ * The set of literal value types a `Constant` node may hold.
  */
 type ConstantValue = string | number | boolean | null;
 
 /**
- * AST factory function types
+ * Shape of the {@link ast} factory object, exposing one builder method per
+ * supported AST node type. Each method returns a plain node object with
+ * `lineno` and `col_offset` defaulted to `1` and `0` respectively.
  */
 interface ASTFactory {
+	/**
+	 * Build a `Name` node.
+	 * @param id The identifier name
+	 * @param ctx The expression context (default: `"Load"`)
+	 * @returns A new `Name` node
+	 */
 	Name(id: string, ctx?: ContextType): Extract<ExprNode, { nodeType: "Name" }>;
+	/**
+	 * Build a `Constant` node.
+	 * @param value The literal value held by the node
+	 * @param kind An optional string kind annotation (e.g. `"u"` for `u"..."`)
+	 * @returns A new `Constant` node
+	 */
 	Constant(
 		value: ConstantValue,
 		kind?: string,
 	): Extract<ExprNode, { nodeType: "Constant" }>;
+	/**
+	 * Build a `Call` node.
+	 * @param func The expression being called
+	 * @param args Positional arguments (default: `[]`)
+	 * @param keywords Keyword arguments (default: `[]`)
+	 * @returns A new `Call` node
+	 */
 	Call(
 		func: ExprNode,
 		args?: ExprNode[],
 		keywords?: import("./types.js").Keyword[],
 	): Extract<ExprNode, { nodeType: "Call" }>;
+	/**
+	 * Build a `BinOp` node.
+	 * @param left The left-hand operand
+	 * @param op The operator, either an operator node or its string shorthand
+	 * (e.g. `"Add"`)
+	 * @param right The right-hand operand
+	 * @returns A new `BinOp` node
+	 */
 	BinOp(
 		left: ExprNode,
 		op: import("./types.js").Operator | string,
 		right: ExprNode,
 	): Extract<ExprNode, { nodeType: "BinOp" }>;
+	/**
+	 * Build an `Assign` statement node.
+	 * @param targets The assignment targets
+	 * @param value The value being assigned
+	 * @param type_comment An optional PEP 484 type comment
+	 * @returns A new `Assign` node
+	 */
 	Assign(
 		targets: ExprNode[],
 		value: ExprNode,
 		type_comment?: string,
 	): Extract<StmtNode, { nodeType: "Assign" }>;
+	/**
+	 * Build an `Expr` statement node (an expression used as a statement).
+	 * @param value The wrapped expression
+	 * @returns A new `Expr` node
+	 */
 	Expr(value: ExprNode): Extract<StmtNode, { nodeType: "Expr" }>;
+	/**
+	 * Build a `List` node.
+	 * @param elts The list elements
+	 * @param ctx The expression context (default: `"Load"`)
+	 * @returns A new `List` node
+	 */
 	List(
 		elts: ExprNode[],
 		ctx?: ContextType,
 	): Extract<ExprNode, { nodeType: "List" }>;
+	/**
+	 * Build a `Tuple` node.
+	 * @param elts The tuple elements
+	 * @param ctx The expression context (default: `"Load"`)
+	 * @returns A new `Tuple` node
+	 */
 	Tuple(
 		elts: ExprNode[],
 		ctx?: ContextType,
 	): Extract<ExprNode, { nodeType: "Tuple" }>;
+	/**
+	 * Build an `Attribute` node.
+	 * @param value The object whose attribute is being accessed
+	 * @param attr The attribute name
+	 * @param ctx The expression context (default: `"Load"`)
+	 * @returns A new `Attribute` node
+	 */
 	Attribute(
 		value: ExprNode,
 		attr: string,
 		ctx?: ContextType,
 	): Extract<ExprNode, { nodeType: "Attribute" }>;
+	/**
+	 * Build a `Dict` node.
+	 * @param keys The dict keys; a `null` entry represents a `**` unpacking
+	 * @param values The dict values, aligned by index with `keys`
+	 * @returns A new `Dict` node
+	 */
 	Dict(
 		keys: (ExprNode | null)[],
 		values: ExprNode[],
 	): Extract<ExprNode, { nodeType: "Dict" }>;
+	/**
+	 * Build a `NamedExpr` node (the walrus operator, `:=`).
+	 * @param target The name being bound
+	 * @param value The value being assigned and returned
+	 * @returns A new `NamedExpr` node
+	 */
 	NamedExpr(
 		target: ExprNode,
 		value: ExprNode,
 	): Extract<ExprNode, { nodeType: "NamedExpr" }>;
+	/**
+	 * Build a `Lambda` node.
+	 * @param args The lambda's argument list
+	 * @param body The lambda's body expression
+	 * @returns A new `Lambda` node
+	 */
 	Lambda(
 		args: import("./types.js").Arguments,
 		body: ExprNode,
 	): Extract<ExprNode, { nodeType: "Lambda" }>;
+	/**
+	 * Build an `IfExp` node (a conditional expression, `a if b else c`).
+	 * @param test The condition expression
+	 * @param body The expression evaluated when `test` is truthy
+	 * @param orelse The expression evaluated when `test` is falsy
+	 * @returns A new `IfExp` node
+	 */
 	IfExp(
 		test: ExprNode,
 		body: ExprNode,
 		orelse: ExprNode,
 	): Extract<ExprNode, { nodeType: "IfExp" }>;
+	/**
+	 * Build an `Await` node.
+	 * @param value The awaited expression
+	 * @returns A new `Await` node
+	 */
 	Await(value: ExprNode): Extract<ExprNode, { nodeType: "Await" }>;
+	/**
+	 * Build a `Yield` node.
+	 * @param value The optional yielded expression
+	 * @returns A new `Yield` node
+	 */
 	Yield(value?: ExprNode): Extract<ExprNode, { nodeType: "Yield" }>;
+	/**
+	 * Build a `YieldFrom` node.
+	 * @param value The iterable expression being delegated to
+	 * @returns A new `YieldFrom` node
+	 */
 	YieldFrom(value: ExprNode): Extract<ExprNode, { nodeType: "YieldFrom" }>;
+	/**
+	 * Build a `Starred` node (a `*expr` unpacking).
+	 * @param value The starred expression
+	 * @param ctx The expression context (default: `"Load"`)
+	 * @returns A new `Starred` node
+	 */
 	Starred(
 		value: ExprNode,
 		ctx?: ContextType,
 	): Extract<ExprNode, { nodeType: "Starred" }>;
+	/**
+	 * Build a `Slice` node.
+	 * @param lower The optional lower bound
+	 * @param upper The optional upper bound
+	 * @param step The optional step
+	 * @returns A new `Slice` node
+	 */
 	Slice(
 		lower?: ExprNode,
 		upper?: ExprNode,
 		step?: ExprNode,
 	): Extract<ExprNode, { nodeType: "Slice" }>;
+	/**
+	 * Build a `Delete` statement node.
+	 * @param targets The targets to delete
+	 * @returns A new `Delete` node
+	 */
 	Delete(targets: ExprNode[]): Extract<StmtNode, { nodeType: "Delete" }>;
+	/**
+	 * Build a `Nonlocal` statement node.
+	 * @param names The names declared nonlocal
+	 * @returns A new `Nonlocal` node
+	 */
 	Nonlocal(names: string[]): Extract<StmtNode, { nodeType: "Nonlocal" }>;
 }
 
 /**
- * Node factory functions for creating AST nodes
+ * Factory object exposing one builder method per supported AST node type,
+ * offering a lighter-weight alternative to constructing raw node objects by
+ * hand. Every produced node defaults `lineno` to `1` and `col_offset` to `0`.
+ * @example
+ * ```ts
+ * import { ast } from "py-ast";
+ *
+ * // Build `print("hi")`
+ * const call = ast.Call(ast.Name("print"), [ast.Constant("hi")]);
+ * ```
  */
 export const ast: ASTFactory = {
 	/**

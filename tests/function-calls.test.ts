@@ -1,5 +1,6 @@
-import { assertNodeType, parseExpression, parseCode } from "./test-helpers.js";
+import { describe, expect, test } from "vitest";
 import { unparse } from "../src/unparser.js";
+import { assertNodeType, parseCode, parseExpression } from "./test-helpers.js";
 
 describe("Function Calls", () => {
 	test("simple function call", () => {
@@ -143,7 +144,7 @@ describe("F-strings", () => {
 		const ast = parseCode(source);
 		const unparsed = unparse(ast);
 		expect(unparsed).toBe(source);
-		
+
 		// Ensure it can be parsed again
 		const ast2 = parseCode(unparsed);
 		expect(ast2).toBeDefined();

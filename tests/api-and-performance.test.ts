@@ -1,3 +1,4 @@
+import { describe, expect, test } from "vitest";
 import { parse, unparse } from "../src/index.js";
 import { countNodeTypes } from "./test-helpers.js";
 

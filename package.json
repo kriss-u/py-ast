@@ -21,6 +21,7 @@
 		"dev": "rollup -c --watch",
 		"test": "vitest run",
 		"test:watch": "vitest",
+		"test:coverage": "vitest run --coverage",
 		"lint": "biome check src/",
 		"lint:fix": "biome check src/ --write",
 		"format": "biome format --write",
@@ -38,7 +39,8 @@
 		"release:local": "node scripts/release-local.mjs",
 		"release:local:dry": "node scripts/release-local.mjs --dry-run",
 		"jsr:sync": "node scripts/jsr-release.mjs",
-		"jsr:publish": "npm run jsr:sync && npx jsr publish --allow-slow-types"
+		"jsr:publish": "npm run jsr:sync && npx jsr publish --allow-slow-types",
+		"docs": "npm --prefix docs-tooling install && npm --prefix docs-tooling run build"
 	},
 	"keywords": [
 		"python",
@@ -66,8 +68,9 @@
 		"@semantic-release/changelog": "^6.0.3",
 		"@semantic-release/git": "^10.0.1",
 		"@semantic-release/github": "^11.0.3",
-		"@types/node": "^22.0.0",
+		"@types/node": "^22.20.1",
 		"@typescript/typescript6": "^6.0.2",
+		"@vitest/coverage-v8": "^4.1.10",
 		"esbuild": "^0.28.2",
 		"husky": "^9.1.7",
 		"lint-staged": "^16.1.2",

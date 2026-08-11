@@ -1,5 +1,7 @@
+import { describe, expect, test } from "vitest";
 import { parse, unparse } from "../src/index.js";
-import { collectComments } from "./test-helpers.js";
+import type { Module } from "../src/types.js";
+import { assertNodeType, collectComments } from "./test-helpers.js";
 
 describe("Comment Parsing", () => {
 	test("parse with comments disabled", () => {
@@ -25,7 +27,7 @@ x = 1  # Inline comment
 		expect(ast.nodeType).toBe("Module");
 		const comments = collectComments(ast);
 		expect(comments).toHaveLength(3);
-		
+
 		expect(comments[0].nodeType).toBe("Comment");
 		expect(comments[0].value).toBe("# Top comment");
 		expect(comments[0].lineno).toBe(1);
@@ -33,7 +35,7 @@ x = 1  # Inline comment
 
 		expect(comments[1].value).toBe("# Inline comment");
 		expect(comments[1].lineno).toBe(2);
-		
+
 		expect(comments[2].value).toBe("# Bottom comment");
 		expect(comments[2].lineno).toBe(3);
 	});
@@ -53,9 +55,11 @@ x = 1`;
 		expect(ast.body).toHaveLength(4); // 3 expression statements + 1 assignment
 
 		// First standalone string
-		expect(ast.body[0].nodeType).toBe("Expr");
-		expect((ast.body[0] as any).value.nodeType).toBe("Constant");
-		expect((ast.body[0] as any).value.value).toBe("a");
+		const firstStmt = ast.body[0];
+		assertNodeType(firstStmt, "Expr");
+		expect(firstStmt.value.nodeType).toBe("Constant");
+		assertNodeType(firstStmt.value, "Constant");
+		expect(firstStmt.value.value).toBe("a");
 
 		// Assignment
 		expect(ast.body[3].nodeType).toBe("Assign");
@@ -70,12 +74,52 @@ def func():  # Function definition
 		const ast = parse(code, { comments: true });
 		const comments = collectComments(ast);
 		expect(comments).toHaveLength(4);
-		expect(comments.map(c => c.value)).toEqual([
+		expect(comments.map((c) => c.value)).toEqual([
 			"# Module docstring",
 			"# Function definition",
 			"# Inside function",
-			"# Return value"
+			"# Return value",
 		]);
+	});
+
+	test("trailing standalone comment before dedent is kept as its own node", () => {
+		const code = `def f():
+    pass
+    # trailing
+y = 2`;
+
+		const ast = parse(code, { comments: true });
+		expect(ast.body.map((s) => s.nodeType)).toEqual([
+			"FunctionDef",
+			"Comment",
+			"Assign",
+		]);
+		const comments = collectComments(ast);
+		expect(comments).toHaveLength(1);
+		expect(comments[0].value).toBe("# trailing");
+		expect(comments[0].inline).toBe(false);
+	});
+
+	test("nested block's trailing comment surfaces in the enclosing suite", () => {
+		const code = `def f():
+    if True:
+        pass
+        # trailing
+    z = 1
+y = 2`;
+
+		const ast = parse(code, { comments: true });
+		const firstStmt = ast.body[0];
+		assertNodeType(firstStmt, "FunctionDef");
+		const funcBody = firstStmt.body;
+		expect(funcBody.map((s) => s.nodeType)).toEqual([
+			"If",
+			"Comment",
+			"Assign",
+		]);
+		const trailingComment = funcBody[1];
+		assertNodeType(trailingComment, "Comment");
+		expect(trailingComment.value).toBe("# trailing");
 	});
 });
 
@@ -130,28 +174,32 @@ world"""`);
 		const code = `lst = ['single', "double", '''triple''', """triple2"""]`;
 		const ast = parse(code);
 		const unparsed = unparse(ast);
-		expect(unparsed).toBe(`lst = ['single', "double", '''triple''', """triple2"""]`);
+		expect(unparsed).toBe(
+			`lst = ['single', "double", '''triple''', """triple2"""]`,
+		);
 	});
 
 	test("defaults to double quotes for strings without kind info", () => {
 		// Create a constant node manually without kind info
-		const ast: any = {
+		const ast: Module = {
 			nodeType: "Module",
-			body: [{
-				nodeType: "Expr",
-				value: {
-					nodeType: "Constant",
-					value: "test string",
+			body: [
+				{
+					nodeType: "Expr",
+					value: {
+						nodeType: "Constant",
+						value: "test string",
+						lineno: 1,
+						col_offset: 0,
+					},
 					lineno: 1,
-					col_offset: 0
+					col_offset: 0,
 				},
-				lineno: 1,
-				col_offset: 0
-			}],
+			],
 			lineno: 1,
-			col_offset: 0
+			col_offset: 0,
 		};
-		
+
 		const unparsed = unparse(ast);
 		expect(unparsed).toBe('"test string"');
 	});
@@ -201,11 +249,11 @@ def greet(name):  # Function comment
 		expect(unparsed1).toContain("'Hello'"); // Single quotes preserved
 		expect(unparsed1).toContain('"""'); // Triple quotes preserved
 		expect(unparsed1).toContain('f"{msg} {name}"'); // F-string preserved
-		
+
 		// Second roundtrip should still work
 		expect(unparsed2).toContain("Hello"); // Content preserved
 		expect(unparsed2).toContain('"""'); // Structure preserved
-		
+
 		// Comments should be in the AST
 		const comments = collectComments(ast1);
 		expect(comments).toHaveLength(5);
