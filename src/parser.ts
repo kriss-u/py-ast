@@ -728,7 +728,7 @@ export class Parser {
 			return assignNode;
 		} else if (this.matchAugAssign()) {
 			// Augmented assignment
-			this.validateAssignmentTarget(expr);
+			this.validateAugAssignTarget(expr);
 			this.setContext(expr, this.createStore());
 			const op = this.parseAugAssignOp();
 			const value = this.parseTest();
@@ -3549,6 +3549,36 @@ export class Parser {
 		// (case-insensitively), so both cases strip the same way.
 		content = content.slice(2, -1);
 
+		const values = this.scanFStringSegments(content, token, 2); // +2 for f" prefix
+
+		return {
+			nodeType: "JoinedStr",
+			values,
+			kind: quoteStyle,
+			lineno: token.lineno,
+			col_offset: token.col_offset,
+		};
+	}
+
+	/**
+	 * Scans f-string-style content (either an f-string's own body, or a
+	 * `FormattedValue`'s format spec text, which follows the same
+	 * literal/`{expr}` interleaving rules and can itself nest further
+	 * `{expr}` segments) into a `JoinedStr`'s `values` array.
+	 * @param content The unquoted f-string body, or format-spec text, to scan.
+	 * @param token The originating f-string token, used for node position.
+	 * @param colOffsetBase Offset added to `token.col_offset` for literal
+	 * `Constant` positions; only meaningful when `content` is the f-string's
+	 * own body starting at a known offset within the token. Format-spec text
+	 * has no such fixed offset within the source, so callers scanning a spec
+	 * pass `0` and positions fall back to the token's own start.
+	 * @returns The interleaved `Constant`/`FormattedValue` nodes.
+	 */
+	private scanFStringSegments(
+		content: string,
+		token: Token,
+		colOffsetBase: number,
+	): ExprNode[] {
 		const values: ExprNode[] = [];
 		let i = 0;
 		let literalStart = 0;
@@ -3561,7 +3591,7 @@ export class Parser {
 						nodeType: "Constant",
 						value: content.slice(literalStart, i),
 						lineno: token.lineno,
-						col_offset: token.col_offset + literalStart + 2, // +2 for f" prefix
+						col_offset: token.col_offset + literalStart + colOffsetBase,
 					});
 				}
 
@@ -3583,17 +3613,11 @@ export class Parser {
 				nodeType: "Constant",
 				value: content.slice(literalStart),
 				lineno: token.lineno,
-				col_offset: token.col_offset + literalStart + 2,
+				col_offset: token.col_offset + literalStart + colOffsetBase,
 			});
 		}
 
-		return {
-			nodeType: "JoinedStr",
-			values,
-			kind: quoteStyle,
-			lineno: token.lineno,
-			col_offset: token.col_offset,
-		};
+		return values;
 	}
 
 	/**
@@ -3768,14 +3792,7 @@ export class Parser {
 				// Has format spec after conversion
 				formatSpec = {
 					nodeType: "JoinedStr",
-					values: [
-						{
-							nodeType: "Constant",
-							value: conversionMatch[3],
-							lineno: token.lineno,
-							col_offset: token.col_offset,
-						},
-					],
+					values: this.scanFStringSegments(conversionMatch[3], token, 0),
 					lineno: token.lineno,
 					col_offset: token.col_offset,
 				};
@@ -3787,14 +3804,7 @@ export class Parser {
 				expression = formatMatch[1];
 				formatSpec = {
 					nodeType: "JoinedStr",
-					values: [
-						{
-							nodeType: "Constant",
-							value: formatMatch[2],
-							lineno: token.lineno,
-							col_offset: token.col_offset,
-						},
-					],
+					values: this.scanFStringSegments(formatMatch[2], token, 0),
 					lineno: token.lineno,
 					col_offset: token.col_offset,
 				};
@@ -4029,6 +4039,37 @@ export class Parser {
 			for (const elt of expr.elts) {
 				this.validateAssignmentTarget(elt);
 			}
+		}
+	}
+
+	/**
+	 * Checks that an expression is a valid target for augmented assignment
+	 * (`+=`, `-=`, etc.), matching CPython's stricter rule: only a single
+	 * `Name`, `Attribute`, or `Subscript` is allowed — unlike plain
+	 * assignment, tuples, lists, and starred targets are rejected.
+	 * @param expr The expression to validate as an augmented-assignment target.
+	 * @throws {ParseError} If `expr` is not a `Name`, `Attribute`, or `Subscript`.
+	 */
+	private validateAugAssignTarget(expr: ExprNode): void {
+		switch (expr.nodeType) {
+			case "Name":
+			case "Attribute":
+			case "Subscript":
+				return;
+			case "Tuple":
+				throw this.error(
+					`'tuple' is an illegal expression for augmented assignment`,
+				);
+			case "List":
+				throw this.error(
+					`'list' is an illegal expression for augmented assignment`,
+				);
+			case "Starred":
+				throw this.error(
+					`'starred' is an illegal expression for augmented assignment`,
+				);
+			default:
+				this.validateAssignmentTarget(expr);
 		}
 	}
 

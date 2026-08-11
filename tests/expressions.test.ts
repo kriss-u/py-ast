@@ -325,4 +325,61 @@ def format_examples():
 		expect(assign.value.elts[0].nodeType).toBe("JoinedStr");
 		expect(assign.value.elts[1].nodeType).toBe("JoinedStr");
 	});
+
+	test("format spec with a nested replacement field parses as a JoinedStr", () => {
+		const expr = parseExpression('f"{name!r:>{10}}"');
+		assertNodeType(expr, "JoinedStr");
+		const formattedValue = expr.values[0];
+		assertNodeType(formattedValue, "FormattedValue");
+		expect(formattedValue.conversion).toBe(114); // 'r'
+
+		const formatSpec = formattedValue.format_spec;
+		assertNodeType(formatSpec, "JoinedStr");
+		expect(formatSpec.values).toHaveLength(2);
+		expect(formatSpec.values[0]).toMatchObject({
+			nodeType: "Constant",
+			value: ">",
+		});
+
+		const nested = formatSpec.values[1];
+		assertNodeType(nested, "FormattedValue");
+		expect(nested.conversion).toBe(-1);
+		expect(nested.value).toMatchObject({ nodeType: "Constant", value: 10 });
+		expect(nested.format_spec).toBeUndefined();
+	});
+
+	test("format spec with multiple levels of nested replacement fields", () => {
+		const expr = parseExpression('f"{x:{y:{z}}}"');
+		assertNodeType(expr, "JoinedStr");
+
+		const outer = expr.values[0];
+		assertNodeType(outer, "FormattedValue");
+		assertNodeType(outer.value, "Name");
+		expect(outer.value.id).toBe("x");
+
+		const middleSpec = outer.format_spec;
+		assertNodeType(middleSpec, "JoinedStr");
+		const middle = middleSpec.values[0];
+		assertNodeType(middle, "FormattedValue");
+		assertNodeType(middle.value, "Name");
+		expect(middle.value.id).toBe("y");
+
+		const innerSpec = middle.format_spec;
+		assertNodeType(innerSpec, "JoinedStr");
+		const inner = innerSpec.values[0];
+		assertNodeType(inner, "FormattedValue");
+		assertNodeType(inner.value, "Name");
+		expect(inner.value.id).toBe("z");
+		expect(inner.format_spec).toBeUndefined();
+	});
+
+	test("empty format spec parses as an empty JoinedStr", () => {
+		const expr = parseExpression('f"{x:}"');
+		assertNodeType(expr, "JoinedStr");
+		const formattedValue = expr.values[0];
+		assertNodeType(formattedValue, "FormattedValue");
+		const formatSpec = formattedValue.format_spec;
+		assertNodeType(formatSpec, "JoinedStr");
+		expect(formatSpec.values).toHaveLength(0);
+	});
 });
