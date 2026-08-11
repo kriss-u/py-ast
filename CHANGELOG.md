@@ -1,3 +1,10 @@
+## [1.10.1](https://github.com/kriss-u/py-ast/compare/v1.10.0...v1.10.1) (2026-08-11)
+
+
+### Bug Fixes
+
+* remove unused version constant ([192c21a](https://github.com/kriss-u/py-ast/commit/192c21aaf1eb10614bed227c7df0e17524e69def))
+
 # [1.10.0](https://github.com/kriss-u/py-ast/compare/v1.9.2...v1.10.0) (2026-08-11)
 
 
