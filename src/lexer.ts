@@ -1024,9 +1024,6 @@ export class Lexer {
 			case "//=":
 				tokenType = TokenType.DOUBLESLASHEQUAL;
 				break;
-			case "^=":
-				tokenType = TokenType.CIRCUMFLEXEQUAL;
-				break;
 		}
 
 		if (tokenType) {

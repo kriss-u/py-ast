@@ -10,8 +10,8 @@ import {
 	parse,
 	parseFile,
 } from "../src/parser.js";
+import type { ASTNode, ExprNode, Module, StmtNode } from "../src/types.js";
 import { PyComplex } from "../src/types.js";
-import type { ASTNode, Module } from "../src/types.js";
 import { parseCode, parseExpression, parseStatement } from "./test-helpers.js";
 
 describe("parser edge cases", () => {
@@ -537,6 +537,98 @@ describe("parser edge cases", () => {
 		test("brace-containing dict literal inside interpolation", () => {
 			const ast = parseCode('f"{ {1: 2} }"\n');
 			expect(ast.body[0].nodeType).toBe("Expr");
+		});
+
+		test("slice colon inside interpolation is not mistaken for a format spec", () => {
+			const ast = parseCode('f"{arr[1:2]}"\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "JoinedStr" }>;
+			const formatted = expr.values[0] as Extract<
+				ExprNode,
+				{ nodeType: "FormattedValue" }
+			>;
+			expect(formatted.value.nodeType).toBe("Subscript");
+			expect(formatted.format_spec).toBeUndefined();
+		});
+
+		test("dict literal colon inside interpolation is not mistaken for a format spec", () => {
+			const ast = parseCode('f"{ {1: 2, 3: 4} }"\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "JoinedStr" }>;
+			const formatted = expr.values[0] as Extract<
+				ExprNode,
+				{ nodeType: "FormattedValue" }
+			>;
+			expect(formatted.value.nodeType).toBe("Dict");
+			expect(formatted.format_spec).toBeUndefined();
+		});
+
+		test("format spec after a subscripted expression is still split out", () => {
+			const ast = parseCode("f\"{d['a']:>10}\"\n");
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "JoinedStr" }>;
+			const formatted = expr.values[0] as Extract<
+				ExprNode,
+				{ nodeType: "FormattedValue" }
+			>;
+			expect(formatted.value.nodeType).toBe("Subscript");
+			expect(formatted.format_spec).toBeDefined();
+		});
+
+		test("conversion specifier immediately before a top-level colon still splits format spec", () => {
+			const ast = parseCode('f"{x!r:>10}"\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "JoinedStr" }>;
+			const formatted = expr.values[0] as Extract<
+				ExprNode,
+				{ nodeType: "FormattedValue" }
+			>;
+			expect(formatted.conversion).toBe(114);
+			expect(formatted.format_spec).toBeDefined();
+		});
+
+		test("comparison operator inside interpolation parses as a Compare, not just its left operand", () => {
+			const ast = parseCode('f"{a != b}"\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "JoinedStr" }>;
+			const formatted = expr.values[0] as Extract<
+				ExprNode,
+				{ nodeType: "FormattedValue" }
+			>;
+			expect(formatted.value.nodeType).toBe("Compare");
+		});
+
+		test("boolean 'or' inside interpolation parses as a BoolOp, not just its left operand", () => {
+			const ast = parseCode('f"{a or b}"\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "JoinedStr" }>;
+			const formatted = expr.values[0] as Extract<
+				ExprNode,
+				{ nodeType: "FormattedValue" }
+			>;
+			expect(formatted.value.nodeType).toBe("BoolOp");
+		});
+
+		test("conditional expression inside interpolation parses as an IfExp", () => {
+			const ast = parseCode('f"{a if b else c}"\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "JoinedStr" }>;
+			const formatted = expr.values[0] as Extract<
+				ExprNode,
+				{ nodeType: "FormattedValue" }
+			>;
+			expect(formatted.value.nodeType).toBe("IfExp");
+		});
+
+		test("bare tuple inside interpolation parses as a Tuple", () => {
+			const ast = parseCode('f"{1, 2}"\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "JoinedStr" }>;
+			const formatted = expr.values[0] as Extract<
+				ExprNode,
+				{ nodeType: "FormattedValue" }
+			>;
+			expect(formatted.value.nodeType).toBe("Tuple");
 		});
 	});
 

@@ -9,15 +9,22 @@
 [![semantic-release](https://img.shields.io/badge/%20%20%F0%9F%93%A6%F0%9F%9A%80-semantic--release-e10079.svg)](https://github.com/semantic-release/semantic-release)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A comprehensive TypeScript-based Python source code parser that generates Abstract Syntax Trees (AST) following the Python ASDL grammar specification. This library provides complete parsing, unparsing, and AST traversal infrastructure similar to ESPrima for JavaScript, with bidirectional Python code ↔ AST conversion.
+A comprehensive TypeScript-based Python source code parser that generates
+Abstract Syntax Trees (AST) following the Python ASDL grammar specification.
+This library provides complete parsing, unparsing, and AST traversal
+infrastructure similar to ESPrima for JavaScript, with bidirectional Python code
+↔ AST conversion.
 
 📖 **[API documentation](https://kriss-u.github.io/py-ast/)**
 
 ## Features
 
-- 🔍 **Complete Python lexical analysis** - Tokenizes Python source code with full syntax support
-- 🌳 **AST generation** - Creates comprehensive Abstract Syntax Trees based on Python ASDL grammar
-- � **Code generation** - Convert AST back to Python source code with `unparse()`
+- 🔍 **Complete Python lexical analysis** - Tokenizes Python source code with
+  full syntax support
+- 🌳 **AST generation** - Creates comprehensive Abstract Syntax Trees based on
+  Python ASDL grammar
+- � **Code generation** - Convert AST back to Python source code with
+  `unparse()`
 - �🚶 **AST traversal** - Walk and visit all nodes in the syntax tree
 - 📄 **JSON serialization** - Export ASTs to JSON format for analysis or storage
 - 🔧 **TypeScript types** - Full type definitions for all AST nodes
@@ -36,14 +43,14 @@ npm install py-ast
 
 ```typescript
 import {
+  dump,
+  literalEval,
+  NodeTransformer,
+  NodeVisitor,
   parse,
   parsePython,
   unparse,
   walk,
-  NodeVisitor,
-  NodeTransformer,
-  literalEval,
-  dump,
 } from "py-ast";
 
 // Parse Python source code - that's it! No mode selection needed.
@@ -142,7 +149,7 @@ const astWithComments = parse(codeWithComments, {
 
 // Comments are now available in the AST
 console.log(astWithComments.comments?.length); // Number of hash comments found
-astWithComments.comments?.forEach(comment => {
+astWithComments.comments?.forEach((comment) => {
   console.log(`Line ${comment.lineno}: ${comment.value}`);
 });
 
@@ -153,7 +160,7 @@ const ast2 = parsePython(pythonCode, { filename: "fib.py" });
 ### AST Traversal and Analysis
 
 ```typescript
-import { parse, walk, NodeVisitor } from "py-ast";
+import { NodeVisitor, parse, walk } from "py-ast";
 
 const code = `
 class DataProcessor:
@@ -179,7 +186,7 @@ const ast = parse(code);
 // 1. Walk all nodes in the AST
 console.log("=== Walking all nodes ===");
 for (const node of walk(ast)) {
-  console.log(`${node.nodeType} at line ${node.lineno || 'unknown'}`);
+  console.log(`${node.nodeType} at line ${node.lineno || "unknown"}`);
 }
 
 // 2. Custom visitor to analyze code structure
@@ -217,7 +224,7 @@ class CodeAnalyzer extends NodeVisitor {
   }
 
   visitImportFrom(node: any) {
-    const module = node.module || '';
+    const module = node.module || "";
     for (const alias of node.names) {
       this.imports.push(`${module}.${alias.name}`);
     }
@@ -241,14 +248,14 @@ console.log("Imports:", analyzer.imports);
 import { literalEval } from "py-ast";
 
 // Safely evaluate Python literals
-console.log(literalEval("42"));              // 42
-console.log(literalEval('"hello world"'));   // "hello world"
-console.log(literalEval("[1, 2, 3, 4]"));    // [1, 2, 3, 4]
+console.log(literalEval("42")); // 42
+console.log(literalEval('"hello world"')); // "hello world"
+console.log(literalEval("[1, 2, 3, 4]")); // [1, 2, 3, 4]
 console.log(literalEval('{"a": 1, "b": 2}')); // {a: 1, b: 2}
-console.log(literalEval("(1, 2, 3)"));       // [1, 2, 3] (tuple as array)
-console.log(literalEval("{1, 2, 3}"));       // [1, 2, 3] (set as array)
-console.log(literalEval("True"));            // true
-console.log(literalEval("None"));            // null
+console.log(literalEval("(1, 2, 3)")); // [1, 2, 3] (tuple as array)
+console.log(literalEval("{1, 2, 3}")); // [1, 2, 3] (set as array)
+console.log(literalEval("True")); // true
+console.log(literalEval("None")); // null
 
 // Complex nested structures
 const complexLiteral = `{
@@ -265,7 +272,7 @@ console.log(literalEval(complexLiteral));
 ### Code Transformation and Generation
 
 ```typescript
-import { parse, unparse, NodeTransformer } from "py-ast";
+import { NodeTransformer, parse, unparse } from "py-ast";
 
 const originalCode = `
 def calculate_total(items, tax_rate):
@@ -301,9 +308,9 @@ class CodeRefactorer extends NodeTransformer {
     const renames = {
       "subtotal": "base_amount",
       "tax_rate": "tax_percentage",
-      "total": "final_amount"
+      "total": "final_amount",
     };
-    
+
     if (renames[node.id]) {
       return { ...node, id: renames[node.id] };
     }
@@ -315,7 +322,7 @@ class CodeRefactorer extends NodeTransformer {
     if (node.func.nodeType === "Name" && node.func.id === "calculate_total") {
       return {
         ...node,
-        func: { ...node.func, id: "compute_order_total" }
+        func: { ...node.func, id: "compute_order_total" },
       };
     }
     return this.genericVisit(node);
@@ -339,7 +346,7 @@ console.log(compactCode);
 ### Advanced Usage: JSON Serialization and Analysis
 
 ```typescript
-import { parse, walk, dump, getDocstring, NodeVisitor } from "py-ast";
+import { dump, getDocstring, NodeVisitor, parse, walk } from "py-ast";
 
 const pythonCode = `
 import asyncio
@@ -383,7 +390,7 @@ console.log("AST JSON size:", astJson.length, "characters");
 
 // Use dump for readable AST representation
 console.log("=== AST Structure (first class) ===");
-const firstClass = ast.body.find(node => node.nodeType === "ClassDef");
+const firstClass = ast.body.find((node) => node.nodeType === "ClassDef");
 console.log(dump(firstClass, { indent: 2, annotateFields: true }));
 
 // Extract docstrings
@@ -406,26 +413,26 @@ for (const node of walk(ast)) {
 
 console.log("=== AST Node Statistics ===");
 console.log(Object.fromEntries(
-  Array.from(nodeStats.entries()).sort((a, b) => b[1] - a[1])
+  Array.from(nodeStats.entries()).sort((a, b) => b[1] - a[1]),
 ));
 
 // Extract specific information
 class ImportAnalyzer extends NodeVisitor {
-  imports: Array<{type: string, module: string, names: string[]}> = [];
+  imports: Array<{ type: string; module: string; names: string[] }> = [];
 
   visitImport(node: any) {
     this.imports.push({
-      type: 'import',
-      module: '',
-      names: node.names.map((alias: any) => alias.name)
+      type: "import",
+      module: "",
+      names: node.names.map((alias: any) => alias.name),
     });
   }
 
   visitImportFrom(node: any) {
     this.imports.push({
-      type: 'from_import',
-      module: node.module || '',
-      names: node.names.map((alias: any) => alias.name)
+      type: "from_import",
+      module: node.module || "",
+      names: node.names.map((alias: any) => alias.name),
     });
   }
 }
@@ -438,13 +445,15 @@ console.log(importAnalyzer.imports);
 
 ## API Reference
 
-Full generated API docs (every exported function, class, and type): **[kriss-u.github.io/py-ast](https://kriss-u.github.io/py-ast/)**
+Full generated API docs (every exported function, class, and type):
+**[kriss-u.github.io/py-ast](https://kriss-u.github.io/py-ast/)**
 
 ### Core Functions
 
 #### `parse(source, options?)`
 
-Parses Python source code and returns an AST. Handles any Python code - expressions, statements, modules, classes, functions, etc.
+Parses Python source code and returns an AST. Handles any Python code -
+expressions, statements, modules, classes, functions, etc.
 
 **Parameters:**
 
@@ -453,11 +462,15 @@ Parses Python source code and returns an AST. Handles any Python code - expressi
 
 **ParseOptions:**
 
-- `filename` (string): Source filename for error reporting (default: `'<unknown>'`)
-- `comments` (boolean): Include hash comments (`# comment`) in AST (default: `false`)
+- `filename` (string): Source filename for error reporting (default:
+  `'<unknown>'`)
+- `comments` (boolean): Include hash comments (`# comment`) in AST (default:
+  `false`)
 - `feature_version` (number): Python feature version
 
-**Note:** Triple-quoted strings (`"""text"""`) are parsed as regular string literals, not comments. Only hash comments (`# comment`) are treated as comments when `comments: true` is enabled.
+**Note:** Triple-quoted strings (`"""text"""`) are parsed as regular string
+literals, not comments. Only hash comments (`# comment`) are treated as comments
+when `comments: true` is enabled.
 
 **Returns:** `Module` - The root AST node containing all parsed statements
 
@@ -476,7 +489,8 @@ const ast = parse("x + y", {
 
 #### `dump(node, options?)`
 
-Converts an AST node to a formatted string representation for debugging and analysis.
+Converts an AST node to a formatted string representation for debugging and
+analysis.
 
 **Parameters:**
 
@@ -484,13 +498,14 @@ Converts an AST node to a formatted string representation for debugging and anal
 - `options` (object, optional): Formatting options
   - `annotateFields` (boolean): Show field names (default: `true`)
   - `includeAttributes` (boolean): Include line/column info (default: `false`)
-  - `indent` (string | number): Indentation for pretty printing (default: `null`)
+  - `indent` (string | number): Indentation for pretty printing (default:
+    `null`)
   - `showEmpty` (boolean): Show empty arrays/null values (default: `false`)
 
 **Returns:** `string` - A formatted string representation of the AST
 
 ```typescript
-import { parse, dump } from "py-ast";
+import { dump, parse } from "py-ast";
 
 const code = "def hello(name): return f'Hello, {name}!'";
 const ast = parse(code);
@@ -552,7 +567,8 @@ console.log(code); // "x = 42"
 
 #### `literalEval(source)`
 
-Safely evaluates Python literal expressions by parsing and evaluating constant values.
+Safely evaluates Python literal expressions by parsing and evaluating constant
+values.
 
 ```typescript
 console.log(literalEval("42")); // 42
@@ -563,7 +579,8 @@ console.log(literalEval('{"key": "value"}')); // {key: "value"}
 
 #### `unparse(node, options?)`
 
-Converts an AST node back to Python source code. This is the reverse operation of `parse()`.
+Converts an AST node back to Python source code. This is the reverse operation
+of `parse()`.
 
 **Parameters:**
 
@@ -615,7 +632,8 @@ const regenerated = unparse(complexAst);
 
 **Quote Style Preservation:**
 
-The unparser automatically preserves the original quote styles used in string literals when parsing with comments enabled:
+The unparser automatically preserves the original quote styles used in string
+literals when parsing with comments enabled:
 
 ```typescript
 const codeWithMixedQuotes = `
@@ -630,7 +648,7 @@ const unparsed = unparse(ast);
 console.log(unparsed);
 // Output preserves original quote styles:
 // name = 'John'
-// message = "Hello, world!"  
+// message = "Hello, world!"
 // multiline = '''This is
 // a multiline string'''
 ```
@@ -639,7 +657,8 @@ console.log(unparsed);
 
 #### `walk(node)`
 
-Recursively walks all nodes in an AST tree, yielding each node in depth-first order.
+Recursively walks all nodes in an AST tree, yielding each node in depth-first
+order.
 
 ```typescript
 import { parse, walk } from "py-ast";
@@ -647,7 +666,7 @@ import { parse, walk } from "py-ast";
 const ast = parse("x = [i**2 for i in range(10)]");
 
 for (const node of walk(ast)) {
-  console.log(`${node.nodeType} at line ${node.lineno || 'unknown'}`);
+  console.log(`${node.nodeType} at line ${node.lineno || "unknown"}`);
 }
 // Output:
 // Module at line 1
@@ -674,7 +693,7 @@ for (const node of walk(ast)) {
 Extracts the docstring from a function, class, or module node.
 
 ```typescript
-import { parse, getDocstring } from "py-ast";
+import { getDocstring, parse } from "py-ast";
 
 const code = `
 def example_function():
@@ -699,7 +718,7 @@ console.log(getDocstring(classNode)); // "This is a class docstring."
 Iterates over the direct child nodes of an AST node.
 
 ```typescript
-import { parse, iterChildNodes } from "py-ast";
+import { iterChildNodes, parse } from "py-ast";
 
 const ast = parse("x = y + z");
 const assignNode = ast.body[0]; // Assign node
@@ -715,7 +734,7 @@ for (const child of iterChildNodes(assignNode)) {
 Iterates over the fields of an AST node, yielding [fieldName, fieldValue] pairs.
 
 ```typescript
-import { parse, iterFields } from "py-ast";
+import { iterFields, parse } from "py-ast";
 
 const ast = parse("x = 42");
 const assignNode = ast.body[0];
@@ -731,7 +750,7 @@ for (const [fieldName, fieldValue] of iterFields(assignNode)) {
 Type guard function to check if an object is an AST node.
 
 ```typescript
-import { parse, isASTNode } from "py-ast";
+import { isASTNode, parse } from "py-ast";
 
 const ast = parse("x = 42");
 console.log(isASTNode(ast)); // true
@@ -777,7 +796,7 @@ import { ast } from "py-ast";
 Extracts the source code segment for a given AST node.
 
 ```typescript
-import { parse, getSourceSegment } from "py-ast";
+import { getSourceSegment, parse } from "py-ast";
 
 const source = "def hello(name):\n    return f'Hello, {name}!'";
 const ast = parse(source);
@@ -854,11 +873,14 @@ class RenameTransformer extends NodeTransformer {
 
 ## Node Types
 
-The library provides TypeScript interfaces for all Python AST nodes based on the ASDL grammar:
+The library provides TypeScript interfaces for all Python AST nodes based on the
+ASDL grammar:
 
 - **Module nodes**: `Module`, `Interactive`, `Expression`, `FunctionType`
-- **Statement nodes**: `FunctionDef`, `ClassDef`, `If`, `For`, `While`, `With`, etc.
-- **Expression nodes**: `BinOp`, `Call`, `Attribute`, `Subscript`, `List`, `Dict`, etc.
+- **Statement nodes**: `FunctionDef`, `ClassDef`, `If`, `For`, `While`, `With`,
+  etc.
+- **Expression nodes**: `BinOp`, `Call`, `Attribute`, `Subscript`, `List`,
+  `Dict`, etc.
 - **Supporting types**: `Arguments`, `Keyword`, `Alias`, etc.
 
 ## Usage Examples
@@ -866,7 +888,7 @@ The library provides TypeScript interfaces for all Python AST nodes based on the
 ### Parse and Analyze Python Code
 
 ```typescript
-import { parse, walk, NodeVisitor } from "py-ast";
+import { NodeVisitor, parse, walk } from "py-ast";
 
 const code = `
 class Calculator:
@@ -926,7 +948,7 @@ console.log(finder.functions); // ['sync_function', 'async_function']
 ### Code Generation and Transformation
 
 ```typescript
-import { parse, unparse, NodeTransformer } from "py-ast";
+import { NodeTransformer, parse, unparse } from "py-ast";
 
 // Parse, modify, and regenerate Python code
 const originalCode = `
@@ -1021,11 +1043,14 @@ Based on the latest demo run, the parser successfully handles:
 - ✅ **Import Statements** - import and from...import
 - ✅ **Exception Handling** - try/except/finally
 
-**Code Generation**: All parsed constructs can be converted back to Python source code using `unparse()`. The unparser produces clean, readable Python code that maintains semantic equivalence with the original.
+**Code Generation**: All parsed constructs can be converted back to Python
+source code using `unparse()`. The unparser produces clean, readable Python code
+that maintains semantic equivalence with the original.
 
 ## Design Principles
 
-This library is designed to be **independent** from Python's built-in `ast` module while following the same ASDL grammar specification:
+This library is designed to be **independent** from Python's built-in `ast`
+module while following the same ASDL grammar specification:
 
 1. **TypeScript-native** - Built for TypeScript/JavaScript environments
 2. **Bidirectional** - Parse Python to AST and unparse AST back to Python
@@ -1089,6 +1114,4 @@ MIT License
 
 ## AI Usage
 
-Most part of this project is built using Claude Sonnet 4 in Github Copilot. 
-
-A comprehensive verification and testing of both the code and the features is done.
+Most part of this project is built using Claude Code.

@@ -207,7 +207,13 @@ describe("Lexer operators", () => {
 	});
 
 	it("scans a trailing ^= at end of source (only 2 chars remain)", () => {
-		expect(tokenTypes("x ^=")).toContain(TokenType.CIRCUMFLEXEQUAL);
+		const tokens = new Lexer("x ^=").tokenize();
+		const circumflexEqual = tokens.find(
+			(t) => t.type === TokenType.CIRCUMFLEXEQUAL,
+		);
+		expect(circumflexEqual).toBeDefined();
+		expect(circumflexEqual?.value).toBe("^=");
+		expect(circumflexEqual?.end_col_offset).toBe(4);
 	});
 
 	it("handles a backslash-newline line continuation", () => {

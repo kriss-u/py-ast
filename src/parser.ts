@@ -3849,40 +3849,135 @@ export class Parser {
 	 * @param token The f-string token, used for error/node position.
 	 * @returns The parsed `FormattedValue` node.
 	 */
+	/**
+	 * Finds the index of a top-level `!r`/`!s`/`!a` conversion marker in an
+	 * f-string expression, ignoring any that appear nested inside
+	 * brackets/parens/braces or string literals. The marker must be
+	 * followed immediately by the end of the text or a `:` (format spec
+	 * separator) to be recognized.
+	 * @param text The f-string interpolation's expression text.
+	 * @returns The index of the `!`, or -1 if none is found at the top level.
+	 */
+	private findTopLevelConversionMarker(text: string): number {
+		let depth = 0;
+		let quote: string | null = null;
+		for (let i = 0; i < text.length; i++) {
+			const c = text[i];
+			if (quote) {
+				if (c === "\\") {
+					i++;
+				} else if (c === quote) {
+					quote = null;
+				}
+				continue;
+			}
+			if (c === '"' || c === "'") {
+				quote = c;
+				continue;
+			}
+			if (c === "(" || c === "[" || c === "{") {
+				depth++;
+				continue;
+			}
+			if (c === ")" || c === "]" || c === "}") {
+				depth--;
+				continue;
+			}
+			if (depth === 0 && c === "!") {
+				const next = text[i + 1];
+				const after = text[i + 2];
+				if (
+					(next === "r" || next === "s" || next === "a") &&
+					(after === undefined || after === ":")
+				) {
+					return i;
+				}
+			}
+		}
+		return -1;
+	}
+
+	/**
+	 * Finds the index of a top-level `:` (format spec separator) in an
+	 * f-string expression, ignoring colons nested inside
+	 * brackets/parens/braces or string literals (e.g. a slice `arr[1:2]` or
+	 * a dict literal `{"a": 1}`).
+	 * @param text The f-string interpolation's expression text.
+	 * @returns The index of the `:`, or -1 if none is found at the top level.
+	 */
+	private findTopLevelColon(text: string): number {
+		let depth = 0;
+		let quote: string | null = null;
+		for (let i = 0; i < text.length; i++) {
+			const c = text[i];
+			if (quote) {
+				if (c === "\\") {
+					i++;
+				} else if (c === quote) {
+					quote = null;
+				}
+				continue;
+			}
+			if (c === '"' || c === "'") {
+				quote = c;
+				continue;
+			}
+			if (c === "(" || c === "[" || c === "{") {
+				depth++;
+				continue;
+			}
+			if (c === ")" || c === "]" || c === "}") {
+				depth--;
+				continue;
+			}
+			if (depth === 0 && c === ":") {
+				return i;
+			}
+		}
+		return -1;
+	}
+
 	private parseFormattedValue(exprText: string, token: Token): FormattedValue {
 		// Split expression and format spec if present
 		let expression = exprText;
 		let formatSpec: ExprNode | undefined;
 		let conversion = -1;
 
-		// Check for conversion specifiers (!r, !s, !a)
-		const conversionMatch = expression.match(/^(.+?)!(r|s|a)(?::(.*))?$/);
-		if (conversionMatch) {
-			expression = conversionMatch[1];
-			const conversionType = conversionMatch[2];
+		// Check for conversion specifiers (!r, !s, !a), ignoring any that
+		// appear nested inside brackets/parens/braces or string literals
+		// (e.g. `arr[1:2]` or `{"a": 1}` must not be mistaken for one).
+		const bangIndex = this.findTopLevelConversionMarker(expression);
+		if (bangIndex !== -1) {
+			const conversionType = expression[bangIndex + 1];
 			conversion =
 				conversionType === "r" ? 114 : conversionType === "s" ? 115 : 97;
+			const rest = expression.slice(bangIndex + 2);
+			expression = expression.slice(0, bangIndex);
 
-			if (conversionMatch[3]) {
+			if (rest.startsWith(":")) {
 				// Has format spec after conversion
 				formatSpec = {
 					nodeType: "JoinedStr",
-					values: this.scanFStringSegments(conversionMatch[3], token, 0),
+					values: this.scanFStringSegments(rest.slice(1), token, 0),
 					lineno: token.lineno,
 					col_offset: token.col_offset,
 				};
 			}
 		} else {
 			// Check for format spec without conversion
-			const formatMatch = expression.match(/^(.+?):(.*)$/);
-			if (formatMatch) {
-				expression = formatMatch[1];
+			const colonIndex = this.findTopLevelColon(expression);
+			if (colonIndex !== -1) {
 				formatSpec = {
 					nodeType: "JoinedStr",
-					values: this.scanFStringSegments(formatMatch[2], token, 0),
+					values: this.scanFStringSegments(
+						expression.slice(colonIndex + 1),
+						token,
+						0,
+					),
 					lineno: token.lineno,
 					col_offset: token.col_offset,
 				};
+				expression = expression.slice(0, colonIndex);
 			}
 		}
 
@@ -3910,9 +4005,15 @@ export class Parser {
 	 */
 	private parseExpressionFromString(exprText: string, token: Token): ExprNode {
 		try {
-			// Create a mini-lexer/parser for the expression
+			// Create a mini-lexer/parser for the expression. `parseTestList`
+			// (not the lower-precedence `parseExpr`) is required so
+			// comparisons, boolean operators, conditional expressions,
+			// lambdas, the walrus operator, and bare tuples are parsed
+			// rather than silently truncated at the first token `parseExpr`
+			// doesn't understand (e.g. `f"{a != b}"` would otherwise lose
+			// `!= b` entirely instead of producing a `Compare` node).
 			const tempParser = new Parser(exprText);
-			const expr = tempParser.parseExpr();
+			const expr = tempParser.parseTestList();
 
 			return expr;
 		} catch (_error) {
