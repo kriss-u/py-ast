@@ -4005,9 +4005,15 @@ export class Parser {
 	 */
 	private parseExpressionFromString(exprText: string, token: Token): ExprNode {
 		try {
-			// Create a mini-lexer/parser for the expression
+			// Create a mini-lexer/parser for the expression. `parseTestList`
+			// (not the lower-precedence `parseExpr`) is required so
+			// comparisons, boolean operators, conditional expressions,
+			// lambdas, the walrus operator, and bare tuples are parsed
+			// rather than silently truncated at the first token `parseExpr`
+			// doesn't understand (e.g. `f"{a != b}"` would otherwise lose
+			// `!= b` entirely instead of producing a `Compare` node).
 			const tempParser = new Parser(exprText);
-			const expr = tempParser.parseExpr();
+			const expr = tempParser.parseTestList();
 
 			return expr;
 		} catch (_error) {

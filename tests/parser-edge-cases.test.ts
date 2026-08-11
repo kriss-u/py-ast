@@ -586,6 +586,50 @@ describe("parser edge cases", () => {
 			expect(formatted.conversion).toBe(114);
 			expect(formatted.format_spec).toBeDefined();
 		});
+
+		test("comparison operator inside interpolation parses as a Compare, not just its left operand", () => {
+			const ast = parseCode('f"{a != b}"\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "JoinedStr" }>;
+			const formatted = expr.values[0] as Extract<
+				ExprNode,
+				{ nodeType: "FormattedValue" }
+			>;
+			expect(formatted.value.nodeType).toBe("Compare");
+		});
+
+		test("boolean 'or' inside interpolation parses as a BoolOp, not just its left operand", () => {
+			const ast = parseCode('f"{a or b}"\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "JoinedStr" }>;
+			const formatted = expr.values[0] as Extract<
+				ExprNode,
+				{ nodeType: "FormattedValue" }
+			>;
+			expect(formatted.value.nodeType).toBe("BoolOp");
+		});
+
+		test("conditional expression inside interpolation parses as an IfExp", () => {
+			const ast = parseCode('f"{a if b else c}"\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "JoinedStr" }>;
+			const formatted = expr.values[0] as Extract<
+				ExprNode,
+				{ nodeType: "FormattedValue" }
+			>;
+			expect(formatted.value.nodeType).toBe("IfExp");
+		});
+
+		test("bare tuple inside interpolation parses as a Tuple", () => {
+			const ast = parseCode('f"{1, 2}"\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "JoinedStr" }>;
+			const formatted = expr.values[0] as Extract<
+				ExprNode,
+				{ nodeType: "FormattedValue" }
+			>;
+			expect(formatted.value.nodeType).toBe("Tuple");
+		});
 	});
 
 	describe("comprehensions and generators", () => {
