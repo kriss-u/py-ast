@@ -295,6 +295,8 @@ export interface Assert extends Located {
 export interface Import extends Located {
 	nodeType: "Import";
 	names: Alias[];
+	/** `1` for a `lazy import ...` statement (PEP 810, Python 3.15+); absent/undefined for an eager import. */
+	is_lazy?: number;
 }
 
 /** A `from ... import ...` statement. */
@@ -304,6 +306,8 @@ export interface ImportFrom extends Located {
 	names: Alias[];
 	/** Number of leading dots for relative imports (e.g. `from . import x` is level 1); absent/undefined for absolute imports. */
 	level?: number;
+	/** `1` for a `lazy from ... import ...` statement (PEP 810, Python 3.15+); absent/undefined for an eager import. */
+	is_lazy?: number;
 }
 
 /** A `global` statement. */
@@ -360,7 +364,9 @@ export type ExprNode =
 	| Compare
 	| Call
 	| FormattedValue
+	| Interpolation
 	| JoinedStr
+	| TemplateStr
 	| Constant
 	| Attribute
 	| Subscript
@@ -511,6 +517,34 @@ export interface JoinedStr extends Located {
 	nodeType: "JoinedStr";
 	values: ExprNode[];
 	/** Original quote/prefix style of the string, e.g. `f"`, `f'`. */
+	kind?: string;
+}
+
+/**
+ * A single `{value}` interpolation field within a t-string (PEP 750
+ * template string, Python 3.14+).
+ *
+ * @remarks
+ * Unlike {@link FormattedValue}, an `Interpolation` also carries `str`: the
+ * verbatim source text of the interpolated expression (before any `!conv`
+ * or `:format_spec`), as `string.templatelib.Interpolation` exposes it at
+ * runtime.
+ */
+export interface Interpolation extends Located {
+	nodeType: "Interpolation";
+	value: ExprNode;
+	/** Verbatim source text of the interpolated expression, exactly as written. */
+	str: string;
+	/** Conversion code applied before formatting: -1 = none, 115 = `!s`, 114 = `!r`, 97 = `!a` (ASCII codes of s/r/a). */
+	conversion: number;
+	format_spec?: ExprNode;
+}
+
+/** A t-string (PEP 750 template string, Python 3.14+), represented as a sequence of literal `Constant` parts and `Interpolation` fields. */
+export interface TemplateStr extends Located {
+	nodeType: "TemplateStr";
+	values: ExprNode[];
+	/** Original quote/prefix style of the string, e.g. `t"`, `t'`. */
 	kind?: string;
 }
 

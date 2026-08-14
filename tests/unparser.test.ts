@@ -96,6 +96,13 @@ describe("Unparser", () => {
 			);
 			testRoundtrip("from . import module");
 		});
+
+		test("lazy imports (PEP 810, Python 3.15+)", () => {
+			testUnparse("lazy import os", "lazy import os");
+			testUnparse("lazy from os import path", "lazy from os import path");
+			testRoundtrip("lazy import os");
+			testRoundtrip("lazy from os import path, getcwd");
+		});
 	});
 
 	describe("Control Flow", () => {
@@ -500,6 +507,54 @@ describe("Unparser", () => {
 		test("f-strings with conversions", () => {
 			// Skip for now - conversion handling may have issues
 			testRoundtrip("f'{obj!r}'");
+		});
+
+		test("raw f-strings (rf/fr prefixes) round-trip with interpolations intact", () => {
+			testRoundtrip("rf'Hello, {name}!'");
+			testRoundtrip("fr'Hello, {name}!'");
+		});
+
+		test("self-documenting expressions unparse to the equivalent explicit literal+field form", () => {
+			// The unparser doesn't reconstruct the `{expr=}` shorthand syntax; it
+			// renders the literal 'expr=' Constant and the field explicitly,
+			// which is semantically equivalent and stable under a second
+			// round-trip (re-parsing no longer sees a trailing '=' to re-detect).
+			testUnparse('f"{x=}"', 'f"x={x!r}"');
+			testUnparse('f"{x=:>10}"', 'f"x={x:>10}"');
+
+			const once = unparse(parse('f"{x=}"'));
+			const twice = unparse(parse(once));
+			expect(twice).toBe(once);
+		});
+
+		test("triple-quoted f-strings round-trip", () => {
+			testRoundtrip("f'''Hello, {name}!'''");
+		});
+	});
+
+	describe("T-strings (PEP 750 template strings)", () => {
+		test("simple t-strings", () => {
+			testUnparse("t'Hello, {name}!'", "t'Hello, {name}!'");
+			testRoundtrip("t'Value: {value}'");
+		});
+
+		test("t-strings with conversions and format specs", () => {
+			testRoundtrip("t'{obj!r}'");
+			testRoundtrip("t'{num:>{width}}'");
+		});
+
+		test("raw t-strings (tr/rt prefixes) round-trip", () => {
+			testRoundtrip("tr'Hello, {name}!'");
+			testRoundtrip("rt'Hello, {name}!'");
+		});
+
+		test("triple-quoted t-strings round-trip", () => {
+			testRoundtrip("t'''Hello, {name}!'''");
+		});
+
+		test("nested f-string/t-string interpolations round-trip", () => {
+			testRoundtrip("t\"outer {f'inner {y}'} end\"");
+			testRoundtrip("t\"outer {t'inner {y}'} end\"");
 		});
 	});
 

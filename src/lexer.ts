@@ -12,7 +12,7 @@
  * Python's significant whitespace. F-string specific values
  * (`FSTRING_START`/`FSTRING_MIDDLE`/`FSTRING_END`) are reserved for future
  * use; this lexer currently emits whole f-strings as a single `STRING`
- * token (see {@link Lexer.scanFString}).
+ * token (see {@link Lexer.scanInterpolatedStringLiteral}).
  */
 export enum TokenType {
 	// Literals
@@ -330,16 +330,18 @@ export class Lexer {
 			return;
 		}
 
-		// Identifiers and keywords - check for f-strings first
+		// Identifiers and keywords - check for f-strings/t-strings first
 		if (this.isAlpha(c) || c === "_") {
-			// Check for f-string
+			// Check for a bare `f"..."` or `t"..."` (single-letter prefix
+			// immediately followed by a quote); multi-character prefix
+			// combos (`rf`, `tr`, etc.) fall through to scanIdentifier.
 			if (
-				c.toLowerCase() === "f" &&
+				(c.toLowerCase() === "f" || c.toLowerCase() === "t") &&
 				this.position.index + 1 < this.source.length
 			) {
 				const nextChar = this.peekNext();
 				if (nextChar === '"' || nextChar === "'") {
-					this.scanFString();
+					this.scanInterpolatedStringLiteral(c);
 					return;
 				}
 			}
@@ -553,26 +555,30 @@ export class Lexer {
 	}
 
 	/**
-	 * Scans an f-string literal (`f"..."`, `f'''...'''`, etc.) starting at
-	 * the leading `f`. The whole f-string — including its prefix, quotes,
-	 * and any `{expr}` replacement fields — is captured as a single `STRING`
-	 * token's value; nested expressions are not tokenized separately.
+	 * Scans an f-string or t-string literal (`f"..."`, `t'''...'''`, etc.)
+	 * starting at the leading prefix letter. The whole literal — including
+	 * its prefix, quotes, and any `{expr}` replacement/interpolation fields
+	 * — is captured as a single `STRING` token's value; nested expressions
+	 * are not tokenized separately.
 	 *
 	 * Brace nesting is tracked via a local `braceLevel` so that the closing
-	 * quote is only recognized outside of a `{...}` replacement field (e.g.
-	 * a quote character used inside the expression doesn't terminate the
-	 * f-string).
+	 * quote is only recognized outside of a `{...}` field (e.g. a quote
+	 * character used inside the expression doesn't terminate the literal).
 	 *
-	 * @throws {Error} If a single-quoted f-string contains a raw newline
+	 * @param prefixChar The single prefix letter already identified (`f`/`F`
+	 *   for f-strings, `t`/`T` for t-strings/PEP 750 template strings).
+	 * @throws {Error} If a single-quoted literal contains a raw newline
 	 *   outside of a replacement field, or if it is unterminated at end of
 	 *   source.
 	 */
-	private scanFString(): void {
+	private scanInterpolatedStringLiteral(prefixChar: string): void {
 		const start = { ...this.position }; // Create a copy
 
-		// Consume 'f'
+		// Consume prefix letter ('f' or 't')
 		let value = this.peek();
 		this.advance();
+		const literalKind =
+			prefixChar.toLowerCase() === "t" ? "t-string" : "f-string";
 
 		// Get the quote character
 		const quote = this.peek();
@@ -645,7 +651,7 @@ export class Lexer {
 					}
 					if (c === "\n") {
 						throw new Error(
-							`Unterminated f-string literal at line ${this.position.line}`,
+							`Unterminated ${literalKind} literal at line ${this.position.line}`,
 						);
 					}
 				}
@@ -655,14 +661,16 @@ export class Lexer {
 			this.advance();
 		}
 
-		// If we reached end of source without closing the f-string, it's an error
+		// If we reached end of source without closing the literal, it's an error
 		if (!stringClosed) {
 			if (isTripleQuote) {
 				throw new Error(
-					`Unterminated triple-quoted f-string literal at line ${start.line}`,
+					`Unterminated triple-quoted ${literalKind} literal at line ${start.line}`,
 				);
 			} else {
-				throw new Error(`Unterminated f-string literal at line ${start.line}`);
+				throw new Error(
+					`Unterminated ${literalKind} literal at line ${start.line}`,
+				);
 			}
 		}
 
@@ -820,11 +828,12 @@ export class Lexer {
 
 	/**
 	 * Checks whether `value` is a valid Python string-prefix word (e.g.
-	 * `r`, `b`, `u`, `rb`, `fr`) that, combined with a following quote,
-	 * denotes a raw/bytes/unicode string rather than a plain identifier.
-	 * Note: plain `f`-prefixed strings are handled separately by
-	 * {@link scanFString}, called eagerly from {@link scanToken} before
-	 * this check is reached for the single-character `"f"` case.
+	 * `r`, `b`, `u`, `rb`, `fr`, `tr`) that, combined with a following quote,
+	 * denotes a raw/bytes/unicode/template string rather than a plain
+	 * identifier. Note: plain `f`/`t`-prefixed strings are handled
+	 * separately by {@link scanInterpolatedStringLiteral}, called eagerly from
+	 * {@link scanToken} before this check is reached for the
+	 * single-character `"f"`/`"t"` case.
 	 *
 	 * @param value - The already-scanned identifier text to test.
 	 * @returns `true` if `value` (case-insensitively) is a recognized
@@ -832,16 +841,34 @@ export class Lexer {
 	 */
 	private isStringPrefix(value: string): boolean {
 		const lowerValue = value.toLowerCase();
-		return ["f", "r", "b", "u", "fr", "rf", "br", "rb"].includes(lowerValue);
+		return [
+			"f",
+			"r",
+			"b",
+			"u",
+			"t",
+			"fr",
+			"rf",
+			"br",
+			"rb",
+			"tr",
+			"rt",
+		].includes(lowerValue);
 	}
 
 	/**
-	 * Scans a prefixed string literal (e.g. `r"..."`, `rb'''...'''`) whose
-	 * prefix and opening quote have already been identified by
-	 * {@link scanIdentifier}. Behaves like {@link scanString} but includes
-	 * the prefix in the emitted token's value and does not itself throw on
-	 * an unterminated triple-quoted string reaching end of source (unlike
-	 * {@link scanString}/{@link scanFString}).
+	 * Scans a prefixed string literal (e.g. `r"..."`, `rb'''...'''`,
+	 * `tr"..."`) whose prefix and opening quote have already been identified
+	 * by {@link scanIdentifier}. Behaves like {@link scanString} but
+	 * includes the prefix in the emitted token's value and does not itself
+	 * throw on an unterminated triple-quoted string reaching end of source
+	 * (unlike {@link scanString}/{@link scanInterpolatedStringLiteral}).
+	 *
+	 * When `prefix` contains `f`/`t` (a raw f-string or raw t-string, e.g.
+	 * `rf`/`tr`), brace nesting is tracked the same way as
+	 * {@link scanInterpolatedStringLiteral} so a quote character inside a `{expr}` field
+	 * doesn't terminate the literal early; plain `r`/`b`/`u` combos don't
+	 * track braces, since `{`/`}` are just literal characters there.
 	 *
 	 * @param prefix - The string prefix text already consumed (e.g. `"rb"`).
 	 * @param start - The position where the prefix began, used as the
@@ -865,6 +892,9 @@ export class Lexer {
 			value += quote + quote;
 		}
 
+		const tracksBraces = /[ft]/i.test(prefix);
+		let braceLevel = 0;
+
 		while (this.position.index < this.source.length) {
 			const c = this.peek();
 
@@ -878,28 +908,47 @@ export class Lexer {
 				continue;
 			}
 
-			if (isTripleQuote) {
-				if (
-					c === quote &&
-					this.peekNext() === quote &&
-					this.peek(2) === quote
-				) {
-					value += quote + quote + quote;
-					this.advance(); // consume first quote
-					this.advance(); // consume second quote
-					this.advance(); // consume third quote
-					break;
-				}
-			} else {
-				if (c === quote) {
-					value += quote;
+			if (tracksBraces) {
+				if (c === "{") {
+					braceLevel++;
+					value += c;
 					this.advance();
-					break;
+					continue;
 				}
-				if (c === "\n") {
-					throw new Error(
-						`Unterminated string literal at line ${this.position.line}`,
-					);
+				if (c === "}") {
+					if (braceLevel > 0) {
+						braceLevel--;
+					}
+					value += c;
+					this.advance();
+					continue;
+				}
+			}
+
+			if (braceLevel === 0) {
+				if (isTripleQuote) {
+					if (
+						c === quote &&
+						this.peekNext() === quote &&
+						this.peek(2) === quote
+					) {
+						value += quote + quote + quote;
+						this.advance(); // consume first quote
+						this.advance(); // consume second quote
+						this.advance(); // consume third quote
+						break;
+					}
+				} else {
+					if (c === quote) {
+						value += quote;
+						this.advance();
+						break;
+					}
+					if (c === "\n") {
+						throw new Error(
+							`Unterminated string literal at line ${this.position.line}`,
+						);
+					}
 				}
 			}
 

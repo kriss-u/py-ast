@@ -9,6 +9,7 @@ import type {
 	FunctionDef,
 	FunctionType,
 	Interactive,
+	Interpolation,
 	JoinedStr,
 	MatchAs,
 	MatchSingleton,
@@ -666,6 +667,24 @@ describe("Unparser Edge Cases", () => {
 				col_offset: 0,
 			};
 			expect(unparse(node)).toBe("{x:>10}");
+		});
+
+		test("standalone Interpolation node (t-string field visited outside a TemplateStr)", () => {
+			const node: Interpolation = {
+				nodeType: "Interpolation",
+				value: {
+					nodeType: "Name",
+					id: "x",
+					ctx: { nodeType: "Load" },
+					lineno: 1,
+					col_offset: 0,
+				},
+				str: "x",
+				conversion: 114,
+				lineno: 1,
+				col_offset: 0,
+			};
+			expect(unparse(node)).toBe("{x!r}");
 		});
 
 		test("JoinedStr value with a non-JoinedStr format_spec on its FormattedValue", () => {

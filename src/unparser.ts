@@ -383,29 +383,32 @@ class Unparser extends NodeVisitor {
 	}
 
 	/**
-	 * Determines the opening/closing quote text for an f-string, preserving
-	 * the original quote style (including prefix casing and triple-quotes)
-	 * captured in `node.kind` when available, so round-tripped f-strings
-	 * don't silently change from `f'...'` to `f"..."` or vice versa.
+	 * Determines the opening/closing quote text for an f-string/t-string,
+	 * preserving the original quote style (including prefix casing and
+	 * triple-quotes) captured in `node.kind` when available, so
+	 * round-tripped literals don't silently change from `f'...'` to `f"..."`
+	 * or vice versa.
 	 *
-	 * @param node - The `JoinedStr` (f-string) node.
+	 * @param node - The `JoinedStr` (f-string) or `TemplateStr` (t-string) node.
+	 * @param defaultPrefix - The prefix to fall back to when `node.kind` is absent (`f"` or `t"`).
 	 * @returns A tuple of `[openingDelimiter, closingQuote]`, e.g. `['f"', '"']`.
 	 */
-	private chooseFStringQuotes(
-		node: Extract<ExprNode, { nodeType: "JoinedStr" }>,
+	private chooseInterpolatedStringQuotes(
+		node: Extract<ExprNode, { nodeType: "JoinedStr" | "TemplateStr" }>,
+		defaultPrefix: string,
 	): [string, string] {
 		// If we have the original quote style, use it exactly
 		if (node.kind) {
 			// Both capture groups accept an empty match, so this regex always
 			// matches and `prefixMatch` is never null.
 			// biome-ignore lint/style/noNonNullAssertion: regex is provably total, see comment above
-			const prefixMatch = node.kind.match(/^([fFrRbBuU]*)(.*)/)!;
+			const prefixMatch = node.kind.match(/^([fFrRbBuUtT]*)(.*)/)!;
 			const quote = prefixMatch[2];
 			return [node.kind, quote];
 		}
 
 		// Default to double quotes if no original style info
-		return ['f"', '"'];
+		return [defaultPrefix, '"'];
 	}
 
 	// Statement visitors
@@ -726,18 +729,22 @@ class Unparser extends NodeVisitor {
 		this.visit(node.value);
 	}
 
-	/** Renders an `import module [as alias], ...` statement. */
+	/**
+	 * Renders an `import module [as alias], ...` statement, prefixed with
+	 * `lazy` when `node.is_lazy` is set (PEP 810, Python 3.15+).
+	 */
 	visit_Import(node: Extract<StmtNode, { nodeType: "Import" }>): void {
-		this.fill("import ");
+		this.fill(node.is_lazy ? "lazy import " : "import ");
 		this.interleave(", ", (alias) => this.visit(alias), node.names);
 	}
 
 	/**
 	 * Renders a `from module import name, ...` statement, including relative
-	 * import dots for `node.level` (e.g. `level: 2` -> `from ..module import ...`).
+	 * import dots for `node.level` (e.g. `level: 2` -> `from ..module import ...`)
+	 * and a `lazy` prefix when `node.is_lazy` is set (PEP 810, Python 3.15+).
 	 */
 	visit_ImportFrom(node: Extract<StmtNode, { nodeType: "ImportFrom" }>): void {
-		this.fill("from ");
+		this.fill(node.is_lazy ? "lazy from " : "from ");
 		if (node.level && node.level > 0) {
 			this.write(".".repeat(node.level));
 		}
@@ -1202,44 +1209,52 @@ class Unparser extends NodeVisitor {
 
 	/** Renders an f-string (`JoinedStr`), preserving its original quote style. */
 	visit_JoinedStr(node: Extract<ExprNode, { nodeType: "JoinedStr" }>): void {
-		const [openQuote, closeQuote] = this.chooseFStringQuotes(node);
+		const [openQuote, closeQuote] = this.chooseInterpolatedStringQuotes(
+			node,
+			'f"',
+		);
 		this.write(openQuote);
-		this.writeJoinedStrContent(node);
+		this.writeInterpolatedStringContent(node.values);
+		this.write(closeQuote);
+	}
+
+	/** Renders a t-string (`TemplateStr`), preserving its original quote style. */
+	visit_TemplateStr(
+		node: Extract<ExprNode, { nodeType: "TemplateStr" }>,
+	): void {
+		const [openQuote, closeQuote] = this.chooseInterpolatedStringQuotes(
+			node,
+			't"',
+		);
+		this.write(openQuote);
+		this.writeInterpolatedStringContent(node.values);
 		this.write(closeQuote);
 	}
 
 	/**
-	 * Writes the interior parts of an f-string (between the quotes), handling
-	 * literal text segments and `{expr[!conv][:format_spec]}` replacement
-	 * fields inline. Extracted from {@link visit_JoinedStr} because nested
-	 * format specs that are themselves f-strings (e.g. `f"{x:{width}}"`) need
-	 * their content written without an extra pair of surrounding quotes.
+	 * Writes the interior parts of an f-string/t-string (between the
+	 * quotes), handling literal text segments and
+	 * `{expr[!conv][:format_spec]}` replacement/interpolation fields inline.
+	 * Extracted from {@link visit_JoinedStr}/{@link visit_TemplateStr}
+	 * because nested format specs that are themselves f-strings (e.g.
+	 * `f"{x:{width}}"`) need their content written without an extra pair of
+	 * surrounding quotes.
 	 *
-	 * @param node - The `JoinedStr` node whose `values` to render.
+	 * @param values - The `JoinedStr`/`TemplateStr` node's `values` to render.
 	 */
-	private writeJoinedStrContent(
-		node: Extract<ExprNode, { nodeType: "JoinedStr" }>,
-	): void {
-		for (const value of node.values) {
+	private writeInterpolatedStringContent(values: ExprNode[]): void {
+		for (const value of values) {
 			if (value.nodeType === "Constant") {
 				this.write(String(value.value));
-			} else if (value.nodeType === "FormattedValue") {
-				this.write("{");
-				this.visit(value.value);
-				if (value.conversion !== -1) {
-					if (value.conversion === 115) this.write("!s");
-					else if (value.conversion === 114) this.write("!r");
-					else if (value.conversion === 97) this.write("!a");
-				}
-				if (value.format_spec) {
-					this.write(":");
-					if (value.format_spec.nodeType === "JoinedStr") {
-						this.writeJoinedStrContent(value.format_spec);
-					} else {
-						this.visit(value.format_spec);
-					}
-				}
-				this.write("}");
+			} else if (
+				value.nodeType === "FormattedValue" ||
+				value.nodeType === "Interpolation"
+			) {
+				this.writeReplacementField(
+					value.value,
+					value.conversion,
+					value.format_spec,
+				);
 			} else {
 				this.visit(value);
 			}
@@ -1247,31 +1262,57 @@ class Unparser extends NodeVisitor {
 	}
 
 	/**
-	 * Renders a standalone `FormattedValue` (a `{expr[!conv][:format_spec]}`
-	 * replacement field visited outside of a `JoinedStr` context). The
+	 * Writes a single `{expr[!conv][:format_spec]}` replacement/
+	 * interpolation field body (braces included). Shared by
+	 * {@link writeInterpolatedStringContent} (fields inline in a
+	 * `JoinedStr`/`TemplateStr`) and {@link visit_FormattedValue}/
+	 * {@link visit_Interpolation} (a field visited standalone). The
 	 * `conversion` field holds the ASCII code point of the conversion letter
 	 * (115 = `s`, 114 = `r`, 97 = `a`) as produced by CPython's `ast` module;
 	 * `-1` means no conversion.
 	 */
-	visit_FormattedValue(
-		node: Extract<ExprNode, { nodeType: "FormattedValue" }>,
+	private writeReplacementField(
+		value: ExprNode,
+		conversion: number,
+		formatSpec: ExprNode | undefined,
 	): void {
 		this.write("{");
-		this.visit(node.value);
-		if (node.conversion !== -1) {
-			if (node.conversion === 115) this.write("!s");
-			else if (node.conversion === 114) this.write("!r");
-			else if (node.conversion === 97) this.write("!a");
+		this.visit(value);
+		if (conversion !== -1) {
+			if (conversion === 115) this.write("!s");
+			else if (conversion === 114) this.write("!r");
+			else if (conversion === 97) this.write("!a");
 		}
-		if (node.format_spec) {
+		if (formatSpec) {
 			this.write(":");
-			if (node.format_spec.nodeType === "JoinedStr") {
-				this.writeJoinedStrContent(node.format_spec);
+			if (formatSpec.nodeType === "JoinedStr") {
+				this.writeInterpolatedStringContent(formatSpec.values);
 			} else {
-				this.visit(node.format_spec);
+				this.visit(formatSpec);
 			}
 		}
 		this.write("}");
+	}
+
+	/**
+	 * Renders a standalone `FormattedValue` (a `{expr[!conv][:format_spec]}`
+	 * replacement field visited outside of a `JoinedStr` context).
+	 */
+	visit_FormattedValue(
+		node: Extract<ExprNode, { nodeType: "FormattedValue" }>,
+	): void {
+		this.writeReplacementField(node.value, node.conversion, node.format_spec);
+	}
+
+	/**
+	 * Renders a standalone `Interpolation` (a t-string's
+	 * `{expr[!conv][:format_spec]}` field visited outside of a `TemplateStr`
+	 * context).
+	 */
+	visit_Interpolation(
+		node: Extract<ExprNode, { nodeType: "Interpolation" }>,
+	): void {
+		this.writeReplacementField(node.value, node.conversion, node.format_spec);
 	}
 
 	/**

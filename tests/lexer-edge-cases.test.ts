@@ -91,6 +91,68 @@ describe("Lexer f-strings", () => {
 		const strTok = tokens.find((t) => t.type === TokenType.STRING);
 		expect(strTok?.value).toBe('f"abc}def"');
 	});
+
+	it("scans a closed raw f-string (rf/fr), tracking braces so a quote inside them doesn't end the string early", () => {
+		for (const prefix of ["rf", "fr"]) {
+			const tokens = new Lexer(`${prefix}"{d['key']}"`).tokenize();
+			const strTok = tokens.find((t) => t.type === TokenType.STRING);
+			expect(strTok?.value).toBe(`${prefix}"{d['key']}"`);
+		}
+	});
+});
+
+describe("Lexer t-strings", () => {
+	it("scans a simple closed t-string", () => {
+		const tokens = new Lexer('t"hello {name}"').tokenize();
+		const strTok = tokens.find((t) => t.type === TokenType.STRING);
+		expect(strTok?.value).toBe('t"hello {name}"');
+	});
+
+	it("scans a closed triple-quoted t-string", () => {
+		const tokens = new Lexer('t"""hello\n{name}"""').tokenize();
+		const strTok = tokens.find((t) => t.type === TokenType.STRING);
+		expect(strTok?.value).toBe('t"""hello\n{name}"""');
+	});
+
+	it("throws on a raw newline inside a single-quoted t-string", () => {
+		expect(() => new Lexer('t"abc\ndef"').tokenize()).toThrow(
+			/Unterminated t-string literal/,
+		);
+	});
+
+	it("throws when a triple-quoted t-string is unterminated at EOF", () => {
+		expect(() => new Lexer('t"""abc').tokenize()).toThrow(
+			/Unterminated triple-quoted t-string literal/,
+		);
+	});
+
+	it("throws when a single-quoted t-string is unterminated at EOF", () => {
+		expect(() => new Lexer('t"abc').tokenize()).toThrow(
+			/Unterminated t-string literal/,
+		);
+	});
+
+	it("does not treat a closing quote inside braces as the string end", () => {
+		const tokens = new Lexer("t\"{d['key']}\"").tokenize();
+		const strTok = tokens.find((t) => t.type === TokenType.STRING);
+		expect(strTok?.value).toContain("d['key']");
+	});
+
+	it("scans a closed raw t-string (tr/rt), tracking braces so a quote inside them doesn't end the string early", () => {
+		for (const prefix of ["tr", "rt"]) {
+			const tokens = new Lexer(`${prefix}"{d['key']}"`).tokenize();
+			const strTok = tokens.find((t) => t.type === TokenType.STRING);
+			expect(strTok?.value).toBe(`${prefix}"{d['key']}"`);
+		}
+	});
+
+	it("does not go negative on a stray closing brace in a raw f-string/t-string outside any field", () => {
+		for (const prefix of ["rf", "tr"]) {
+			const tokens = new Lexer(`${prefix}"abc}def"`).tokenize();
+			const strTok = tokens.find((t) => t.type === TokenType.STRING);
+			expect(strTok?.value).toBe(`${prefix}"abc}def"`);
+		}
+	});
 });
 
 describe("Lexer prefixed strings", () => {
@@ -116,6 +178,12 @@ describe("Lexer prefixed strings", () => {
 		const tokens = new Lexer("r'abc\\").tokenize();
 		const strTok = tokens.find((t) => t.type === TokenType.STRING);
 		expect(strTok?.value).toBe("r'abc\\");
+	});
+
+	it("a brace inside a plain (non-f/t) prefixed string doesn't confuse quote detection", () => {
+		const tokens = new Lexer('rb"{"').tokenize();
+		const strTok = tokens.find((t) => t.type === TokenType.STRING);
+		expect(strTok?.value).toBe('rb"{"');
 	});
 });
 

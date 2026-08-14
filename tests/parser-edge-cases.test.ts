@@ -394,6 +394,67 @@ describe("parser edge cases", () => {
 		});
 	});
 
+	describe("lazy imports (PEP 810, Python 3.15+)", () => {
+		test("'lazy import module' sets is_lazy", () => {
+			const stmt = parseStatement("lazy import os\n") as Extract<
+				StmtNode,
+				{ nodeType: "Import" }
+			>;
+			expect(stmt.nodeType).toBe("Import");
+			expect(stmt.is_lazy).toBe(1);
+			expect(stmt.names[0].name).toBe("os");
+		});
+
+		test("'lazy from module import name' sets is_lazy", () => {
+			const stmt = parseStatement("lazy from os import path\n") as Extract<
+				StmtNode,
+				{ nodeType: "ImportFrom" }
+			>;
+			expect(stmt.nodeType).toBe("ImportFrom");
+			expect(stmt.is_lazy).toBe(1);
+			expect(stmt.module).toBe("os");
+		});
+
+		test("plain 'import'/'from...import' leave is_lazy unset", () => {
+			const importStmt = parseStatement("import os\n") as Extract<
+				StmtNode,
+				{ nodeType: "Import" }
+			>;
+			const fromStmt = parseStatement("from os import path\n") as Extract<
+				StmtNode,
+				{ nodeType: "ImportFrom" }
+			>;
+			expect(importStmt.is_lazy).toBeUndefined();
+			expect(fromStmt.is_lazy).toBeUndefined();
+		});
+
+		test("'lazy' remains usable as an ordinary identifier (soft keyword)", () => {
+			expect(parseStatement("lazy = 5\n").nodeType).toBe("Assign");
+			expect(parseStatement("lazy(x)\n").nodeType).toBe("Expr");
+			expect(parseStatement("def lazy():\n    pass\n").nodeType).toBe(
+				"FunctionDef",
+			);
+		});
+
+		test("lazy import with dotted module and alias", () => {
+			const stmt = parseStatement("lazy import os.path as p\n") as Extract<
+				StmtNode,
+				{ nodeType: "Import" }
+			>;
+			expect(stmt.is_lazy).toBe(1);
+			expect(stmt.names[0]).toMatchObject({ name: "os.path", asname: "p" });
+		});
+
+		test("lazy relative from-import", () => {
+			const stmt = parseStatement("lazy from . import module\n") as Extract<
+				StmtNode,
+				{ nodeType: "ImportFrom" }
+			>;
+			expect(stmt.is_lazy).toBe(1);
+			expect(stmt.level).toBe(1);
+		});
+	});
+
 	describe("match statement patterns", () => {
 		test("list pattern", () => {
 			const stmt = parseStatement("match x:\n    case [1, 2]:\n        pass\n");
@@ -530,7 +591,7 @@ describe("parser edge cases", () => {
 
 		test("unterminated nested f-string throws", () => {
 			expect(() => parseCode('f"{f\'{x}}"\n')).toThrow(
-				/Unterminated f-string starting at position/,
+				/Unterminated f-string\/t-string starting at position/,
 			);
 		});
 
@@ -629,6 +690,273 @@ describe("parser edge cases", () => {
 				{ nodeType: "FormattedValue" }
 			>;
 			expect(formatted.value.nodeType).toBe("Tuple");
+		});
+
+		test("self-documenting expression defaults to !r conversion and prepends a literal 'expr=' Constant", () => {
+			const ast = parseCode('f"{x=}"\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "JoinedStr" }>;
+			expect(expr.values[0]).toMatchObject({
+				nodeType: "Constant",
+				value: "x=",
+			});
+			const formatted = expr.values[1] as Extract<
+				ExprNode,
+				{ nodeType: "FormattedValue" }
+			>;
+			expect(formatted.value).toMatchObject({ nodeType: "Name", id: "x" });
+			expect(formatted.conversion).toBe(114);
+		});
+
+		test("self-documenting expression preserves surrounding whitespace in the literal", () => {
+			const ast = parseCode('f"{x =}"\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "JoinedStr" }>;
+			expect(expr.values[0]).toMatchObject({
+				nodeType: "Constant",
+				value: "x =",
+			});
+		});
+
+		test("self-documenting expression with an explicit conversion keeps it instead of defaulting", () => {
+			const ast = parseCode('f"{x=!s}"\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "JoinedStr" }>;
+			const formatted = expr.values[1] as Extract<
+				ExprNode,
+				{ nodeType: "FormattedValue" }
+			>;
+			expect(formatted.conversion).toBe(115);
+		});
+
+		test("self-documenting expression with a format spec and no explicit conversion stays unconverted", () => {
+			const ast = parseCode('f"{x=:>10}"\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "JoinedStr" }>;
+			const formatted = expr.values[1] as Extract<
+				ExprNode,
+				{ nodeType: "FormattedValue" }
+			>;
+			expect(formatted.conversion).toBe(-1);
+			expect(formatted.format_spec).toBeDefined();
+		});
+
+		test("self-documenting expression with an explicit conversion and a format spec keeps both", () => {
+			const ast = parseCode('f"{x=!s:>10}"\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "JoinedStr" }>;
+			const formatted = expr.values[1] as Extract<
+				ExprNode,
+				{ nodeType: "FormattedValue" }
+			>;
+			expect(formatted.conversion).toBe(115);
+			expect(formatted.format_spec).toBeDefined();
+		});
+
+		test("a self-documenting-looking expression nested in parens/calls is still recognized (nested '=' isn't mistaken)", () => {
+			const ast = parseCode('f"{f(x=1)=}"\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "JoinedStr" }>;
+			expect(expr.values[0]).toMatchObject({
+				nodeType: "Constant",
+				value: "f(x=1)=",
+			});
+			const formatted = expr.values[1] as Extract<
+				ExprNode,
+				{ nodeType: "FormattedValue" }
+			>;
+			expect(formatted.value.nodeType).toBe("Call");
+			expect(formatted.conversion).toBe(114);
+		});
+
+		test("comparison/walrus operators ending in '=' are not mistaken for the self-documenting marker", () => {
+			for (const src of [
+				'f"{x==y}"\n',
+				'f"{x!=y}"\n',
+				'f"{x<=y}"\n',
+				'f"{x>=y}"\n',
+			]) {
+				const ast = parseCode(src);
+				const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+					.value as Extract<ExprNode, { nodeType: "JoinedStr" }>;
+				expect(expr.values).toHaveLength(1);
+				expect(expr.values[0].nodeType).toBe("FormattedValue");
+			}
+		});
+
+		test("a dangling comparison operator (invalid as real Python, e.g. '{x>=}') is not mistaken for the self-documenting marker either", () => {
+			// Verified against CPython 3.14: `ast.parse('f"{x>=}"')` raises
+			// `SyntaxError: f-string: expecting '=', or '!', or ':', or '}'` —
+			// a trailing comparison operator can never be valid, complete
+			// expression text (every comparison/walrus operator requires a
+			// right-hand operand), so `isComparisonOrWalrus` only ever excludes
+			// input that's already malformed. This parser's existing, deliberate
+			// design is lenient across all malformed interpolations rather than
+			// raising (see the "malformed interpolation expression falls back to
+			// Name" test above for `f"{,}"`, likewise a CPython SyntaxError), so
+			// this falls back the same way instead of being misread as a
+			// self-documenting `{expr=}` marker.
+			const ast = parseCode('f"{x>=}"\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "JoinedStr" }>;
+			expect(expr.values).toHaveLength(1);
+			const formatted = expr.values[0] as Extract<
+				ExprNode,
+				{ nodeType: "FormattedValue" }
+			>;
+			expect(formatted.value).toMatchObject({ nodeType: "Name", id: "x>=" });
+		});
+
+		test("self-documenting expression works the same way in a t-string interpolation", () => {
+			const ast = parseCode('t"{x=}"\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "TemplateStr" }>;
+			expect(expr.values[0]).toMatchObject({
+				nodeType: "Constant",
+				value: "x=",
+			});
+			const interpolation = expr.values[1] as Extract<
+				ExprNode,
+				{ nodeType: "Interpolation" }
+			>;
+			expect(interpolation.str).toBe("x");
+			expect(interpolation.conversion).toBe(114);
+		});
+	});
+
+	describe("t-strings (PEP 750 template strings)", () => {
+		test("simple interpolation produces TemplateStr/Interpolation nodes", () => {
+			const ast = parseCode('t"hello {x}"\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "TemplateStr" }>;
+			expect(expr.nodeType).toBe("TemplateStr");
+			expect(expr.values[0]).toMatchObject({
+				nodeType: "Constant",
+				value: "hello ",
+			});
+			const interpolation = expr.values[1] as Extract<
+				ExprNode,
+				{ nodeType: "Interpolation" }
+			>;
+			expect(interpolation.nodeType).toBe("Interpolation");
+			expect(interpolation.value.nodeType).toBe("Name");
+			expect(interpolation.str).toBe("x");
+			expect(interpolation.conversion).toBe(-1);
+		});
+
+		test("uppercase T prefix also produces a TemplateStr", () => {
+			const ast = parseCode('T"hello {x}"\n');
+			expect(
+				(ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>).value.nodeType,
+			).toBe("TemplateStr");
+		});
+
+		test("conversion specifier with format spec", () => {
+			const ast = parseCode('t"{x!r:>10}"\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "TemplateStr" }>;
+			const interpolation = expr.values[0] as Extract<
+				ExprNode,
+				{ nodeType: "Interpolation" }
+			>;
+			expect(interpolation.conversion).toBe(114);
+			expect(interpolation.str).toBe("x");
+			expect(interpolation.format_spec?.nodeType).toBe("JoinedStr");
+		});
+
+		test("nested interpolation's format spec is JoinedStr/FormattedValue, not TemplateStr", () => {
+			const ast = parseCode('t"{x:>{width}}"\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "TemplateStr" }>;
+			const interpolation = expr.values[0] as Extract<
+				ExprNode,
+				{ nodeType: "Interpolation" }
+			>;
+			const formatSpec = interpolation.format_spec as Extract<
+				ExprNode,
+				{ nodeType: "JoinedStr" }
+			>;
+			expect(formatSpec.nodeType).toBe("JoinedStr");
+			expect(
+				formatSpec.values.some((v) => v.nodeType === "FormattedValue"),
+			).toBe(true);
+		});
+
+		test("raw t-string (tr/rt prefixes) keeps backslashes literal", () => {
+			for (const src of ['tr"a\\\\b {x}"\n', 'rt"a\\\\b {x}"\n']) {
+				const ast = parseCode(src);
+				const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+					.value as Extract<ExprNode, { nodeType: "TemplateStr" }>;
+				expect(expr.values[0]).toMatchObject({
+					nodeType: "Constant",
+					value: "a\\\\b ",
+				});
+			}
+		});
+
+		test("triple-quoted t-string", () => {
+			const ast = parseCode('t"""multi\nline {x}"""\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "TemplateStr" }>;
+			expect(expr.kind).toBe('t"""');
+			expect(expr.values[0]).toMatchObject({
+				nodeType: "Constant",
+				value: "multi\nline ",
+			});
+		});
+
+		test("nested f-string inside a t-string interpolation", () => {
+			const ast = parseCode("t\"outer {f'inner {y}'} end\"\n");
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "TemplateStr" }>;
+			const interpolation = expr.values[1] as Extract<
+				ExprNode,
+				{ nodeType: "Interpolation" }
+			>;
+			expect(interpolation.value.nodeType).toBe("JoinedStr");
+		});
+
+		test("nested t-string inside a t-string interpolation", () => {
+			const ast = parseCode("t\"outer {t'inner {y}'} end\"\n");
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "TemplateStr" }>;
+			const interpolation = expr.values[1] as Extract<
+				ExprNode,
+				{ nodeType: "Interpolation" }
+			>;
+			expect(interpolation.value.nodeType).toBe("TemplateStr");
+		});
+
+		test("adjacent t-string literals concatenate into one TemplateStr", () => {
+			const ast = parseCode('t"a" t"{x}"\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "TemplateStr" }>;
+			expect(expr.nodeType).toBe("TemplateStr");
+			expect(expr.values).toHaveLength(2);
+			expect(expr.values[0]).toMatchObject({
+				nodeType: "Constant",
+				value: "a",
+			});
+		});
+
+		test("mixing f-string and t-string literals throws", () => {
+			expect(() => parseCode('f"a" t"b"\n')).toThrow(
+				/cannot mix f-string literals with t-string literals/,
+			);
+		});
+
+		test("mixing t-string and plain string literals throws", () => {
+			expect(() => parseCode('t"a" "b"\n')).toThrow(
+				/cannot mix t-string literals with string or bytes literals/,
+			);
+		});
+
+		test("empty t-string", () => {
+			const ast = parseCode('t""\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "TemplateStr" }>;
+			expect(expr.nodeType).toBe("TemplateStr");
+			expect(expr.values).toEqual([]);
 		});
 	});
 
