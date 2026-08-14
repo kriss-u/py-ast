@@ -1,3 +1,11 @@
+# [1.12.0](https://github.com/kriss-u/py-ast/compare/v1.11.1...v1.12.0) (2026-08-14)
+
+
+### Features
+
+* add support for self-documenting f-string ([f4af674](https://github.com/kriss-u/py-ast/commit/f4af67447461fe3871065144c7c6b3abf4da9e89))
+* add support for t-strings ([ef7c1f1](https://github.com/kriss-u/py-ast/commit/ef7c1f155a5e0167abd15726493bffa7bfd24653))
+
 ## [1.11.1](https://github.com/kriss-u/py-ast/compare/v1.11.0...v1.11.1) (2026-08-11)
 
 
