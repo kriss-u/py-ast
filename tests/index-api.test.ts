@@ -90,6 +90,18 @@ describe("dump", () => {
 		expect(result).toContain("Constant(value=(3+4j))");
 	});
 
+	it("distinguishes negative zero from positive zero in PyComplex, matching CPython's repr()", () => {
+		// Verified against CPython 3.13: `repr(complex(r, i))` for each pair.
+		expect(new PyComplex(-0, 4).toString()).toBe("(-0+4j)");
+		expect(new PyComplex(0, 4).toString()).toBe("4j");
+		expect(new PyComplex(3, -0).toString()).toBe("(3-0j)");
+		expect(new PyComplex(3, 0).toString()).toBe("(3+0j)");
+		expect(new PyComplex(-0, -0).toString()).toBe("(-0-0j)");
+		expect(new PyComplex(-0, 0).toString()).toBe("(-0+0j)");
+		expect(new PyComplex(0, -0).toString()).toBe("-0j");
+		expect(new PyComplex(0, 0).toString()).toBe("0j");
+	});
+
 	it("formats multi-line output with a numeric indent", () => {
 		const tree = parseModule("x = 1\ny = 2");
 		const result = dump(tree, { indent: 2 });

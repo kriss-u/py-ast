@@ -1456,16 +1456,37 @@ export class Parser {
 			patterns.push(this.parseBasicPattern());
 		}
 
-		if (patterns.length === 1) {
-			return patterns[0];
+		const pattern: PatternNode =
+			patterns.length === 1
+				? patterns[0]
+				: {
+						nodeType: "MatchOr",
+						patterns,
+						lineno: start.lineno,
+						col_offset: start.col_offset,
+					};
+
+		// `as`-bound pattern (`pattern as name`), e.g. `1 | 2 as y`,
+		// `[1, 2] as y`. The bound name can't be `_` (CPython:
+		// `SyntaxError: cannot use '_' as a target`).
+		if (this.match(TokenType.AS)) {
+			const nameToken = this.consume(
+				TokenType.NAME,
+				"Expected name after 'as' in pattern",
+			);
+			if (nameToken.value === "_") {
+				throw this.errorAt(nameToken, "cannot use '_' as a target");
+			}
+			return {
+				nodeType: "MatchAs",
+				pattern,
+				name: nameToken.value,
+				lineno: start.lineno,
+				col_offset: start.col_offset,
+			};
 		}
 
-		return {
-			nodeType: "MatchOr",
-			patterns,
-			lineno: start.lineno,
-			col_offset: start.col_offset,
-		};
+		return pattern;
 	}
 
 	/**
@@ -1482,58 +1503,8 @@ export class Parser {
 		if (this.check(TokenType.NAME)) {
 			const nameToken = this.peek();
 
-			// Look ahead to see if this is a function call pattern
-			if (this.peekNext().type === TokenType.LPAR) {
-				// Parse the class name
-				const className = this.advance(); // consume the name
-				this.advance(); // consume the (
-
-				const patterns: PatternNode[] = [];
-				const kwd_attrs: string[] = [];
-				const kwd_patterns: PatternNode[] = [];
-
-				if (!this.check(TokenType.RPAR)) {
-					do {
-						// Check for keyword patterns
-						if (
-							this.check(TokenType.NAME) &&
-							this.peekNext().type === TokenType.EQUAL
-						) {
-							const kwdName = this.advance().value;
-							this.advance(); // consume =
-							const kwdPattern = this.parsePattern();
-							kwd_attrs.push(kwdName);
-							kwd_patterns.push(kwdPattern);
-						} else {
-							// Positional pattern
-							patterns.push(this.parsePattern());
-						}
-					} while (this.match(TokenType.COMMA) && !this.check(TokenType.RPAR));
-				}
-
-				this.consume(TokenType.RPAR, "Expected ')' in class pattern");
-
-				const cls: ExprNode = {
-					nodeType: "Name",
-					id: className.value,
-					ctx: this.createLoad(),
-					lineno: className.lineno,
-					col_offset: className.col_offset,
-				};
-
-				return {
-					nodeType: "MatchClass",
-					cls,
-					patterns,
-					kwd_attrs,
-					kwd_patterns,
-					lineno: start.lineno,
-					col_offset: start.col_offset,
-				};
-			}
-
-			// Wildcard pattern (_)
-			if (nameToken.value === "_") {
+			// A bare, undotted `_` is the wildcard pattern.
+			if (nameToken.value === "_" && this.peekNext().type !== TokenType.DOT) {
 				this.advance(); // consume the _
 				return {
 					nodeType: "MatchAs",
@@ -1544,12 +1515,96 @@ export class Parser {
 				};
 			}
 
-			// Regular name pattern (variable binding)
-			this.advance(); // consume the name
+			// A single, undotted name (not followed by `(` or `.`) is a
+			// capture pattern (variable binding).
+			if (
+				this.peekNext().type !== TokenType.DOT &&
+				this.peekNext().type !== TokenType.LPAR
+			) {
+				this.advance(); // consume the name
+				return {
+					nodeType: "MatchAs",
+					pattern: undefined,
+					name: nameToken.value,
+					lineno: start.lineno,
+					col_offset: start.col_offset,
+				};
+			}
+
+			// `_` is reserved as the wildcard pattern and can't start a
+			// dotted value pattern or a class pattern (CPython: `case _.x:`
+			// and `case _():` are both `SyntaxError: invalid syntax`).
+			if (nameToken.value === "_") {
+				throw this.error("invalid syntax");
+			}
+
+			// Otherwise this is a (possibly dotted) value pattern
+			// (`Color.RED`, `a.b.c`) or a (possibly dotted) class pattern
+			// (`Point(x, y)`, `mod.Point(x, y)`) — parse the dotted name
+			// chain as an `Attribute`/`Name` expression first.
+			let cls: ExprNode = {
+				nodeType: "Name",
+				id: this.advance().value,
+				ctx: this.createLoad(),
+				lineno: nameToken.lineno,
+				col_offset: nameToken.col_offset,
+			};
+			while (this.match(TokenType.DOT)) {
+				const attrToken = this.consume(
+					TokenType.NAME,
+					"Expected attribute name after '.'",
+				);
+				cls = {
+					nodeType: "Attribute",
+					value: cls,
+					attr: attrToken.value,
+					ctx: this.createLoad(),
+					lineno: cls.lineno,
+					col_offset: cls.col_offset,
+				};
+			}
+
+			if (!this.match(TokenType.LPAR)) {
+				// Dotted name with no call: a value pattern.
+				return {
+					nodeType: "MatchValue",
+					value: cls,
+					lineno: start.lineno,
+					col_offset: start.col_offset,
+				};
+			}
+
+			const patterns: PatternNode[] = [];
+			const kwd_attrs: string[] = [];
+			const kwd_patterns: PatternNode[] = [];
+
+			if (!this.check(TokenType.RPAR)) {
+				do {
+					// Check for keyword patterns
+					if (
+						this.check(TokenType.NAME) &&
+						this.peekNext().type === TokenType.EQUAL
+					) {
+						const kwdName = this.advance().value;
+						this.advance(); // consume =
+						const kwdPattern = this.parsePattern();
+						kwd_attrs.push(kwdName);
+						kwd_patterns.push(kwdPattern);
+					} else {
+						// Positional pattern
+						patterns.push(this.parsePattern());
+					}
+				} while (this.match(TokenType.COMMA) && !this.check(TokenType.RPAR));
+			}
+
+			this.consume(TokenType.RPAR, "Expected ')' in class pattern");
+
 			return {
-				nodeType: "MatchAs",
-				pattern: undefined,
-				name: nameToken.value,
+				nodeType: "MatchClass",
+				cls,
+				patterns,
+				kwd_attrs,
+				kwd_patterns,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
 			};
@@ -1577,19 +1632,35 @@ export class Parser {
 			};
 		}
 
-		// Tuple pattern (...)
+		// Tuple pattern `(...)`, or a parenthesized single pattern (a plain
+		// grouping, not a sequence — CPython: `case (1):` matches like
+		// `case 1:`, not like `case (1,):`).
 		if (this.match(TokenType.LPAR)) {
-			const patterns: PatternNode[] = [];
+			if (this.check(TokenType.RPAR)) {
+				this.advance();
+				return {
+					nodeType: "MatchSequence",
+					patterns: [],
+					lineno: start.lineno,
+					col_offset: start.col_offset,
+				};
+			}
 
-			if (!this.check(TokenType.RPAR)) {
+			const patterns: PatternNode[] = [this.parsePattern()];
+			let sawComma = false;
+			while (this.match(TokenType.COMMA)) {
+				sawComma = true;
+				if (this.check(TokenType.RPAR)) break;
 				patterns.push(this.parsePattern());
-				while (this.match(TokenType.COMMA)) {
-					if (this.check(TokenType.RPAR)) break;
-					patterns.push(this.parsePattern());
-				}
 			}
 
 			this.consume(TokenType.RPAR, "Expected ')' after tuple pattern");
+
+			if (!sawComma) {
+				// A single pattern in parens with no trailing comma is just
+				// a grouping.
+				return patterns[0];
+			}
 
 			return {
 				nodeType: "MatchSequence",
@@ -1640,9 +1711,77 @@ export class Parser {
 			};
 		}
 
+		// Signed/complex number literal pattern: `NUMBER`, `-NUMBER`,
+		// `NUMBER ('+'|'-') NUMBER`, or `-NUMBER ('+'|'-') NUMBER`, matching
+		// CPython's `signed_number`/`complex_number` pattern grammar (e.g.
+		// `case -1:`, `case 1+2j:`, `case -1-2j:`). The second operand of a
+		// `+`/`-` combination must be an imaginary literal.
+		if (
+			this.check(TokenType.NUMBER) ||
+			(this.check(TokenType.MINUS) && this.peekNext().type === TokenType.NUMBER)
+		) {
+			const negative = this.match(TokenType.MINUS);
+			const numToken = this.consume(
+				TokenType.NUMBER,
+				"Expected number in pattern",
+			);
+
+			let value: ExprNode = {
+				nodeType: "Constant",
+				value: this.parseNumber(numToken.value),
+				lineno: numToken.lineno,
+				col_offset: numToken.col_offset,
+			};
+
+			if (negative) {
+				value = {
+					nodeType: "UnaryOp",
+					op: { nodeType: "USub" },
+					operand: value,
+					lineno: start.lineno,
+					col_offset: start.col_offset,
+				};
+			}
+
+			if (this.check(TokenType.PLUS) || this.check(TokenType.MINUS)) {
+				const opToken = this.advance();
+				const imagToken = this.consume(
+					TokenType.NUMBER,
+					"imaginary number required in complex literal",
+				);
+				const imagValue = this.parseNumber(imagToken.value);
+				if (!(imagValue instanceof PyComplex)) {
+					throw this.errorAt(
+						imagToken,
+						"imaginary number required in complex literal",
+					);
+				}
+
+				value = {
+					nodeType: "BinOp",
+					left: value,
+					op: { nodeType: opToken.type === TokenType.PLUS ? "Add" : "Sub" },
+					right: {
+						nodeType: "Constant",
+						value: imagValue,
+						lineno: imagToken.lineno,
+						col_offset: imagToken.col_offset,
+					},
+					lineno: start.lineno,
+					col_offset: start.col_offset,
+				};
+			}
+
+			return {
+				nodeType: "MatchValue",
+				value,
+				lineno: start.lineno,
+				col_offset: start.col_offset,
+			};
+		}
+
 		if (
 			this.match(
-				TokenType.NUMBER,
 				TokenType.STRING,
 				TokenType.TRUE,
 				TokenType.FALSE,
@@ -1650,12 +1789,10 @@ export class Parser {
 			)
 		) {
 			const token = this.previous();
-			// biome-ignore lint/suspicious/noExplicitAny: Value can be string, number, boolean, or null
+			// biome-ignore lint/suspicious/noExplicitAny: Value can be string, boolean, or null
 			let value: any;
 
-			if (token.type === TokenType.NUMBER) {
-				value = this.parseNumber(token.value);
-			} else if (token.type === TokenType.STRING) {
+			if (token.type === TokenType.STRING) {
 				value = this.parseString(token.value);
 			} else if (token.type === TokenType.TRUE) {
 				value = true;
@@ -1693,14 +1830,7 @@ export class Parser {
 			};
 		}
 
-		// Default fallback - create a wildcard
-		return {
-			nodeType: "MatchAs",
-			pattern: undefined,
-			name: "_",
-			lineno: start.lineno,
-			col_offset: start.col_offset,
-		};
+		throw this.error("invalid syntax");
 	}
 
 	// ==== Expression parsers ====
@@ -2254,6 +2384,8 @@ export class Parser {
 				// Function call
 				const args: ExprNode[] = [];
 				const keywords: Keyword[] = [];
+				let sawKeywordArg = false;
+				let sawDoubleStarUnpack = false;
 
 				if (!this.check(TokenType.RPAR)) {
 					do {
@@ -2271,6 +2403,7 @@ export class Parser {
 								lineno: this.previous().lineno,
 								col_offset: this.previous().col_offset,
 							});
+							sawKeywordArg = true;
 						} else if (this.match(TokenType.DOUBLESTAR)) {
 							// **kwargs
 							const value = this.parseTest();
@@ -2281,8 +2414,14 @@ export class Parser {
 								lineno: this.previous().lineno,
 								col_offset: this.previous().col_offset,
 							});
+							sawDoubleStarUnpack = true;
 						} else if (this.match(TokenType.STAR)) {
 							// *args
+							if (sawDoubleStarUnpack) {
+								throw this.error(
+									"iterable argument unpacking follows keyword argument unpacking",
+								);
+							}
 							const value = this.parseTest();
 							args.push({
 								nodeType: "Starred",
@@ -2292,6 +2431,16 @@ export class Parser {
 								col_offset: this.previous().col_offset,
 							});
 						} else {
+							if (sawDoubleStarUnpack) {
+								throw this.error(
+									"positional argument follows keyword argument unpacking",
+								);
+							}
+							if (sawKeywordArg) {
+								throw this.error(
+									"positional argument follows keyword argument",
+								);
+							}
 							const arg = this.parseArgument();
 							args.push(arg);
 						}
@@ -2638,18 +2787,37 @@ export class Parser {
 		const defaults: ExprNode[] = [];
 
 		let seenStar = false;
+		let seenSlash = false;
+		let bareStarPending = false;
+		let defaultSeen = false;
 
 		if (!this.check(TokenType.RPAR)) {
 			do {
+				if (kwarg) {
+					throw this.error("arguments cannot follow var-keyword argument");
+				}
+
 				if (this.match(TokenType.SLASH)) {
 					// Positional-only separator
+					if (seenStar) {
+						throw this.error("/ must be ahead of *");
+					}
+					if (seenSlash) {
+						throw this.error("/ may appear only once");
+					}
+					seenSlash = true;
 					// Move all current args to posonlyargs
 					posonlyargs.push(...args);
 					args.length = 0;
 				} else if (this.match(TokenType.STAR)) {
+					if (seenStar) {
+						throw this.error("* argument may appear only once");
+					}
 					seenStar = true;
+					bareStarPending = true;
 
 					if (this.check(TokenType.NAME)) {
+						bareStarPending = false;
 						const name = this.advance().value;
 						let annotation: ExprNode | undefined;
 
@@ -2710,10 +2878,18 @@ export class Parser {
 
 					if (seenStar) {
 						// After *, these are keyword-only
+						bareStarPending = false;
 						kwonlyargs.push(arg);
 						kw_defaults.push(defaultValue || null);
 					} else {
 						// Regular positional arguments
+						if (defaultValue) {
+							defaultSeen = true;
+						} else if (defaultSeen) {
+							throw this.error(
+								"parameter without a default follows parameter with a default",
+							);
+						}
 						args.push(arg);
 						if (defaultValue) {
 							defaults.push(defaultValue);
@@ -2721,6 +2897,10 @@ export class Parser {
 					}
 				}
 			} while (this.match(TokenType.COMMA) && !this.check(TokenType.RPAR));
+		}
+
+		if (bareStarPending) {
+			throw this.error("named arguments must follow bare *");
 		}
 
 		return {
@@ -2753,16 +2933,35 @@ export class Parser {
 		const defaults: ExprNode[] = [];
 
 		let seenStar = false;
+		let seenSlash = false;
+		let bareStarPending = false;
+		let defaultSeen = false;
 
 		do {
+			if (kwarg) {
+				throw this.error("arguments cannot follow var-keyword argument");
+			}
+
 			if (this.match(TokenType.SLASH)) {
 				// Positional-only separator
+				if (seenStar) {
+					throw this.error("/ must be ahead of *");
+				}
+				if (seenSlash) {
+					throw this.error("/ may appear only once");
+				}
+				seenSlash = true;
 				posonlyargs.push(...args);
 				args.length = 0;
 			} else if (this.match(TokenType.STAR)) {
+				if (seenStar) {
+					throw this.error("* argument may appear only once");
+				}
 				seenStar = true;
+				bareStarPending = true;
 
 				if (this.check(TokenType.NAME)) {
+					bareStarPending = false;
 					const name = this.advance().value;
 					vararg = {
 						nodeType: "Arg",
@@ -2807,10 +3006,18 @@ export class Parser {
 
 				if (seenStar) {
 					// After *, these are keyword-only
+					bareStarPending = false;
 					kwonlyargs.push(arg);
 					kw_defaults.push(defaultValue || null);
 				} else {
 					// Regular positional arguments
+					if (defaultValue) {
+						defaultSeen = true;
+					} else if (defaultSeen) {
+						throw this.error(
+							"parameter without a default follows parameter with a default",
+						);
+					}
 					args.push(arg);
 					if (defaultValue) {
 						defaults.push(defaultValue);
@@ -2818,6 +3025,10 @@ export class Parser {
 				}
 			}
 		} while (this.match(TokenType.COMMA) && !this.check(TokenType.COLON));
+
+		if (bareStarPending) {
+			throw this.error("named arguments must follow bare *");
+		}
 
 		return {
 			nodeType: "Arguments",
@@ -2996,6 +3207,9 @@ export class Parser {
 
 		// Check for list comprehension
 		if (this.check(TokenType.FOR) || this.check(TokenType.ASYNC)) {
+			if (first.nodeType === "Starred") {
+				throw this.error("iterable unpacking cannot be used in comprehension");
+			}
 			const generators = this.parseComprehensions();
 			this.consume(TokenType.RSQB, "Expected ']' after list comprehension");
 
@@ -4243,37 +4457,54 @@ export class Parser {
 	}
 
 	/**
-	 * Parses a standalone expression string (an f-string interpolation's
-	 * expression text) using a fresh nested {@link Parser} instance. Falls
-	 * back to treating the text as a bare `Name` if it fails to parse, so a
-	 * single malformed interpolation doesn't abort the whole file.
+	 * Parses a standalone expression string (an f-string/t-string
+	 * interpolation's expression text) using a fresh nested {@link Parser}
+	 * instance. Matches CPython's `yield_expr | star_expressions` grammar for
+	 * replacement fields: any expression that CPython's `ast.parse` would
+	 * reject (empty, malformed, or with trailing/leftover tokens after the
+	 * expression) raises here too, rather than silently degrading to a
+	 * placeholder node.
 	 * @param exprText The expression source text to parse.
-	 * @param token The originating f-string token, used for fallback node position.
-	 * @returns The parsed expression, or a fallback `Name` node on parse failure.
+	 * @param token The originating f-string/t-string token, used for error position.
+	 * @returns The parsed expression.
+	 * @throws {ParseError} If `exprText` is empty or is not a complete, valid expression.
 	 */
 	private parseExpressionFromString(exprText: string, token: Token): ExprNode {
-		try {
-			// Create a mini-lexer/parser for the expression. `parseTestList`
-			// (not the lower-precedence `parseExpr`) is required so
-			// comparisons, boolean operators, conditional expressions,
-			// lambdas, the walrus operator, and bare tuples are parsed
-			// rather than silently truncated at the first token `parseExpr`
-			// doesn't understand (e.g. `f"{a != b}"` would otherwise lose
-			// `!= b` entirely instead of producing a `Compare` node).
-			const tempParser = new Parser(exprText);
-			const expr = tempParser.parseTestList();
-
-			return expr;
-		} catch (_error) {
-			// Fallback: treat as a simple name if parsing fails
-			return {
-				nodeType: "Name",
-				id: exprText,
-				ctx: { nodeType: "Load" },
-				lineno: token.lineno,
-				col_offset: token.col_offset,
-			};
+		if (exprText.trim() === "") {
+			throw this.errorAt(
+				token,
+				"f-string: valid expression required before '}'",
+			);
 		}
+
+		// Create a mini-lexer/parser for the expression. `parseTestListWithStar`
+		// (not the lower-precedence `parseExpr`/`parseTestList`) is required so
+		// comparisons, boolean operators, conditional expressions, lambdas, the
+		// walrus operator, bare tuples, `yield`/`yield from`, and starred
+		// expressions (e.g. `f"{*x}"`) are all parsed rather than silently
+		// truncated at the first token a narrower entry point doesn't
+		// understand (e.g. `f"{a != b}"` would otherwise lose `!= b` entirely
+		// instead of producing a `Compare` node).
+		let tempParser: Parser;
+		let expr: ExprNode;
+		try {
+			tempParser = new Parser(exprText);
+			expr = tempParser.parseTestListWithStar();
+		} catch (_error) {
+			throw this.errorAt(
+				token,
+				"f-string: invalid syntax in interpolated expression",
+			);
+		}
+
+		if (!tempParser.isAtEnd()) {
+			throw this.errorAt(
+				token,
+				"f-string: invalid syntax in interpolated expression",
+			);
+		}
+
+		return expr;
 	}
 
 	// ==== Parser utilities ====
@@ -4417,6 +4648,24 @@ export class Parser {
 	 */
 	private error(message: string): ParseError {
 		const token = this.peek();
+		const error = new Error(
+			`${message} at line ${token.lineno}, column ${token.col_offset}`,
+		) as ParseError;
+		error.lineno = token.lineno;
+		error.col_offset = token.col_offset;
+		error.end_lineno = token.end_lineno;
+		error.end_col_offset = token.end_col_offset;
+		return error;
+	}
+
+	/**
+	 * Builds a {@link ParseError} for `message`, positioned at `token`
+	 * (rather than the current token — see {@link error}).
+	 * @param token The token whose source location the error should carry.
+	 * @param message Description of the syntax error.
+	 * @returns A `ParseError` ready to be thrown, carrying `token`'s source location.
+	 */
+	private errorAt(token: Token, message: string): ParseError {
 		const error = new Error(
 			`${message} at line ${token.lineno}, column ${token.col_offset}`,
 		) as ParseError;
