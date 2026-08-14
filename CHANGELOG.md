@@ -1,3 +1,11 @@
+# [1.13.0](https://github.com/kriss-u/py-ast/compare/v1.12.0...v1.13.0) (2026-08-14)
+
+
+### Features
+
+* add more pattern-matching cases ([e7b9442](https://github.com/kriss-u/py-ast/commit/e7b94424be1f066706d9d73ba553513481e384e1))
+* make parser stricter and remove fallbacks ([df505e0](https://github.com/kriss-u/py-ast/commit/df505e085c9a4e9cedfccd78eec68539de9846e4))
+
 # [1.12.0](https://github.com/kriss-u/py-ast/compare/v1.11.1...v1.12.0) (2026-08-14)
 
 
