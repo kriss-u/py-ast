@@ -501,6 +501,41 @@ describe("Unparser", () => {
 			// Skip for now - conversion handling may have issues
 			testRoundtrip("f'{obj!r}'");
 		});
+
+		test("raw f-strings (rf/fr prefixes) round-trip with interpolations intact", () => {
+			testRoundtrip("rf'Hello, {name}!'");
+			testRoundtrip("fr'Hello, {name}!'");
+		});
+
+		test("triple-quoted f-strings round-trip", () => {
+			testRoundtrip("f'''Hello, {name}!'''");
+		});
+	});
+
+	describe("T-strings (PEP 750 template strings)", () => {
+		test("simple t-strings", () => {
+			testUnparse("t'Hello, {name}!'", "t'Hello, {name}!'");
+			testRoundtrip("t'Value: {value}'");
+		});
+
+		test("t-strings with conversions and format specs", () => {
+			testRoundtrip("t'{obj!r}'");
+			testRoundtrip("t'{num:>{width}}'");
+		});
+
+		test("raw t-strings (tr/rt prefixes) round-trip", () => {
+			testRoundtrip("tr'Hello, {name}!'");
+			testRoundtrip("rt'Hello, {name}!'");
+		});
+
+		test("triple-quoted t-strings round-trip", () => {
+			testRoundtrip("t'''Hello, {name}!'''");
+		});
+
+		test("nested f-string/t-string interpolations round-trip", () => {
+			testRoundtrip("t\"outer {f'inner {y}'} end\"");
+			testRoundtrip("t\"outer {t'inner {y}'} end\"");
+		});
 	});
 
 	describe("Constants", () => {

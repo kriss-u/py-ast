@@ -530,7 +530,7 @@ describe("parser edge cases", () => {
 
 		test("unterminated nested f-string throws", () => {
 			expect(() => parseCode('f"{f\'{x}}"\n')).toThrow(
-				/Unterminated f-string starting at position/,
+				/Unterminated f-string\/t-string starting at position/,
 			);
 		});
 
@@ -629,6 +629,142 @@ describe("parser edge cases", () => {
 				{ nodeType: "FormattedValue" }
 			>;
 			expect(formatted.value.nodeType).toBe("Tuple");
+		});
+	});
+
+	describe("t-strings (PEP 750 template strings)", () => {
+		test("simple interpolation produces TemplateStr/Interpolation nodes", () => {
+			const ast = parseCode('t"hello {x}"\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "TemplateStr" }>;
+			expect(expr.nodeType).toBe("TemplateStr");
+			expect(expr.values[0]).toMatchObject({
+				nodeType: "Constant",
+				value: "hello ",
+			});
+			const interpolation = expr.values[1] as Extract<
+				ExprNode,
+				{ nodeType: "Interpolation" }
+			>;
+			expect(interpolation.nodeType).toBe("Interpolation");
+			expect(interpolation.value.nodeType).toBe("Name");
+			expect(interpolation.str).toBe("x");
+			expect(interpolation.conversion).toBe(-1);
+		});
+
+		test("uppercase T prefix also produces a TemplateStr", () => {
+			const ast = parseCode('T"hello {x}"\n');
+			expect(
+				(ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>).value.nodeType,
+			).toBe("TemplateStr");
+		});
+
+		test("conversion specifier with format spec", () => {
+			const ast = parseCode('t"{x!r:>10}"\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "TemplateStr" }>;
+			const interpolation = expr.values[0] as Extract<
+				ExprNode,
+				{ nodeType: "Interpolation" }
+			>;
+			expect(interpolation.conversion).toBe(114);
+			expect(interpolation.str).toBe("x");
+			expect(interpolation.format_spec?.nodeType).toBe("JoinedStr");
+		});
+
+		test("nested interpolation's format spec is JoinedStr/FormattedValue, not TemplateStr", () => {
+			const ast = parseCode('t"{x:>{width}}"\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "TemplateStr" }>;
+			const interpolation = expr.values[0] as Extract<
+				ExprNode,
+				{ nodeType: "Interpolation" }
+			>;
+			const formatSpec = interpolation.format_spec as Extract<
+				ExprNode,
+				{ nodeType: "JoinedStr" }
+			>;
+			expect(formatSpec.nodeType).toBe("JoinedStr");
+			expect(
+				formatSpec.values.some((v) => v.nodeType === "FormattedValue"),
+			).toBe(true);
+		});
+
+		test("raw t-string (tr/rt prefixes) keeps backslashes literal", () => {
+			for (const src of ['tr"a\\\\b {x}"\n', 'rt"a\\\\b {x}"\n']) {
+				const ast = parseCode(src);
+				const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+					.value as Extract<ExprNode, { nodeType: "TemplateStr" }>;
+				expect(expr.values[0]).toMatchObject({
+					nodeType: "Constant",
+					value: "a\\\\b ",
+				});
+			}
+		});
+
+		test("triple-quoted t-string", () => {
+			const ast = parseCode('t"""multi\nline {x}"""\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "TemplateStr" }>;
+			expect(expr.kind).toBe('t"""');
+			expect(expr.values[0]).toMatchObject({
+				nodeType: "Constant",
+				value: "multi\nline ",
+			});
+		});
+
+		test("nested f-string inside a t-string interpolation", () => {
+			const ast = parseCode("t\"outer {f'inner {y}'} end\"\n");
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "TemplateStr" }>;
+			const interpolation = expr.values[1] as Extract<
+				ExprNode,
+				{ nodeType: "Interpolation" }
+			>;
+			expect(interpolation.value.nodeType).toBe("JoinedStr");
+		});
+
+		test("nested t-string inside a t-string interpolation", () => {
+			const ast = parseCode("t\"outer {t'inner {y}'} end\"\n");
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "TemplateStr" }>;
+			const interpolation = expr.values[1] as Extract<
+				ExprNode,
+				{ nodeType: "Interpolation" }
+			>;
+			expect(interpolation.value.nodeType).toBe("TemplateStr");
+		});
+
+		test("adjacent t-string literals concatenate into one TemplateStr", () => {
+			const ast = parseCode('t"a" t"{x}"\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "TemplateStr" }>;
+			expect(expr.nodeType).toBe("TemplateStr");
+			expect(expr.values).toHaveLength(2);
+			expect(expr.values[0]).toMatchObject({
+				nodeType: "Constant",
+				value: "a",
+			});
+		});
+
+		test("mixing f-string and t-string literals throws", () => {
+			expect(() => parseCode('f"a" t"b"\n')).toThrow(
+				/cannot mix f-string literals with t-string literals/,
+			);
+		});
+
+		test("mixing t-string and plain string literals throws", () => {
+			expect(() => parseCode('t"a" "b"\n')).toThrow(
+				/cannot mix t-string literals with string or bytes literals/,
+			);
+		});
+
+		test("empty t-string", () => {
+			const ast = parseCode('t""\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "TemplateStr" }>;
+			expect(expr.nodeType).toBe("TemplateStr");
+			expect(expr.values).toEqual([]);
 		});
 	});
 
