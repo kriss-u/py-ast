@@ -12,7 +12,7 @@
  * Python's significant whitespace. F-string specific values
  * (`FSTRING_START`/`FSTRING_MIDDLE`/`FSTRING_END`) are reserved for future
  * use; this lexer currently emits whole f-strings as a single `STRING`
- * token (see {@link Lexer.scanFString}).
+ * token (see {@link Lexer.scanInterpolatedStringLiteral}).
  */
 export enum TokenType {
 	// Literals
@@ -341,7 +341,7 @@ export class Lexer {
 			) {
 				const nextChar = this.peekNext();
 				if (nextChar === '"' || nextChar === "'") {
-					this.scanFString(c);
+					this.scanInterpolatedStringLiteral(c);
 					return;
 				}
 			}
@@ -571,7 +571,7 @@ export class Lexer {
 	 *   outside of a replacement field, or if it is unterminated at end of
 	 *   source.
 	 */
-	private scanFString(prefixChar: string): void {
+	private scanInterpolatedStringLiteral(prefixChar: string): void {
 		const start = { ...this.position }; // Create a copy
 
 		// Consume prefix letter ('f' or 't')
@@ -831,7 +831,7 @@ export class Lexer {
 	 * `r`, `b`, `u`, `rb`, `fr`, `tr`) that, combined with a following quote,
 	 * denotes a raw/bytes/unicode/template string rather than a plain
 	 * identifier. Note: plain `f`/`t`-prefixed strings are handled
-	 * separately by {@link scanFString}, called eagerly from
+	 * separately by {@link scanInterpolatedStringLiteral}, called eagerly from
 	 * {@link scanToken} before this check is reached for the
 	 * single-character `"f"`/`"t"` case.
 	 *
@@ -862,11 +862,11 @@ export class Lexer {
 	 * by {@link scanIdentifier}. Behaves like {@link scanString} but
 	 * includes the prefix in the emitted token's value and does not itself
 	 * throw on an unterminated triple-quoted string reaching end of source
-	 * (unlike {@link scanString}/{@link scanFString}).
+	 * (unlike {@link scanString}/{@link scanInterpolatedStringLiteral}).
 	 *
 	 * When `prefix` contains `f`/`t` (a raw f-string or raw t-string, e.g.
 	 * `rf`/`tr`), brace nesting is tracked the same way as
-	 * {@link scanFString} so a quote character inside a `{expr}` field
+	 * {@link scanInterpolatedStringLiteral} so a quote character inside a `{expr}` field
 	 * doesn't terminate the literal early; plain `r`/`b`/`u` combos don't
 	 * track braces, since `{`/`}` are just literal characters there.
 	 *

@@ -470,6 +470,19 @@ export class Parser {
 			};
 		}
 
+		// `lazy` is a soft keyword (PEP 810, Python 3.15+): only treated as
+		// starting a lazy import when immediately followed by `import`/`from`,
+		// so `lazy` remains usable as an ordinary identifier everywhere else.
+		let isLazyImport = false;
+		if (
+			this.check(TokenType.NAME) &&
+			this.peek().value === "lazy" &&
+			(this.checkNext(TokenType.IMPORT) || this.checkNext(TokenType.FROM))
+		) {
+			isLazyImport = true;
+			this.advance(); // consume 'lazy'
+		}
+
 		// Handle import statement
 		if (this.match(TokenType.IMPORT)) {
 			const names: { name: string; asname?: string }[] = [];
@@ -503,6 +516,7 @@ export class Parser {
 					lineno: start.lineno,
 					col_offset: start.col_offset,
 				})),
+				is_lazy: isLazyImport ? 1 : undefined,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
 			};
@@ -593,6 +607,7 @@ export class Parser {
 					col_offset: start.col_offset,
 				})),
 				level,
+				is_lazy: isLazyImport ? 1 : undefined,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
 			};
@@ -3645,7 +3660,7 @@ export class Parser {
 	 * @param token The f-string/t-string token, including its quotes and prefix.
 	 * @returns The unquoted body text and the original quote style.
 	 */
-	private stripFStringLikeToken(token: Token): {
+	private stripInterpolatedStringToken(token: Token): {
 		content: string;
 		quoteStyle: string;
 	} {
@@ -3663,7 +3678,7 @@ export class Parser {
 	/**
 	 * Parses an f-string token into a `JoinedStr` node: splits the content
 	 * into literal text segments (`Constant` nodes) and `{expr}` segments
-	 * (delegated to {@link parseExpressionInFString}), tracking brace/quote
+	 * (delegated to {@link parseExpressionInInterpolatedString}), tracking brace/quote
 	 * nesting so expressions containing strings or nested f-strings are
 	 * handled correctly.
 	 * @param token The f-string token, including its quotes and prefix (e.g. `f`/`rf`/`fr`).
@@ -3671,7 +3686,7 @@ export class Parser {
 	 * @throws {Error} If an f-string expression is malformed.
 	 */
 	private parseFString(token: Token): JoinedStr {
-		const { content, quoteStyle } = this.stripFStringLikeToken(token);
+		const { content, quoteStyle } = this.stripInterpolatedStringToken(token);
 		const values = this.scanFStringSegments(content, token, quoteStyle.length);
 
 		return {
@@ -3693,7 +3708,7 @@ export class Parser {
 	 * @throws {Error} If a t-string expression is malformed.
 	 */
 	private parseTemplateStr(token: Token): TemplateStr {
-		const { content, quoteStyle } = this.stripFStringLikeToken(token);
+		const { content, quoteStyle } = this.stripInterpolatedStringToken(token);
 		const values = this.scanTemplateStrSegments(
 			content,
 			token,
@@ -3722,15 +3737,18 @@ export class Parser {
 	 * own body starting at a known offset within the token. Format-spec text
 	 * has no such fixed offset within the source, so callers scanning a spec
 	 * pass `0` and positions fall back to the token's own start.
-	 * @param buildField Builds the `{expr}` segment's node (a `FormattedValue`
-	 * or an `Interpolation`) from its raw expression text.
+	 * @param buildField Builds the `{expr}` segment's node(s) from its raw
+	 * expression text: normally a single `FormattedValue`/`Interpolation`,
+	 * or `[literalConstant, field]` for a self-documenting `{expr=}` segment
+	 * (PEP 501/572), whose literal `expr=` text renders as a `Constant`
+	 * immediately before the field.
 	 * @returns The interleaved `Constant`/field nodes.
 	 */
 	private scanInterleavedSegments(
 		content: string,
 		token: Token,
 		colOffsetBase: number,
-		buildField: (exprText: string, token: Token) => ExprNode,
+		buildField: (exprText: string, token: Token) => ExprNode[],
 	): ExprNode[] {
 		const values: ExprNode[] = [];
 		let i = 0;
@@ -3749,8 +3767,11 @@ export class Parser {
 				}
 
 				// Parse the expression recursively
-				const { exprText, nextPos } = this.parseExpressionInFString(content, i);
-				values.push(buildField(exprText, token));
+				const { exprText, nextPos } = this.parseExpressionInInterpolatedString(
+					content,
+					i,
+				);
+				values.push(...buildField(exprText, token));
 
 				i = nextPos;
 				literalStart = i;
@@ -3785,7 +3806,7 @@ export class Parser {
 			content,
 			token,
 			colOffsetBase,
-			(exprText, tok) => this.parseFormattedValue(exprText, tok),
+			(exprText, tok) => this.buildFormattedValueNodes(exprText, tok),
 		);
 	}
 
@@ -3802,7 +3823,7 @@ export class Parser {
 			content,
 			token,
 			colOffsetBase,
-			(exprText, tok) => this.parseInterpolation(exprText, tok),
+			(exprText, tok) => this.buildInterpolationNodes(exprText, tok),
 		);
 	}
 
@@ -3818,7 +3839,7 @@ export class Parser {
 	 * @param startPos Index into `content` of the opening `{`.
 	 * @returns The expression text (braces excluded) and the index just past the matching `}`.
 	 */
-	private parseExpressionInFString(
+	private parseExpressionInInterpolatedString(
 		content: string,
 		startPos: number,
 	): { exprText: string; nextPos: number } {
@@ -3834,11 +3855,9 @@ export class Parser {
 				const nextChar = content[i + 1];
 				if (nextChar === '"' || nextChar === "'") {
 					// Found nested f-string/t-string, parse it recursively
-					const { fStringContent, nextPos } = this.parseNestedFString(
-						content,
-						i,
-					);
-					result += fStringContent;
+					const { literalContent, nextPos } =
+						this.parseNestedInterpolatedString(content, i);
+					result += literalContent;
 					i = nextPos;
 					continue;
 				}
@@ -3881,10 +3900,10 @@ export class Parser {
 	 * @returns The nested literal's full raw text and the index just past its closing quote.
 	 * @throws {Error} If the nested f-string/t-string is unterminated.
 	 */
-	private parseNestedFString(
+	private parseNestedInterpolatedString(
 		content: string,
 		startPos: number,
-	): { fStringContent: string; nextPos: number } {
+	): { literalContent: string; nextPos: number } {
 		const quote = content[startPos + 1];
 		let i = startPos + 2; // Skip 'f'/'t' and quote
 		let braceLevel = 0;
@@ -3901,7 +3920,7 @@ export class Parser {
 				result += char;
 			} else if (char === quote && braceLevel === 0) {
 				result += char;
-				return { fStringContent: result, nextPos: i + 1 };
+				return { literalContent: result, nextPos: i + 1 };
 			} else {
 				result += char;
 			}
@@ -4043,22 +4062,41 @@ export class Parser {
 	}
 
 	/**
-	 * Splits an f-string/t-string `{expr}` segment's raw text into its
-	 * expression text, `!r`/`!s`/`!a` conversion code, and optional format
-	 * spec (always scanned as f-string-style content — even inside a
-	 * t-string, CPython represents an interpolation's format spec as a
-	 * `JoinedStr`, since formatting still goes through `str.format`-style
-	 * rules). Shared by {@link parseFormattedValue} and
-	 * {@link parseInterpolation}, which differ only in the node type they
-	 * wrap the result in.
-	 * @param exprText The raw text between the segment's braces (as returned by {@link parseExpressionInFString}).
+	 * Splits an f-string/t-string `{expr}` segment's raw text into its value
+	 * expression text, `!r`/`!s`/`!a` conversion code, optional format spec
+	 * (always scanned as f-string-style content — even inside a t-string,
+	 * CPython represents an interpolation's format spec as a `JoinedStr`,
+	 * since formatting still goes through `str.format`-style rules), and —
+	 * for a self-documenting `{expr=}` segment (PEP 501/572, e.g. `f"{x=}"`)
+	 * — the literal text to render as a `Constant` immediately before the
+	 * field.
+	 *
+	 * Self-documenting detection runs last, on whatever text remains after
+	 * conversion/format-spec stripping, since the `=` marker always sits at
+	 * the very end of the value expression (`{x=}`, `{x=!r}`, `{x=:>10}`).
+	 * It's recognized only when the trailing (whitespace-trimmed) `=` isn't
+	 * actually the tail of `==`/`!=`/`<=`/`>=`/`:=`, so comparisons and
+	 * walrus assignments aren't misdetected. When recognized and no
+	 * conversion was explicitly given, the conversion defaults to `114`
+	 * (`!r`) — but only when there's also no format spec, matching CPython
+	 * (`f"{x=}"` is `!r`, but `f"{x=:>10}"` stays unconverted).
+	 *
+	 * Shared by {@link buildFormattedValueNodes} and
+	 * {@link buildInterpolationNodes}, which differ only in the node type
+	 * they wrap the value expression in.
+	 * @param exprText The raw text between the segment's braces (as returned by {@link parseExpressionInInterpolatedString}).
 	 * @param token The f-string/t-string token, used for node position.
-	 * @returns The expression text (conversion/format-spec stripped), the conversion code, and the format spec node if present.
+	 * @returns The value expression text (conversion/format-spec/`=` marker stripped), the conversion code, the format spec node if present, and the verbatim self-documenting literal text if this is a `{expr=}` segment.
 	 */
-	private splitFStringLikeSegment(
+	private splitInterpolatedSegment(
 		exprText: string,
 		token: Token,
-	): { expression: string; conversion: number; formatSpec?: ExprNode } {
+	): {
+		expression: string;
+		conversion: number;
+		formatSpec?: ExprNode;
+		selfDocText?: string;
+	} {
 		let expression = exprText;
 		let formatSpec: ExprNode | undefined;
 		let conversion = -1;
@@ -4101,25 +4139,44 @@ export class Parser {
 			}
 		}
 
-		return { expression, conversion, formatSpec };
+		let selfDocText: string | undefined;
+		const trimmedEnd = expression.replace(/\s+$/, "");
+		if (trimmedEnd.endsWith("=")) {
+			const prevChar = trimmedEnd[trimmedEnd.length - 2];
+			const isComparisonOrWalrus =
+				prevChar === "=" ||
+				prevChar === "!" ||
+				prevChar === "<" ||
+				prevChar === ">" ||
+				prevChar === ":";
+			if (!isComparisonOrWalrus) {
+				selfDocText = expression;
+				expression = expression.slice(0, trimmedEnd.length - 1);
+				if (conversion === -1 && !formatSpec) {
+					conversion = 114;
+				}
+			}
+		}
+
+		return { expression, conversion, formatSpec, selfDocText };
 	}
 
 	/**
-	 * Parses the text of an f-string `{expr}` segment into a `FormattedValue`
-	 * node, via {@link splitFStringLikeSegment} and
-	 * {@link parseExpressionFromString}.
-	 * @param exprText The raw text between the segment's braces (as returned by {@link parseExpressionInFString}).
+	 * Builds the node(s) for an f-string `{expr}` segment, via
+	 * {@link splitInterpolatedSegment} and {@link parseExpressionFromString}:
+	 * normally a single-element `[FormattedValue]`, or
+	 * `[literalConstant, FormattedValue]` for a self-documenting `{expr=}`
+	 * segment.
+	 * @param exprText The raw text between the segment's braces (as returned by {@link parseExpressionInInterpolatedString}).
 	 * @param token The f-string token, used for error/node position.
-	 * @returns The parsed `FormattedValue` node.
+	 * @returns The segment's node(s), in source order.
 	 */
-	private parseFormattedValue(exprText: string, token: Token): FormattedValue {
-		const { expression, conversion, formatSpec } = this.splitFStringLikeSegment(
-			exprText,
-			token,
-		);
+	private buildFormattedValueNodes(exprText: string, token: Token): ExprNode[] {
+		const { expression, conversion, formatSpec, selfDocText } =
+			this.splitInterpolatedSegment(exprText, token);
 		const exprAst = this.parseExpressionFromString(expression.trim(), token);
 
-		return {
+		const formattedValue: FormattedValue = {
 			nodeType: "FormattedValue",
 			value: exprAst,
 			conversion,
@@ -4127,28 +4184,41 @@ export class Parser {
 			lineno: token.lineno,
 			col_offset: token.col_offset,
 		};
+
+		if (selfDocText === undefined) {
+			return [formattedValue];
+		}
+		return [
+			{
+				nodeType: "Constant",
+				value: selfDocText,
+				lineno: token.lineno,
+				col_offset: token.col_offset,
+			},
+			formattedValue,
+		];
 	}
 
 	/**
-	 * Parses the text of a t-string `{expr}` segment into an `Interpolation`
-	 * node, via {@link splitFStringLikeSegment} and
-	 * {@link parseExpressionFromString}. Unlike {@link parseFormattedValue},
-	 * also records `str`: the verbatim source text of the expression (before
-	 * conversion/format-spec stripping), trimmed only of trailing whitespace
-	 * to match `string.templatelib.Interpolation.str` / CPython's `ast`
-	 * output.
-	 * @param exprText The raw text between the segment's braces (as returned by {@link parseExpressionInFString}).
+	 * Builds the node(s) for a t-string `{expr}` segment, via
+	 * {@link splitInterpolatedSegment} and {@link parseExpressionFromString}:
+	 * normally a single-element `[Interpolation]`, or
+	 * `[literalConstant, Interpolation]` for a self-documenting `{expr=}`
+	 * segment. Unlike {@link buildFormattedValueNodes}, the `Interpolation`
+	 * also records `str`: the verbatim source text of the value expression
+	 * (before conversion/format-spec/`=` stripping), trimmed only of
+	 * trailing whitespace to match `string.templatelib.Interpolation.str` /
+	 * CPython's `ast` output.
+	 * @param exprText The raw text between the segment's braces (as returned by {@link parseExpressionInInterpolatedString}).
 	 * @param token The t-string token, used for error/node position.
-	 * @returns The parsed `Interpolation` node.
+	 * @returns The segment's node(s), in source order.
 	 */
-	private parseInterpolation(exprText: string, token: Token): Interpolation {
-		const { expression, conversion, formatSpec } = this.splitFStringLikeSegment(
-			exprText,
-			token,
-		);
+	private buildInterpolationNodes(exprText: string, token: Token): ExprNode[] {
+		const { expression, conversion, formatSpec, selfDocText } =
+			this.splitInterpolatedSegment(exprText, token);
 		const exprAst = this.parseExpressionFromString(expression.trim(), token);
 
-		return {
+		const interpolation: Interpolation = {
 			nodeType: "Interpolation",
 			value: exprAst,
 			str: expression.replace(/\s+$/, ""),
@@ -4157,6 +4227,19 @@ export class Parser {
 			lineno: token.lineno,
 			col_offset: token.col_offset,
 		};
+
+		if (selfDocText === undefined) {
+			return [interpolation];
+		}
+		return [
+			{
+				nodeType: "Constant",
+				value: selfDocText,
+				lineno: token.lineno,
+				col_offset: token.col_offset,
+			},
+			interpolation,
+		];
 	}
 
 	/**

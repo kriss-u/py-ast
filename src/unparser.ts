@@ -729,18 +729,22 @@ class Unparser extends NodeVisitor {
 		this.visit(node.value);
 	}
 
-	/** Renders an `import module [as alias], ...` statement. */
+	/**
+	 * Renders an `import module [as alias], ...` statement, prefixed with
+	 * `lazy` when `node.is_lazy` is set (PEP 810, Python 3.15+).
+	 */
 	visit_Import(node: Extract<StmtNode, { nodeType: "Import" }>): void {
-		this.fill("import ");
+		this.fill(node.is_lazy ? "lazy import " : "import ");
 		this.interleave(", ", (alias) => this.visit(alias), node.names);
 	}
 
 	/**
 	 * Renders a `from module import name, ...` statement, including relative
-	 * import dots for `node.level` (e.g. `level: 2` -> `from ..module import ...`).
+	 * import dots for `node.level` (e.g. `level: 2` -> `from ..module import ...`)
+	 * and a `lazy` prefix when `node.is_lazy` is set (PEP 810, Python 3.15+).
 	 */
 	visit_ImportFrom(node: Extract<StmtNode, { nodeType: "ImportFrom" }>): void {
-		this.fill("from ");
+		this.fill(node.is_lazy ? "lazy from " : "from ");
 		if (node.level && node.level > 0) {
 			this.write(".".repeat(node.level));
 		}

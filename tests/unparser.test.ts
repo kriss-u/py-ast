@@ -96,6 +96,13 @@ describe("Unparser", () => {
 			);
 			testRoundtrip("from . import module");
 		});
+
+		test("lazy imports (PEP 810, Python 3.15+)", () => {
+			testUnparse("lazy import os", "lazy import os");
+			testUnparse("lazy from os import path", "lazy from os import path");
+			testRoundtrip("lazy import os");
+			testRoundtrip("lazy from os import path, getcwd");
+		});
 	});
 
 	describe("Control Flow", () => {
@@ -505,6 +512,19 @@ describe("Unparser", () => {
 		test("raw f-strings (rf/fr prefixes) round-trip with interpolations intact", () => {
 			testRoundtrip("rf'Hello, {name}!'");
 			testRoundtrip("fr'Hello, {name}!'");
+		});
+
+		test("self-documenting expressions unparse to the equivalent explicit literal+field form", () => {
+			// The unparser doesn't reconstruct the `{expr=}` shorthand syntax; it
+			// renders the literal 'expr=' Constant and the field explicitly,
+			// which is semantically equivalent and stable under a second
+			// round-trip (re-parsing no longer sees a trailing '=' to re-detect).
+			testUnparse('f"{x=}"', 'f"x={x!r}"');
+			testUnparse('f"{x=:>10}"', 'f"x={x:>10}"');
+
+			const once = unparse(parse('f"{x=}"'));
+			const twice = unparse(parse(once));
+			expect(twice).toBe(once);
 		});
 
 		test("triple-quoted f-strings round-trip", () => {

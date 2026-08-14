@@ -295,6 +295,8 @@ export interface Assert extends Located {
 export interface Import extends Located {
 	nodeType: "Import";
 	names: Alias[];
+	/** `1` for a `lazy import ...` statement (PEP 810, Python 3.15+); absent/undefined for an eager import. */
+	is_lazy?: number;
 }
 
 /** A `from ... import ...` statement. */
@@ -304,6 +306,8 @@ export interface ImportFrom extends Located {
 	names: Alias[];
 	/** Number of leading dots for relative imports (e.g. `from . import x` is level 1); absent/undefined for absolute imports. */
 	level?: number;
+	/** `1` for a `lazy from ... import ...` statement (PEP 810, Python 3.15+); absent/undefined for an eager import. */
+	is_lazy?: number;
 }
 
 /** A `global` statement. */
