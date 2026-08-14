@@ -525,6 +525,176 @@ describe("parser edge cases", () => {
 			expect(stmt.nodeType).toBe("Match");
 		});
 
+		test("a class pattern with positional and keyword sub-patterns", () => {
+			const ast = parseCode(
+				"match x:\n    case Point(1, y=2):\n        pass\n",
+			);
+			const matchStmt = ast.body[0] as Extract<StmtNode, { nodeType: "Match" }>;
+			expect(matchStmt.cases[0].pattern).toMatchObject({
+				nodeType: "MatchClass",
+				cls: { nodeType: "Name", id: "Point" },
+				patterns: [{ nodeType: "MatchValue", value: { value: 1 } }],
+				kwd_attrs: ["y"],
+				kwd_patterns: [{ nodeType: "MatchValue", value: { value: 2 } }],
+			});
+		});
+
+		test("a dotted class pattern parses cls as an Attribute chain", () => {
+			// Verified against CPython 3.13: `ast.parse('match x:\n case mod.Point(x=1):\n  pass')`.
+			const ast = parseCode(
+				"match x:\n    case mod.Point(x=1):\n        pass\n",
+			);
+			const matchStmt = ast.body[0] as Extract<StmtNode, { nodeType: "Match" }>;
+			expect(matchStmt.cases[0].pattern).toMatchObject({
+				nodeType: "MatchClass",
+				cls: {
+					nodeType: "Attribute",
+					value: { nodeType: "Name", id: "mod" },
+					attr: "Point",
+				},
+			});
+		});
+
+		test("a dotted name is a MatchValue(Attribute), not a capture pattern", () => {
+			// Verified against CPython 3.13: `ast.parse('match x:\n case Color.RED:\n  pass')`
+			// produces `MatchValue(value=Attribute(...))`, not a `MatchAs` capture.
+			const ast = parseCode("match x:\n    case Color.RED:\n        pass\n");
+			const matchStmt = ast.body[0] as Extract<StmtNode, { nodeType: "Match" }>;
+			expect(matchStmt.cases[0].pattern).toMatchObject({
+				nodeType: "MatchValue",
+				value: {
+					nodeType: "Attribute",
+					value: { nodeType: "Name", id: "Color" },
+					attr: "RED",
+				},
+			});
+		});
+
+		test("a multiply-dotted name chains Attribute nodes", () => {
+			const ast = parseCode("match x:\n    case a.b.c:\n        pass\n");
+			const matchStmt = ast.body[0] as Extract<StmtNode, { nodeType: "Match" }>;
+			expect(matchStmt.cases[0].pattern).toMatchObject({
+				nodeType: "MatchValue",
+				value: {
+					nodeType: "Attribute",
+					attr: "c",
+					value: {
+						nodeType: "Attribute",
+						attr: "b",
+						value: { nodeType: "Name", id: "a" },
+					},
+				},
+			});
+		});
+
+		test("dotted value patterns can be combined with '|'", () => {
+			const ast = parseCode(
+				"match x:\n    case Color.RED | Color.BLUE:\n        pass\n",
+			);
+			const matchStmt = ast.body[0] as Extract<StmtNode, { nodeType: "Match" }>;
+			expect(matchStmt.cases[0].pattern.nodeType).toBe("MatchOr");
+		});
+
+		test("`_` can't start a dotted value pattern", () => {
+			// Verified against CPython 3.13: `ast.parse('match x:\n case _.attr:\n  pass')`
+			// raises `SyntaxError: invalid syntax`.
+			expect(() =>
+				parseCode("match x:\n    case _.attr:\n        pass\n"),
+			).toThrow(/invalid syntax/);
+		});
+
+		test("`_` can't be used as a class pattern name", () => {
+			// Verified against CPython 3.13: `ast.parse('match x:\n case _():\n  pass')`
+			// raises `SyntaxError: invalid syntax`.
+			expect(() =>
+				parseCode("match x:\n    case _():\n        pass\n"),
+			).toThrow();
+		});
+
+		test("'as' binds a name to a value pattern", () => {
+			const ast = parseCode("match x:\n    case 1 as y:\n        pass\n");
+			const matchStmt = ast.body[0] as Extract<StmtNode, { nodeType: "Match" }>;
+			expect(matchStmt.cases[0].pattern).toMatchObject({
+				nodeType: "MatchAs",
+				pattern: { nodeType: "MatchValue", value: { value: 1 } },
+				name: "y",
+			});
+		});
+
+		test("'as' binds a name to the whole '|' alternation, not just the last alternative", () => {
+			const ast = parseCode("match x:\n    case 1 | 2 as y:\n        pass\n");
+			const matchStmt = ast.body[0] as Extract<StmtNode, { nodeType: "Match" }>;
+			expect(matchStmt.cases[0].pattern).toMatchObject({
+				nodeType: "MatchAs",
+				pattern: { nodeType: "MatchOr" },
+				name: "y",
+			});
+		});
+
+		test("'as' works after a parenthesized alternation", () => {
+			const ast = parseCode("match x:\n    case (1 | 2) as y:\n        pass\n");
+			const matchStmt = ast.body[0] as Extract<StmtNode, { nodeType: "Match" }>;
+			expect(matchStmt.cases[0].pattern).toMatchObject({
+				nodeType: "MatchAs",
+				pattern: { nodeType: "MatchOr" },
+				name: "y",
+			});
+		});
+
+		test("'as' works on an element nested inside a sequence pattern", () => {
+			const ast = parseCode("match x:\n    case [1 as a, 2]:\n        pass\n");
+			const matchStmt = ast.body[0] as Extract<StmtNode, { nodeType: "Match" }>;
+			expect(matchStmt.cases[0].pattern).toMatchObject({
+				nodeType: "MatchSequence",
+				patterns: [
+					{
+						nodeType: "MatchAs",
+						pattern: { nodeType: "MatchValue", value: { value: 1 } },
+						name: "a",
+					},
+					{ nodeType: "MatchValue", value: { value: 2 } },
+				],
+			});
+		});
+
+		test("a capture pattern can itself be re-bound with 'as'", () => {
+			// Verified against CPython 3.13: `ast.parse('match x:\n case y as z:\n  pass')`
+			// produces `MatchAs(pattern=MatchAs(name='y'), name='z')`.
+			const ast = parseCode("match x:\n    case y as z:\n        pass\n");
+			const matchStmt = ast.body[0] as Extract<StmtNode, { nodeType: "Match" }>;
+			expect(matchStmt.cases[0].pattern).toMatchObject({
+				nodeType: "MatchAs",
+				pattern: { nodeType: "MatchAs", name: "y" },
+				name: "z",
+			});
+		});
+
+		test("'as _' is rejected (CPython: cannot use '_' as a target)", () => {
+			expect(() =>
+				parseCode("match x:\n    case 1 as _:\n        pass\n"),
+			).toThrow(/cannot use '_' as a target/);
+		});
+
+		test("a single parenthesized pattern with no trailing comma is a grouping, not a sequence", () => {
+			// Verified against CPython 3.13: `ast.parse('match x:\n case (1):\n  pass')`
+			// produces `MatchValue(value=Constant(value=1))`, the same as `case 1:`.
+			const ast = parseCode("match x:\n    case (1):\n        pass\n");
+			const matchStmt = ast.body[0] as Extract<StmtNode, { nodeType: "Match" }>;
+			expect(matchStmt.cases[0].pattern).toMatchObject({
+				nodeType: "MatchValue",
+				value: { value: 1 },
+			});
+		});
+
+		test("a single parenthesized pattern with a trailing comma is a one-element sequence", () => {
+			const ast = parseCode("match x:\n    case (1,):\n        pass\n");
+			const matchStmt = ast.body[0] as Extract<StmtNode, { nodeType: "Match" }>;
+			expect(matchStmt.cases[0].pattern).toMatchObject({
+				nodeType: "MatchSequence",
+				patterns: [{ nodeType: "MatchValue", value: { value: 1 } }],
+			});
+		});
+
 		test("a negative-number literal pattern parses as MatchValue(UnaryOp(USub, ...))", () => {
 			const ast = parseCode("match x:\n    case -1:\n        pass\n");
 			const matchStmt = ast.body[0] as Extract<StmtNode, { nodeType: "Match" }>;

@@ -1456,16 +1456,37 @@ export class Parser {
 			patterns.push(this.parseBasicPattern());
 		}
 
-		if (patterns.length === 1) {
-			return patterns[0];
+		const pattern: PatternNode =
+			patterns.length === 1
+				? patterns[0]
+				: {
+						nodeType: "MatchOr",
+						patterns,
+						lineno: start.lineno,
+						col_offset: start.col_offset,
+					};
+
+		// `as`-bound pattern (`pattern as name`), e.g. `1 | 2 as y`,
+		// `[1, 2] as y`. The bound name can't be `_` (CPython:
+		// `SyntaxError: cannot use '_' as a target`).
+		if (this.match(TokenType.AS)) {
+			const nameToken = this.consume(
+				TokenType.NAME,
+				"Expected name after 'as' in pattern",
+			);
+			if (nameToken.value === "_") {
+				throw this.errorAt(nameToken, "cannot use '_' as a target");
+			}
+			return {
+				nodeType: "MatchAs",
+				pattern,
+				name: nameToken.value,
+				lineno: start.lineno,
+				col_offset: start.col_offset,
+			};
 		}
 
-		return {
-			nodeType: "MatchOr",
-			patterns,
-			lineno: start.lineno,
-			col_offset: start.col_offset,
-		};
+		return pattern;
 	}
 
 	/**
@@ -1482,58 +1503,8 @@ export class Parser {
 		if (this.check(TokenType.NAME)) {
 			const nameToken = this.peek();
 
-			// Look ahead to see if this is a function call pattern
-			if (this.peekNext().type === TokenType.LPAR) {
-				// Parse the class name
-				const className = this.advance(); // consume the name
-				this.advance(); // consume the (
-
-				const patterns: PatternNode[] = [];
-				const kwd_attrs: string[] = [];
-				const kwd_patterns: PatternNode[] = [];
-
-				if (!this.check(TokenType.RPAR)) {
-					do {
-						// Check for keyword patterns
-						if (
-							this.check(TokenType.NAME) &&
-							this.peekNext().type === TokenType.EQUAL
-						) {
-							const kwdName = this.advance().value;
-							this.advance(); // consume =
-							const kwdPattern = this.parsePattern();
-							kwd_attrs.push(kwdName);
-							kwd_patterns.push(kwdPattern);
-						} else {
-							// Positional pattern
-							patterns.push(this.parsePattern());
-						}
-					} while (this.match(TokenType.COMMA) && !this.check(TokenType.RPAR));
-				}
-
-				this.consume(TokenType.RPAR, "Expected ')' in class pattern");
-
-				const cls: ExprNode = {
-					nodeType: "Name",
-					id: className.value,
-					ctx: this.createLoad(),
-					lineno: className.lineno,
-					col_offset: className.col_offset,
-				};
-
-				return {
-					nodeType: "MatchClass",
-					cls,
-					patterns,
-					kwd_attrs,
-					kwd_patterns,
-					lineno: start.lineno,
-					col_offset: start.col_offset,
-				};
-			}
-
-			// Wildcard pattern (_)
-			if (nameToken.value === "_") {
+			// A bare, undotted `_` is the wildcard pattern.
+			if (nameToken.value === "_" && this.peekNext().type !== TokenType.DOT) {
 				this.advance(); // consume the _
 				return {
 					nodeType: "MatchAs",
@@ -1544,12 +1515,96 @@ export class Parser {
 				};
 			}
 
-			// Regular name pattern (variable binding)
-			this.advance(); // consume the name
+			// A single, undotted name (not followed by `(` or `.`) is a
+			// capture pattern (variable binding).
+			if (
+				this.peekNext().type !== TokenType.DOT &&
+				this.peekNext().type !== TokenType.LPAR
+			) {
+				this.advance(); // consume the name
+				return {
+					nodeType: "MatchAs",
+					pattern: undefined,
+					name: nameToken.value,
+					lineno: start.lineno,
+					col_offset: start.col_offset,
+				};
+			}
+
+			// `_` is reserved as the wildcard pattern and can't start a
+			// dotted value pattern or a class pattern (CPython: `case _.x:`
+			// and `case _():` are both `SyntaxError: invalid syntax`).
+			if (nameToken.value === "_") {
+				throw this.error("invalid syntax");
+			}
+
+			// Otherwise this is a (possibly dotted) value pattern
+			// (`Color.RED`, `a.b.c`) or a (possibly dotted) class pattern
+			// (`Point(x, y)`, `mod.Point(x, y)`) — parse the dotted name
+			// chain as an `Attribute`/`Name` expression first.
+			let cls: ExprNode = {
+				nodeType: "Name",
+				id: this.advance().value,
+				ctx: this.createLoad(),
+				lineno: nameToken.lineno,
+				col_offset: nameToken.col_offset,
+			};
+			while (this.match(TokenType.DOT)) {
+				const attrToken = this.consume(
+					TokenType.NAME,
+					"Expected attribute name after '.'",
+				);
+				cls = {
+					nodeType: "Attribute",
+					value: cls,
+					attr: attrToken.value,
+					ctx: this.createLoad(),
+					lineno: cls.lineno,
+					col_offset: cls.col_offset,
+				};
+			}
+
+			if (!this.match(TokenType.LPAR)) {
+				// Dotted name with no call: a value pattern.
+				return {
+					nodeType: "MatchValue",
+					value: cls,
+					lineno: start.lineno,
+					col_offset: start.col_offset,
+				};
+			}
+
+			const patterns: PatternNode[] = [];
+			const kwd_attrs: string[] = [];
+			const kwd_patterns: PatternNode[] = [];
+
+			if (!this.check(TokenType.RPAR)) {
+				do {
+					// Check for keyword patterns
+					if (
+						this.check(TokenType.NAME) &&
+						this.peekNext().type === TokenType.EQUAL
+					) {
+						const kwdName = this.advance().value;
+						this.advance(); // consume =
+						const kwdPattern = this.parsePattern();
+						kwd_attrs.push(kwdName);
+						kwd_patterns.push(kwdPattern);
+					} else {
+						// Positional pattern
+						patterns.push(this.parsePattern());
+					}
+				} while (this.match(TokenType.COMMA) && !this.check(TokenType.RPAR));
+			}
+
+			this.consume(TokenType.RPAR, "Expected ')' in class pattern");
+
 			return {
-				nodeType: "MatchAs",
-				pattern: undefined,
-				name: nameToken.value,
+				nodeType: "MatchClass",
+				cls,
+				patterns,
+				kwd_attrs,
+				kwd_patterns,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
 			};
@@ -1577,19 +1632,35 @@ export class Parser {
 			};
 		}
 
-		// Tuple pattern (...)
+		// Tuple pattern `(...)`, or a parenthesized single pattern (a plain
+		// grouping, not a sequence — CPython: `case (1):` matches like
+		// `case 1:`, not like `case (1,):`).
 		if (this.match(TokenType.LPAR)) {
-			const patterns: PatternNode[] = [];
+			if (this.check(TokenType.RPAR)) {
+				this.advance();
+				return {
+					nodeType: "MatchSequence",
+					patterns: [],
+					lineno: start.lineno,
+					col_offset: start.col_offset,
+				};
+			}
 
-			if (!this.check(TokenType.RPAR)) {
+			const patterns: PatternNode[] = [this.parsePattern()];
+			let sawComma = false;
+			while (this.match(TokenType.COMMA)) {
+				sawComma = true;
+				if (this.check(TokenType.RPAR)) break;
 				patterns.push(this.parsePattern());
-				while (this.match(TokenType.COMMA)) {
-					if (this.check(TokenType.RPAR)) break;
-					patterns.push(this.parsePattern());
-				}
 			}
 
 			this.consume(TokenType.RPAR, "Expected ')' after tuple pattern");
+
+			if (!sawComma) {
+				// A single pattern in parens with no trailing comma is just
+				// a grouping.
+				return patterns[0];
+			}
 
 			return {
 				nodeType: "MatchSequence",
