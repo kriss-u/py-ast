@@ -452,6 +452,136 @@ except* TypeError:
 		});
 	});
 
+	describe("Parameter list ordering (verified against CPython 3.13)", () => {
+		test("repeated '/' separator is rejected", () => {
+			expect(() => parse("def f(a, /, b, /, c): pass")).toThrow(
+				/\/ may appear only once/,
+			);
+		});
+
+		test("repeated '/' separator is rejected in a lambda", () => {
+			expect(() => parse("lambda a, /, /: a")).toThrow(
+				/\/ may appear only once/,
+			);
+		});
+
+		test("repeated bare '*' is rejected", () => {
+			expect(() => parse("def f(a, *, b, *, c): pass")).toThrow(
+				/\* argument may appear only once/,
+			);
+		});
+
+		test("repeated '*args' is rejected", () => {
+			expect(() => parse("def f(*a, *b): pass")).toThrow(
+				/\* argument may appear only once/,
+			);
+		});
+
+		test("'/' after '*' is rejected", () => {
+			expect(() => parse("def f(*, /): pass")).toThrow(
+				/\/ must be ahead of \*/,
+			);
+		});
+
+		test("a parameter after '**kwargs' is rejected", () => {
+			expect(() => parse("def f(**a, b): pass")).toThrow(
+				/arguments cannot follow var-keyword argument/,
+			);
+		});
+
+		test("a second '**kwargs' is rejected", () => {
+			expect(() => parse("def f(*a, **b, *c): pass")).toThrow(
+				/arguments cannot follow var-keyword argument/,
+			);
+		});
+
+		test("a bare '*' with no following keyword-only parameter is rejected", () => {
+			expect(() => parse("def f(*): pass")).toThrow(
+				/named arguments must follow bare \*/,
+			);
+			expect(() => parse("def f(*, **a): pass")).toThrow(
+				/named arguments must follow bare \*/,
+			);
+		});
+
+		test("a required positional parameter after a defaulted one is rejected", () => {
+			expect(() => parse("def f(a, b=1, c): pass")).toThrow(
+				/parameter without a default follows parameter with a default/,
+			);
+			expect(() => parse("def f(a=1, b): pass")).toThrow(
+				/parameter without a default follows parameter with a default/,
+			);
+		});
+
+		test("keyword-only parameters may freely mix defaulted and non-defaulted", () => {
+			expect(() => parse("def f(a, *, b=1, c): pass")).not.toThrow();
+		});
+
+		test("the same ordering rules apply to lambda parameter lists", () => {
+			expect(() => parse("lambda **a, b: a")).toThrow(
+				/arguments cannot follow var-keyword argument/,
+			);
+			expect(() => parse("lambda *, /: a")).toThrow(/\/ must be ahead of \*/);
+			expect(() => parse("lambda *a, *b: a")).toThrow(
+				/\* argument may appear only once/,
+			);
+			expect(() => parse("lambda a, b=1, c: a")).toThrow(
+				/parameter without a default follows parameter with a default/,
+			);
+			expect(() => parse("lambda *: a")).toThrow(
+				/named arguments must follow bare \*/,
+			);
+		});
+
+		test("duplicate parameter names are accepted (CPython only rejects this at compile time, not in ast.parse)", () => {
+			expect(() => parse("def f(a, a): pass")).not.toThrow();
+		});
+
+		test("a positional-only and keyword-only parameter may share a name", () => {
+			expect(() => parse("def f(a, /, *, a): pass")).not.toThrow();
+		});
+	});
+
+	describe("Call argument ordering (verified against CPython 3.13)", () => {
+		test("a positional argument after a keyword argument is rejected", () => {
+			expect(() => parse("f(a, b, a=1, b)")).toThrow(
+				/positional argument follows keyword argument /,
+			);
+		});
+
+		test("a positional argument after '**kwargs' unpacking is rejected", () => {
+			expect(() => parse("f(**a, b)")).toThrow(
+				/positional argument follows keyword argument unpacking/,
+			);
+		});
+
+		test("'*args' unpacking after '**kwargs' unpacking is rejected", () => {
+			expect(() => parse("f(*a, **b, *c)")).toThrow(
+				/iterable argument unpacking follows keyword argument unpacking/,
+			);
+		});
+
+		test("'*args' unpacking after a keyword argument is allowed", () => {
+			expect(() => parse("f(a=1, *b)")).not.toThrow();
+		});
+
+		test("a plain positional argument after '*args' unpacking is allowed", () => {
+			expect(() => parse("f(*a, b)")).not.toThrow();
+		});
+
+		test("a keyword argument after '**kwargs' unpacking is allowed", () => {
+			expect(() => parse("f(a=1, **b, c=2)")).not.toThrow();
+		});
+	});
+
+	describe("Comprehension unpacking (verified against CPython 3.13)", () => {
+		test("starred iterable unpacking in a list comprehension is rejected", () => {
+			expect(() => parse("[*x for x in y]")).toThrow(
+				/iterable unpacking cannot be used in comprehension/,
+			);
+		});
+	});
+
 	describe("Performance and Stress Tests", () => {
 		test("large list literal", () => {
 			const items = Array.from({ length: 1000 }, (_, i) => i).join(", ");

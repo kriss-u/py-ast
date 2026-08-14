@@ -564,14 +564,20 @@ export class PyComplex {
 
 	/**
 	 * Renders the value the way CPython's `repr()`/`ast.unparse` would, e.g.
-	 * `4j`, `-4j`, or `(3+4j)`.
+	 * `4j`, `-4j`, `(3+4j)`, or `(-0+4j)`. Negative zero is distinguished from
+	 * positive zero (as CPython's `repr` does) since JavaScript's default
+	 * number-to-string conversion collapses `-0` to `"0"`, silently losing
+	 * the sign that a real part of exactly `-0.0` (e.g. from `-0.0+4j`) or an
+	 * imaginary part of `-0.0` (e.g. from `3-0j`) needs to round-trip.
 	 */
 	toString(): string {
-		if (this.real === 0) {
-			return `${this.imag}j`;
+		const formatPart = (n: number) => (Object.is(n, -0) ? "-0" : `${n}`);
+
+		if (Object.is(this.real, 0)) {
+			return `${formatPart(this.imag)}j`;
 		}
-		const sign = this.imag < 0 ? "" : "+";
-		return `(${this.real}${sign}${this.imag}j)`;
+		const sign = this.imag < 0 || Object.is(this.imag, -0) ? "" : "+";
+		return `(${formatPart(this.real)}${sign}${formatPart(this.imag)}j)`;
 	}
 }
 

@@ -525,10 +525,66 @@ describe("parser edge cases", () => {
 			expect(stmt.nodeType).toBe("Match");
 		});
 
-		test("pattern that falls through to the default wildcard case is rejected", () => {
-			expect(() => parseCode("match x:\n    case -1:\n        pass\n")).toThrow(
-				/Expected ':' after case pattern/,
-			);
+		test("a negative-number literal pattern parses as MatchValue(UnaryOp(USub, ...))", () => {
+			const ast = parseCode("match x:\n    case -1:\n        pass\n");
+			const matchStmt = ast.body[0] as Extract<StmtNode, { nodeType: "Match" }>;
+			expect(matchStmt.cases[0].pattern).toMatchObject({
+				nodeType: "MatchValue",
+				value: {
+					nodeType: "UnaryOp",
+					op: { nodeType: "USub" },
+					operand: { nodeType: "Constant", value: 1 },
+				},
+			});
+		});
+
+		test("a complex-number literal pattern parses as MatchValue(BinOp(...))", () => {
+			const ast = parseCode("match x:\n    case -1+2j:\n        pass\n");
+			const matchStmt = ast.body[0] as Extract<StmtNode, { nodeType: "Match" }>;
+			expect(matchStmt.cases[0].pattern).toMatchObject({
+				nodeType: "MatchValue",
+				value: {
+					nodeType: "BinOp",
+					left: {
+						nodeType: "UnaryOp",
+						op: { nodeType: "USub" },
+						operand: { nodeType: "Constant", value: 1 },
+					},
+					op: { nodeType: "Add" },
+				},
+			});
+		});
+
+		test("a complex-number literal pattern with '-' parses as MatchValue(BinOp(..., Sub, ...))", () => {
+			const ast = parseCode("match x:\n    case 1-2j:\n        pass\n");
+			const matchStmt = ast.body[0] as Extract<StmtNode, { nodeType: "Match" }>;
+			expect(matchStmt.cases[0].pattern).toMatchObject({
+				nodeType: "MatchValue",
+				value: {
+					nodeType: "BinOp",
+					left: { nodeType: "Constant", value: 1 },
+					op: { nodeType: "Sub" },
+				},
+			});
+		});
+
+		test("a non-imaginary right-hand side in a complex pattern is rejected", () => {
+			// Verified against CPython 3.13: `ast.parse('match x:\n case 1+2:\n  pass')`
+			// raises `SyntaxError: imaginary number required in complex literal`.
+			expect(() =>
+				parseCode("match x:\n    case 1+2:\n        pass\n"),
+			).toThrow(/imaginary number required in complex literal/);
+		});
+
+		test("an unrecognized pattern token throws instead of silently matching as a wildcard", () => {
+			// The parser's previous unconditional-fallback design silently
+			// accepted any unrecognized pattern token as a wildcard `_` pattern;
+			// it now throws instead. `-True` isn't valid pattern syntax in
+			// CPython either (`signed_number` only allows `-` before a numeric
+			// literal, not before `True`/`False`/`None`).
+			expect(() =>
+				parseCode("match x:\n    case -True:\n        pass\n"),
+			).toThrow(/invalid syntax/);
 		});
 
 		test("blank line right after the match block's indent", () => {
@@ -572,9 +628,31 @@ describe("parser edge cases", () => {
 			expect(ast.body[0].nodeType).toBe("Expr");
 		});
 
-		test("malformed interpolation expression falls back to Name", () => {
-			const ast = parseCode('f"{,}"\n');
-			expect(ast.body[0].nodeType).toBe("Expr");
+		test("malformed interpolation expression throws (matches CPython)", () => {
+			// Verified against CPython 3.13: `ast.parse('f"{,}"')` raises
+			// `SyntaxError: f-string: invalid syntax`.
+			expect(() => parseCode('f"{,}"\n')).toThrow(
+				/f-string: invalid syntax in interpolated expression/,
+			);
+		});
+
+		test("an empty interpolation throws (matches CPython)", () => {
+			// Verified against CPython 3.13: `ast.parse('f"{}"')` raises
+			// `SyntaxError: f-string: valid expression required before '}'`.
+			expect(() => parseCode('f"{}"\n')).toThrow(
+				/f-string: valid expression required before '\}'/,
+			);
+			expect(() => parseCode('t"{}"\n')).toThrow(
+				/f-string: valid expression required before '\}'/,
+			);
+		});
+
+		test("trailing/leftover tokens after a complete interpolation expression throw (matches CPython)", () => {
+			// Verified against CPython 3.13: `ast.parse('f"{1 2}"')` raises
+			// `SyntaxError: invalid syntax. Perhaps you forgot a comma?`.
+			expect(() => parseCode('f"{1 2}"\n')).toThrow(
+				/f-string: invalid syntax in interpolated expression/,
+			);
 		});
 
 		test("escaped quote inside a nested string literal", () => {
@@ -785,26 +863,18 @@ describe("parser edge cases", () => {
 		});
 
 		test("a dangling comparison operator (invalid as real Python, e.g. '{x>=}') is not mistaken for the self-documenting marker either", () => {
-			// Verified against CPython 3.14: `ast.parse('f"{x>=}"')` raises
+			// Verified against CPython 3.13: `ast.parse('f"{x>=}"')` raises
 			// `SyntaxError: f-string: expecting '=', or '!', or ':', or '}'` —
 			// a trailing comparison operator can never be valid, complete
 			// expression text (every comparison/walrus operator requires a
 			// right-hand operand), so `isComparisonOrWalrus` only ever excludes
-			// input that's already malformed. This parser's existing, deliberate
-			// design is lenient across all malformed interpolations rather than
-			// raising (see the "malformed interpolation expression falls back to
-			// Name" test above for `f"{,}"`, likewise a CPython SyntaxError), so
-			// this falls back the same way instead of being misread as a
+			// input that's already malformed. Since it isn't mistaken for the
+			// self-documenting marker, `x>=` is left as the (invalid) expression
+			// text, which correctly throws rather than being misread as a
 			// self-documenting `{expr=}` marker.
-			const ast = parseCode('f"{x>=}"\n');
-			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
-				.value as Extract<ExprNode, { nodeType: "JoinedStr" }>;
-			expect(expr.values).toHaveLength(1);
-			const formatted = expr.values[0] as Extract<
-				ExprNode,
-				{ nodeType: "FormattedValue" }
-			>;
-			expect(formatted.value).toMatchObject({ nodeType: "Name", id: "x>=" });
+			expect(() => parseCode('f"{x>=}"\n')).toThrow(
+				/f-string: invalid syntax in interpolated expression/,
+			);
 		});
 
 		test("self-documenting expression works the same way in a t-string interpolation", () => {
