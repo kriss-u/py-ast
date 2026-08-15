@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { collectContainers, collectTopLevelContainers } from "./collectContainers";
 
 /** Initial/reset fold state for a view: every container open, or just the root's top-level outline. */
@@ -13,20 +13,18 @@ function defaultExpandedFor(root: unknown, mode: DefaultFoldMode): Set<unknown> 
  * (TreeView or JsonView — each gets its own independent instance, so the two
  * can default to different fold states and each remembers its own toggles
  * across tab switches). Resets to `defaultMode`'s fold state whenever `root`
- * changes identity (i.e. on every successful parse), and additionally
- * expands/scrolls to whatever `activePath` points at.
+ * changes identity (i.e. on every successful parse).
  *
- * Scrolling happens in a separate effect keyed off `expanded` itself (rather
- * than firing a `requestAnimationFrame` right after requesting the expand),
- * so it reliably runs only once the newly expanded rows are actually in the
- * DOM — this matters because a mouse click can dispatch its selection change
- * in a way that races a same-frame `requestAnimationFrame` scroll, while
- * keyboard-driven moves happen to win that race.
+ * `activePath` (the currently code-cursor-highlighted node's ancestor chain)
+ * is never written into the persisted `expanded` state — it's overlaid onto
+ * it purely for rendering (see `effectiveExpanded` below), so moving the
+ * cursor to a different node reverts whatever was on the *previous*
+ * `activePath` back to its own last manually-toggled state, rather than
+ * leaving every node the cursor ever visited stuck open.
  */
 export function useTreeState(root: unknown, activePath: unknown[], defaultMode: DefaultFoldMode) {
 	const [expanded, setExpanded] = useState<Set<unknown>>(() => defaultExpandedFor(root, defaultMode));
 	const refs = useRef(new Map<unknown, HTMLDivElement>());
-	const pendingScrollTarget = useRef<unknown>(null);
 
 	const toggle = (key: unknown) => {
 		setExpanded((prev) => {
@@ -56,32 +54,49 @@ export function useTreeState(root: unknown, activePath: unknown[], defaultMode: 
 		setExpanded(defaultExpandedFor(root, defaultMode));
 	}, [root]);
 
+	// The rendered fold state always shows every node on `activePath` as open,
+	// even if the user had manually folded one of them earlier — a node
+	// that's currently highlighted as active must never render collapsed, or
+	// its block highlight would have nothing to show. This is a view-only
+	// overlay: it doesn't touch `expanded` itself, so a fold the user applied
+	// while a node was active reasserts itself the moment that node leaves
+	// `activePath`, and a node that was never manually folded simply reverts
+	// to whatever `defaultMode` says once it's no longer active.
+	const effectiveExpanded = useMemo(() => {
+		if (activePath.length === 0) {
+			return expanded;
+		}
+		let missing = false;
+		for (const node of activePath) {
+			if (!expanded.has(node)) {
+				missing = true;
+				break;
+			}
+		}
+		if (!missing) {
+			return expanded;
+		}
+		const next = new Set(expanded);
+		for (const node of activePath) {
+			next.add(node);
+		}
+		return next;
+	}, [expanded, activePath]);
+
+	// `effectiveExpanded` already opens the active path's rows synchronously
+	// within the same render as `activePath` changing, so by the time this
+	// effect runs after commit, their refs are already registered — no need
+	// to wait on a separate `expanded`-keyed effect.
 	useEffect(() => {
 		if (activePath.length === 0) {
 			return;
 		}
 		const leaf = activePath[activePath.length - 1];
-		pendingScrollTarget.current = leaf;
-		setExpanded((prev) => {
-			const next = new Set(prev);
-			for (const node of activePath) {
-				next.add(node);
-			}
-			return next;
-		});
+		const el = refs.current.get(leaf);
+		if (el) {
+			el.scrollIntoView({ block: "center" });
+		}
 	}, [activePath]);
 
-	useEffect(() => {
-		const target = pendingScrollTarget.current;
-		if (target === null) {
-			return;
-		}
-		const el = refs.current.get(target);
-		if (el) {
-			el.scrollIntoView({ block: "nearest" });
-			pendingScrollTarget.current = null;
-		}
-	}, [expanded]);
-
-	return { expanded, setExpanded, toggle, registerRef };
+	return { expanded: effectiveExpanded, setExpanded, toggle, registerRef };
 }

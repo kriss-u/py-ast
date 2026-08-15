@@ -7,8 +7,9 @@
 	--text: #d4d4d4;
 	--text-dim: #858585;
 	--accent: #569cd6;
-	--highlight: rgba(255, 215, 0, 0.16);
-	--highlight-outline: #d9b64a;
+	--highlight: rgba(255, 224, 130, 0.1);
+	--highlight-outline: rgba(217, 182, 74, 0.55);
+	--font-mono: "Fira Code", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 	--tok-string: #ce9178;
 	--tok-number: #b5cea8;
 	--tok-boolean: #569cd6;
@@ -29,8 +30,8 @@
 	--text: #1e1e1e;
 	--text-dim: #6e6e6e;
 	--accent: #0b6fb8;
-	--highlight: rgba(255, 196, 0, 0.22);
-	--highlight-outline: #c9a227;
+	--highlight: rgba(255, 213, 79, 0.18);
+	--highlight-outline: rgba(201, 162, 39, 0.5);
 	--tok-string: #a31515;
 	--tok-number: #098658;
 	--tok-boolean: #0000ff;
@@ -193,6 +194,7 @@ body {
 
 .pane-editor .cm-scroller {
 	overflow: auto;
+	font-family: var(--font-mono);
 }
 
 .tabs {
@@ -280,7 +282,7 @@ body {
 	flex: 1;
 	overflow: auto;
 	background: var(--bg-panel);
-	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	font-family: var(--font-mono);
 	font-size: 0.8rem;
 	line-height: 1.5;
 	padding: 0.5rem 0;

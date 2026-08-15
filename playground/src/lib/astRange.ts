@@ -219,6 +219,38 @@ function pathTo(root: ASTNodeUnion, target: ASTNodeUnion): ASTNodeUnion[] | null
 }
 
 /**
+ * Finds the path of every *container* — arrays and objects alike, not just
+ * AST nodes — from `root` to `target` (inclusive), by identity. Unlike
+ * {@link pathTo}/`findNodePath`'s result, this doesn't skip over the arrays
+ * between consecutive AST nodes (e.g. a `FunctionDef`'s `body` statement
+ * list): those arrays are their own foldable row in the tree/JSON views,
+ * with their own independent fold state, so a node nested inside one is
+ * only actually visible once that array is expanded too — not just its
+ * AST-node ancestors.
+ * @param root The subtree to search (typically the parsed `Module`).
+ * @param target The container (usually an AST node) to find.
+ * @returns The path from `root` to `target`, or `null` if `target` isn't in `root`'s subtree.
+ */
+export function containerPathTo(root: unknown, target: unknown): unknown[] | null {
+	if (root === target) {
+		return [root];
+	}
+	if (root === null || typeof root !== "object") {
+		return null;
+	}
+	const children = Array.isArray(root) ? root : Object.entries(root).filter(([key]) => key !== "comments").map(([, v]) => v);
+	for (const child of children) {
+		if (child !== null && typeof child === "object") {
+			const sub = containerPathTo(child, target);
+			if (sub) {
+				return [root, ...sub];
+			}
+		}
+	}
+	return null;
+}
+
+/**
  * Computes a node's highlighted source range for the editor, using its real
  * `lineno`/`col_offset`/`end_lineno`/`end_col_offset`. A handful of node
  * types carry no position of their own (`Arguments`, `Comprehension`,

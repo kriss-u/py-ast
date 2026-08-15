@@ -5,7 +5,7 @@ import { JsonView } from "./components/JsonView";
 import { type TabId, Tabs } from "./components/Tabs";
 import { type Theme, ThemeToggle } from "./components/ThemeToggle";
 import { TreeView } from "./components/TreeView";
-import { findNodePath, nodeRange } from "./lib/astRange";
+import { containerPathTo, findNodePath, nodeRange } from "./lib/astRange";
 import { collectContainers, collectTopLevelContainers } from "./lib/collectContainers";
 import { useHoverStack } from "./lib/useHoverStack";
 import { useMediaQuery } from "./lib/useMediaQuery";
@@ -131,24 +131,43 @@ export function App() {
 
 	const activeNode = activePath.length > 0 ? activePath[activePath.length - 1] : null;
 
+	// The AST-node ancestor chain (`activePath`) skips over the arrays
+	// between consecutive nodes (e.g. a `FunctionDef`'s `body` statement
+	// list) — but those arrays are their own foldable row with independent
+	// fold state, so a nested active node is only actually visible once its
+	// containing arrays are expanded too. `expandPath` is the fuller
+	// container-by-container path used to drive that.
+	const expandPath = useMemo<unknown[]>(() => {
+		if (!parseResult.ok || activeNode === null) {
+			return [];
+		}
+		return containerPathTo(parseResult.tree, activeNode) ?? [];
+	}, [parseResult, activeNode]);
+
 	// Fold state is independent per view — the tree starts collapsed to just
 	// its top-level outline, the JSON view starts fully expanded — but each
 	// instance persists its own toggles across tab switches (switching tabs
 	// never resets what's expanded in either one). A global expand-all/
 	// collapse-all action drives whichever view is currently visible.
-	const treeState = useTreeState(parseResult.ok ? parseResult.tree : null, activePath, "top-level");
-	const jsonState = useTreeState(parseResult.ok ? parseResult.tree : null, activePath, "all");
+	const treeState = useTreeState(parseResult.ok ? parseResult.tree : null, expandPath, "top-level");
+	const jsonState = useTreeState(parseResult.ok ? parseResult.tree : null, expandPath, "all");
 	const activeState = activeTab === "tree" ? treeState : jsonState;
 
+	// Expand-all/collapse-all is a deliberate, manual override of fold state —
+	// it must not be immediately fought by the cursor-driven active node
+	// forcing its own ancestors back open (see useTreeState's effectiveExpanded),
+	// so it also clears the current code-cursor highlight.
 	const handleExpandAll = () => {
 		if (parseResult.ok) {
 			activeState.setExpanded(collectContainers(parseResult.tree));
+			setCursorPosition(null);
 		}
 	};
 
 	const handleCollapseAll = () => {
 		if (parseResult.ok) {
 			activeState.setExpanded(collectTopLevelContainers(parseResult.tree));
+			setCursorPosition(null);
 		}
 	};
 
