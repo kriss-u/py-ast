@@ -189,8 +189,6 @@ const KEYWORDS = new Map<string, TokenType>([
 	["in", TokenType.IN],
 	["is", TokenType.IS],
 	["lambda", TokenType.LAMBDA],
-	["match", TokenType.MATCH],
-	["case", TokenType.CASE],
 	["None", TokenType.NONE],
 	["nonlocal", TokenType.NONLOCAL],
 	["not", TokenType.NOT],

@@ -316,7 +316,58 @@ export class Parser {
 			return this.parseDecorated();
 		}
 
+		const matchStmt = this.tryParseMatchStmt();
+		if (matchStmt) {
+			return matchStmt;
+		}
+
 		return this.parseSimpleStmt() || this.parseCompoundStmt();
+	}
+
+	/**
+	 * Speculatively parses a `match` statement. `match` is a soft keyword:
+	 * `match <expr>:` only starts a match statement when it can actually be
+	 * parsed as one, and `match` otherwise remains a valid identifier
+	 * everywhere (`match = 5`, `re.match(...)`, `def match(): ...`,
+	 * annotated assignments like `match[0]: int = 1`). Only the header —
+	 * subject expression, `:`, and the newline that must follow it in a
+	 * real match statement — is ambiguous with those; this saves position,
+	 * parses just the header, and backtracks if it doesn't fit (mirroring
+	 * how CPython's own PEG grammar backtracks out of `match_stmt` when the
+	 * `NEWLINE` after `:` isn't found). Past that point (`match <expr> :
+	 * NEWLINE` can't be anything else), parsing commits: a missing `case`,
+	 * an invalid pattern, etc. are real syntax errors and propagate with
+	 * their specific message instead of being swallowed by backtracking.
+	 * @returns The parsed `Match` statement, or `null` if the current
+	 * position isn't the start of one.
+	 */
+	private tryParseMatchStmt(): StmtNode | null {
+		if (!(this.check(TokenType.NAME) && this.peek().value === "match")) {
+			return null;
+		}
+
+		const savedPos = this.current;
+		const savedComments = this.pendingComments.length;
+
+		let start: Token;
+		let subject: ExprNode;
+		try {
+			start = this.advance();
+			subject = this.parseTest();
+			if (!this.check(TokenType.COLON)) {
+				throw this.error("not a match statement");
+			}
+			this.advance();
+			if (!this.check(TokenType.NEWLINE)) {
+				throw this.error("not a match statement");
+			}
+		} catch {
+			this.current = savedPos;
+			this.pendingComments.length = savedComments;
+			return null;
+		}
+
+		return this.finishMatchStmt(start, subject);
 	}
 
 	/**
@@ -372,8 +423,7 @@ export class Parser {
 			this.check(TokenType.FOR) ||
 			this.check(TokenType.TRY) ||
 			this.check(TokenType.WITH) ||
-			this.check(TokenType.ASYNC) ||
-			this.check(TokenType.MATCH)
+			this.check(TokenType.ASYNC)
 		) {
 			return null;
 		}
@@ -738,40 +788,54 @@ export class Parser {
 			};
 		}
 
-		// Handle type alias statement (Python 3.12+)
+		// Handle type alias statement (Python 3.12+). `type` is a soft
+		// keyword too — ambiguous with plain uses like `type = 5`,
+		// `type(x)`, or `type.mro(...)` — so this speculatively parses
+		// `"type" NAME [type_params] '=' expression` and backtracks on any
+		// failure, mirroring CPython's own PEG backtracking scope for this
+		// (comparatively simple, non-nested) grammar rule.
 		if (this.check(TokenType.NAME) && this.peek().value === "type") {
-			const start = this.peek();
-			this.advance(); // consume 'type'
+			const savedPos = this.current;
+			const savedComments = this.pendingComments.length;
 
-			const nameToken = this.consume(
-				TokenType.NAME,
-				"Expected type alias name",
-			);
+			try {
+				const start = this.advance(); // consume 'type'
+				if (!this.check(TokenType.NAME)) {
+					throw this.error("not a type alias");
+				}
+				const nameToken = this.advance();
 
-			// Type parameters (optional)
-			const type_params = this.parseTypeParams();
+				// Type parameters (optional)
+				const type_params = this.parseTypeParams();
 
-			this.consume(TokenType.EQUAL, "Expected '=' in type alias");
-			const value = this.parseTest();
+				if (!this.check(TokenType.EQUAL)) {
+					throw this.error("not a type alias");
+				}
+				this.advance();
+				const value = this.parseTest();
 
-			return {
-				nodeType: "TypeAlias",
-				name: {
-					nodeType: "Name",
-					id: nameToken.value,
-					ctx: { nodeType: "Store" },
-					lineno: nameToken.lineno,
-					col_offset: nameToken.col_offset,
-					end_lineno: nameToken.end_lineno,
-					end_col_offset: nameToken.end_col_offset,
-				},
-				type_params,
-				value,
-				lineno: start.lineno,
-				col_offset: start.col_offset,
-				end_lineno: this.previous().end_lineno,
-				end_col_offset: this.previous().end_col_offset,
-			};
+				return {
+					nodeType: "TypeAlias",
+					name: {
+						nodeType: "Name",
+						id: nameToken.value,
+						ctx: { nodeType: "Store" },
+						lineno: nameToken.lineno,
+						col_offset: nameToken.col_offset,
+						end_lineno: nameToken.end_lineno,
+						end_col_offset: nameToken.end_col_offset,
+					},
+					type_params,
+					value,
+					lineno: start.lineno,
+					col_offset: start.col_offset,
+					end_lineno: this.previous().end_lineno,
+					end_col_offset: this.previous().end_col_offset,
+				};
+			} catch {
+				this.current = savedPos;
+				this.pendingComments.length = savedComments;
+			}
 		}
 
 		// Expression statement (including assignments)
@@ -916,8 +980,7 @@ export class Parser {
 			return this.parseAsyncStmt(start);
 		}
 
-		this.consume(TokenType.MATCH, "Expected compound statement");
-		return this.parseMatchStmt(start);
+		throw this.error("Expected compound statement");
 	}
 
 	/**
@@ -935,8 +998,9 @@ export class Parser {
 		} else if (this.match(TokenType.CLASS)) {
 			return this.parseClassDef(this.previous(), decorators);
 		} else if (this.match(TokenType.ASYNC)) {
+			const asyncToken = this.previous();
 			if (this.match(TokenType.DEF)) {
-				return this.parseAsyncFunctionDef(this.previous(), decorators);
+				return this.parseAsyncFunctionDef(asyncToken, decorators);
 			}
 		}
 
@@ -1479,18 +1543,18 @@ export class Parser {
 	}
 
 	/**
-	 * Parses a `match` statement (PEP 634): the subject expression followed
-	 * by an indented block of one or more `case pattern [if guard]:` clauses.
+	 * Finishes parsing a `match` statement (PEP 634) after
+	 * {@link tryParseMatchStmt} has already confirmed the header —
+	 * `match <subject> : NEWLINE` — and committed to this being a match
+	 * statement: the indented block of one or more `case pattern [if
+	 * guard]:` clauses.
 	 * @param start Token of the already-consumed `match` keyword, used for node position.
+	 * @param subject The already-parsed subject expression.
 	 * @returns The parsed `Match` node.
 	 * @throws {ParseError} On malformed statement syntax, e.g. a missing
 	 * `case` in the match body.
 	 */
-	private parseMatchStmt(start: Token): StmtNode {
-		const subject = this.parseTest();
-		this.consume(TokenType.COLON, "Expected ':' after match subject");
-
-		// Match statements must always be multi-line with proper indentation
+	private finishMatchStmt(start: Token, subject: ExprNode): StmtNode {
 		this.consume(TokenType.NEWLINE, "Expected newline after match:");
 
 		// Skip newlines that might appear before the indent (these belong to
@@ -1508,8 +1572,8 @@ export class Parser {
 				continue;
 			}
 
-			if (this.match(TokenType.CASE)) {
-				this.previous(); // consume case token
+			if (this.check(TokenType.NAME) && this.peek().value === "case") {
+				this.advance(); // consume case token
 				const pattern = this.parsePattern();
 
 				let guard: ExprNode | undefined;
@@ -2544,7 +2608,24 @@ export class Parser {
 	 * @throws {ParseError} On malformed expression syntax.
 	 */
 	private parseAtomWithTrailers(): ExprNode {
-		let expr = this.parseAtom();
+		// A parenthesized atom is "transparent": the atom itself keeps its
+		// inner expression's own position (e.g. `(x)` alone reports `x`'s
+		// column, not the paren's), matching CPython. But a trailer chain
+		// built on top of one (`(x).attr`, `(x)()`, `(x)[0]`) must start at
+		// the opening paren instead — also matching CPython. `baseLineno`/
+		// `baseColOffset` track the correct start for the *next* trailer,
+		// diverging from `expr`'s own position only for the first trailer
+		// applied directly to a parenthesized atom.
+		const parenStart = this.check(TokenType.LPAR) ? this.peek() : null;
+		const expr = this.parseAtom();
+		let baseLineno = expr.lineno;
+		let baseColOffset = expr.col_offset;
+		if (parenStart) {
+			baseLineno = parenStart.lineno;
+			baseColOffset = parenStart.col_offset;
+		}
+
+		let result = expr;
 
 		// Handle subscripts, attributes, and function calls
 		while (true) {
@@ -2553,29 +2634,33 @@ export class Parser {
 					TokenType.NAME,
 					"Expected attribute name",
 				).value;
-				expr = {
+				result = {
 					nodeType: "Attribute",
-					value: expr,
+					value: result,
 					attr,
 					ctx: this.createLoad(),
-					lineno: expr.lineno,
-					col_offset: expr.col_offset || 0,
+					lineno: baseLineno,
+					col_offset: baseColOffset || 0,
 					end_lineno: this.previous().end_lineno,
 					end_col_offset: this.previous().end_col_offset,
 				};
+				baseLineno = result.lineno;
+				baseColOffset = result.col_offset;
 			} else if (this.match(TokenType.LSQB)) {
 				const slice = this.parseSubscriptList();
 				this.consume(TokenType.RSQB, "Expected ']'");
-				expr = {
+				result = {
 					nodeType: "Subscript",
-					value: expr,
+					value: result,
 					slice,
 					ctx: this.createLoad(),
-					lineno: expr.lineno,
-					col_offset: expr.col_offset || 0,
+					lineno: baseLineno,
+					col_offset: baseColOffset || 0,
 					end_lineno: this.previous().end_lineno,
 					end_col_offset: this.previous().end_col_offset,
 				};
+				baseLineno = result.lineno;
+				baseColOffset = result.col_offset;
 			} else if (this.match(TokenType.LPAR)) {
 				// Function call
 				const args: ExprNode[] = [];
@@ -2655,22 +2740,24 @@ export class Parser {
 				}
 
 				this.consume(TokenType.RPAR, "Expected ')' after arguments");
-				expr = {
+				result = {
 					nodeType: "Call",
-					func: expr,
+					func: result,
 					args,
 					keywords,
-					lineno: expr.lineno,
-					col_offset: expr.col_offset || 0,
+					lineno: baseLineno,
+					col_offset: baseColOffset || 0,
 					end_lineno: this.previous().end_lineno,
 					end_col_offset: this.previous().end_col_offset,
 				};
+				baseLineno = result.lineno;
+				baseColOffset = result.col_offset;
 			} else {
 				break;
 			}
 		}
 
-		return expr;
+		return result;
 	}
 
 	/**
@@ -3378,6 +3465,7 @@ export class Parser {
 	private parseSubscript(): ExprNode {
 		if (this.match(TokenType.COLON)) {
 			// Slice with no lower bound
+			const colon = this.previous();
 			let upper: ExprNode | undefined;
 			let step: ExprNode | undefined;
 
@@ -3400,8 +3488,8 @@ export class Parser {
 				lower: undefined,
 				upper,
 				step,
-				lineno: this.previous().lineno,
-				col_offset: this.previous().col_offset,
+				lineno: colon.lineno,
+				col_offset: colon.col_offset,
 				end_lineno: this.previous().end_lineno,
 				end_col_offset: this.previous().end_col_offset,
 			};
@@ -3978,7 +4066,6 @@ export class Parser {
 		}
 
 		// Remove quotes
-		const quote = actualValue[0];
 		let content = actualValue.slice(1, -1);
 
 		// Handle triple quotes
@@ -3991,15 +4078,134 @@ export class Parser {
 			return content;
 		}
 
-		// Basic escape sequence handling for non-raw strings
-		content = content
-			.replace(/\\n/g, "\n")
-			.replace(/\\t/g, "\t")
-			.replace(/\\r/g, "\r")
-			.replace(/\\\\/g, "\\")
-			.replace(new RegExp(`\\\\${quote}`, "g"), quote);
+		return this.decodeEscapes(content, prefix.includes("b"));
+	}
 
-		return content;
+	/**
+	 * Decodes backslash escape sequences in a non-raw string/bytes literal's
+	 * content, matching CPython's escape table: `\\`, `\'`, `\"`, `\a`,
+	 * `\b`, `\f`, `\n`, `\r`, `\t`, `\v`, a trailing `\<newline>` line
+	 * continuation (dropped entirely), up to 3 octal digits (`\ooo`), and
+	 * exactly 2 hex digits (`\xhh`). String literals (`isBytes: false`)
+	 * additionally decode `\uxxxx` (4 hex digits) and `\Uxxxxxxxx` (8 hex
+	 * digits); those two, along with `\N{...}` named escapes, aren't
+	 * recognized in bytes literals and are left as literal text there,
+	 * matching CPython. `\N{...}` is left as literal text for str literals
+	 * too — resolving a Unicode character name requires a Unicode name
+	 * database this library doesn't carry. Any other backslash sequence is
+	 * kept as-is (backslash plus the following character), matching
+	 * CPython's handling of unrecognized escapes.
+	 * @param content The literal's content, quotes and prefix already stripped.
+	 * @param isBytes Whether this is a bytes literal (`b"..."`) rather than a str literal.
+	 * @returns The decoded content.
+	 */
+	private decodeEscapes(content: string, isBytes: boolean): string {
+		let result = "";
+		let i = 0;
+		const len = content.length;
+
+		while (i < len) {
+			const ch = content[i];
+			if (ch !== "\\" || i === len - 1) {
+				result += ch;
+				i++;
+				continue;
+			}
+
+			const next = content[i + 1];
+			switch (next) {
+				case "\n":
+					i += 2; // line continuation: dropped entirely
+					continue;
+				case "\\":
+				case "'":
+				case '"':
+					result += next;
+					i += 2;
+					continue;
+				case "a":
+					result += "\x07";
+					i += 2;
+					continue;
+				case "b":
+					result += "\b";
+					i += 2;
+					continue;
+				case "f":
+					result += "\f";
+					i += 2;
+					continue;
+				case "n":
+					result += "\n";
+					i += 2;
+					continue;
+				case "r":
+					result += "\r";
+					i += 2;
+					continue;
+				case "t":
+					result += "\t";
+					i += 2;
+					continue;
+				case "v":
+					result += "\v";
+					i += 2;
+					continue;
+				case "x": {
+					const hex = content.slice(i + 2, i + 4);
+					if (/^[0-9a-fA-F]{2}$/.test(hex)) {
+						result += String.fromCharCode(parseInt(hex, 16));
+						i += 4;
+					} else {
+						result += ch + next;
+						i += 2;
+					}
+					continue;
+				}
+			}
+
+			if (next >= "0" && next <= "7") {
+				const octal = /^[0-7]{1,3}/.exec(content.slice(i + 1, i + 4));
+				const digits = octal ? octal[0] : next;
+				result += String.fromCharCode(parseInt(digits, 8) & 0xff);
+				i += 1 + digits.length;
+				continue;
+			}
+
+			if (!isBytes && next === "u") {
+				const hex = content.slice(i + 2, i + 6);
+				if (/^[0-9a-fA-F]{4}$/.test(hex)) {
+					result += String.fromCharCode(parseInt(hex, 16));
+					i += 6;
+					continue;
+				}
+			}
+
+			if (!isBytes && next === "U") {
+				const hex = content.slice(i + 2, i + 10);
+				if (/^[0-9a-fA-F]{8}$/.test(hex)) {
+					result += String.fromCodePoint(parseInt(hex, 16));
+					i += 10;
+					continue;
+				}
+			}
+
+			if (!isBytes && next === "N" && content[i + 2] === "{") {
+				const end = content.indexOf("}", i + 3);
+				if (end !== -1) {
+					result += content.slice(i, end + 1);
+					i = end + 1;
+					continue;
+				}
+			}
+
+			// Unrecognized escape: keep the backslash and the following
+			// character literally, matching CPython.
+			result += ch + next;
+			i += 2;
+		}
+
+		return result;
 	}
 
 	/**

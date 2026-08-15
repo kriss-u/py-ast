@@ -778,6 +778,180 @@ describe("parser edge cases", () => {
 		});
 	});
 
+	describe("match/case/type as soft keywords", () => {
+		// Verified against CPython 3.13: `match`, `case`, and `type` are soft
+		// keywords, valid as ordinary identifiers everywhere outside the
+		// specific syntax they introduce.
+		test("match as a plain assignment target", () => {
+			const stmt = parseStatement("match = 5\n");
+			expect(stmt.nodeType).toBe("Assign");
+		});
+
+		test("match as a function name", () => {
+			const stmt = parseStatement("def match():\n    pass\n");
+			expect(stmt.nodeType).toBe("FunctionDef");
+			expect((stmt as { name: string }).name).toBe("match");
+		});
+
+		test("match as an attribute name (re.match)", () => {
+			const expr = parseExpression("re.match(pattern, s)");
+			expect(expr.nodeType).toBe("Call");
+		});
+
+		test("case as a plain assignment target", () => {
+			const stmt = parseStatement("case = 3\n");
+			expect(stmt.nodeType).toBe("Assign");
+		});
+
+		test("match used as both the statement keyword and the subject name", () => {
+			const stmt = parseStatement(
+				"match match:\n    case case:\n        pass\n",
+			);
+			expect(stmt.nodeType).toBe("Match");
+		});
+
+		test("match followed by a subscript target is an annotated assignment, not a match statement", () => {
+			// `match[0]: int = 1` parses as `AnnAssign` in CPython: the
+			// match_stmt alternative fails (no NEWLINE after the header) and
+			// backtracks entirely, same as this parser's speculative attempt.
+			const stmt = parseStatement("match[0]: int = 1\n");
+			expect(stmt.nodeType).toBe("AnnAssign");
+		});
+
+		test("match header with an invalid body still reports the real match-statement error", () => {
+			// Once `match <expr> :` is followed by NEWLINE, CPython commits to
+			// match_stmt; a missing `case` clause is a hard error, not a
+			// backtrack into a different (also invalid) interpretation.
+			expect(() => parseCode("match x:\n    y = 1\n")).toThrow(
+				/Expected 'case'/,
+			);
+		});
+
+		test("type as a plain assignment target", () => {
+			const stmt = parseStatement("type = 5\n");
+			expect(stmt.nodeType).toBe("Assign");
+		});
+
+		test("type as a call", () => {
+			const expr = parseExpression("type(x)");
+			expect(expr.nodeType).toBe("Call");
+		});
+
+		test("type alias statement still parses", () => {
+			const stmt = parseStatement("type X = int\n");
+			expect(stmt.nodeType).toBe("TypeAlias");
+		});
+
+		test("type alias statement with type params still parses", () => {
+			const stmt = parseStatement("type X[T] = list[T]\n");
+			expect(stmt.nodeType).toBe("TypeAlias");
+			expect((stmt as { type_params: unknown[] }).type_params).toHaveLength(
+				1,
+			);
+		});
+	});
+
+	describe("string escape sequences", () => {
+		// Verified against CPython 3.13's escape table.
+		test("hex escape \\x", () => {
+			const expr = parseExpression('"\\x41"') as { value: string };
+			expect(expr.value).toBe("A");
+		});
+
+		test("4-digit unicode escape \\u", () => {
+			const expr = parseExpression('"\\u0041"') as { value: string };
+			expect(expr.value).toBe("A");
+		});
+
+		test("8-digit unicode escape \\U", () => {
+			const expr = parseExpression('"\\U0001F600"') as { value: string };
+			expect(expr.value).toBe("\u{1F600}");
+		});
+
+		test("octal escape", () => {
+			const expr = parseExpression('"\\101\\102\\103"') as { value: string };
+			expect(expr.value).toBe("ABC");
+		});
+
+		test("bell, backspace, formfeed, vertical tab escapes", () => {
+			const expr = parseExpression('"\\a\\b\\f\\v"') as { value: string };
+			expect(expr.value).toBe("\x07\b\f\v");
+		});
+
+		test("line continuation is dropped entirely", () => {
+			const expr = parseExpression('"line1\\\nline2"') as { value: string };
+			expect(expr.value).toBe("line1line2");
+		});
+
+		test("unrecognized escape keeps the backslash literally", () => {
+			const expr = parseExpression('"\\q"') as { value: string };
+			expect(expr.value).toBe("\\q");
+		});
+
+		test("\\u is not decoded in a bytes literal", () => {
+			const expr = parseExpression('b"\\u0041"') as { value: string };
+			expect(expr.value).toBe("\\u0041");
+		});
+
+		test("raw strings still skip all escape processing", () => {
+			const expr = parseExpression('r"\\x41\\n"') as { value: string };
+			expect(expr.value).toBe("\\x41\\n");
+		});
+	});
+
+	describe("parenthesized-base position tracking", () => {
+		// Verified against CPython 3.13: a parenthesized atom keeps its inner
+		// expression's own (paren-excluded) position when used standalone,
+		// but a trailer chain built on top of one starts at the paren.
+		test("attribute access on a parenthesized name starts at the paren", () => {
+			const expr = parseExpression("(x).y") as ExprNode;
+			expect(expr.col_offset).toBe(0);
+			expect(expr.end_col_offset).toBe(5);
+		});
+
+		test("call on a parenthesized expression starts at the paren", () => {
+			const expr = parseExpression("(x)()") as ExprNode;
+			expect(expr.col_offset).toBe(0);
+		});
+
+		test("subscript on a parenthesized expression starts at the paren", () => {
+			const expr = parseExpression("(x)[0]") as ExprNode;
+			expect(expr.col_offset).toBe(0);
+		});
+
+		test("a bare parenthesized name stays transparent (no trailer applied)", () => {
+			const expr = parseExpression("(x)") as ExprNode;
+			expect(expr.nodeType).toBe("Name");
+			expect(expr.col_offset).toBe(1);
+		});
+	});
+
+	describe("slice with omitted lower bound", () => {
+		test("col_offset points at the colon, not the upper-bound expression", () => {
+			// Verified against CPython 3.13: `ast.parse('x[:3]', mode='eval')`
+			// gives the Slice node col_offset 2 (the `:`), not 3 (the `3`).
+			const expr = parseExpression("x[:3]") as {
+				slice: { col_offset: number };
+			};
+			expect(expr.slice.col_offset).toBe(2);
+		});
+	});
+
+	describe("decorated async function position", () => {
+		test("lineno/col_offset point at 'async', not 'def'", () => {
+			// Verified against CPython 3.13.
+			const stmt = parseStatement(
+				"class C:\n    @staticmethod\n    async def f():\n        pass\n",
+			);
+			const method = (stmt as { body: StmtNode[] }).body[0] as {
+				nodeType: string;
+				col_offset: number;
+			};
+			expect(method.nodeType).toBe("AsyncFunctionDef");
+			expect(method.col_offset).toBe(4);
+		});
+	});
+
 	describe("f-strings", () => {
 		test("nested f-string inside interpolation", () => {
 			const expr = parseCode("f\"{f'{x}'}\"\n");
