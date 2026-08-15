@@ -84,8 +84,13 @@ function nodeRendererPropsEqual(prev: NodeRendererProps, next: NodeRendererProps
  * appear in their real position within `body`/`inlineComment` — it exists
  * purely for convenient enumeration. Rendering it via the normal recursive
  * props would let it steal the shared object's DOM ref (since it renders
- * after `body`) and win future scroll/highlight targeting. Field name is
- * unique to `Module`, so a plain key check is enough to detect it.
+ * after `body`) and win future scroll/highlight targeting, so `registerRef`
+ * and `activeNode` are suppressed for this subtree. `onHoverEnter`/
+ * `onHoverLeave` are deliberately *not* suppressed: hovering a comment here
+ * should still highlight its source range, which `nodeRange` resolves via
+ * the node's real (non-duplicate) position, so there's no ref conflict to
+ * guard against for hover. Field name is unique to `Module`, so a plain key
+ * check is enough to detect it.
  */
 const RECORD_KEEPING_ONLY_FIELD = "comments";
 
@@ -268,8 +273,8 @@ function Container(props: ContainerProps) {
 								onToggle={onToggle}
 								activeNode={isRecordKeepingOnly ? null : activeNode}
 								activeContainerPath={isRecordKeepingOnly ? EMPTY_PATH : activeContainerPath}
-								onHoverEnter={isRecordKeepingOnly ? undefined : onHoverEnter}
-								onHoverLeave={isRecordKeepingOnly ? undefined : onHoverLeave}
+								onHoverEnter={onHoverEnter}
+								onHoverLeave={onHoverLeave}
 								registerRef={isRecordKeepingOnly ? noopRegisterRef : registerRef}
 							/>
 						);
