@@ -1,5 +1,5 @@
 import type { ASTNodeUnion } from "py-ast";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { Editor } from "./components/Editor";
 import { JsonView } from "./components/JsonView";
 import { type TabId, Tabs } from "./components/Tabs";
@@ -76,6 +76,21 @@ export function App() {
 	const [isResizing, setIsResizing] = useState(false);
 	const isStackedLayout = useMediaQuery(STACKED_LAYOUT_QUERY);
 
+	// Mount the JSON view once in the background, as a low-priority
+	// transition, instead of only on first tab click — that way the switch
+	// to the JSON tab is never the moment its (unavoidably nontrivial, even
+	// collapsed) first render actually happens. Doing it as a transition
+	// means React can still interrupt this background work for any
+	// tree-view interaction, so it never competes with what the user is
+	// doing on screen. `activeTab === "json"` is an escape hatch for the
+	// rare case the user switches tabs before the transition has landed: it
+	// mounts the JSON view directly, matching the old (synchronous) behavior
+	// rather than showing nothing.
+	const [jsonViewPrimed, setJsonViewPrimed] = useState(false);
+	useEffect(() => {
+		startTransition(() => setJsonViewPrimed(true));
+	}, []);
+
 	const handleThemeChange = (next: Theme) => {
 		setTheme(next);
 		localStorage.setItem(THEME_STORAGE_KEY, next);
@@ -120,7 +135,13 @@ export function App() {
 		}
 	}, [isResizing, editorWidthPercent]);
 
-	const parseResult = useMemo(() => tryParse(source, !excludeComments), [source, excludeComments]);
+	// Parsing (and, downstream, re-rendering the whole tree/JSON view) is
+	// deferred to a lower React priority than the keystroke itself — on a
+	// large file, that keeps typing responsive even while the AST rebuild and
+	// tree re-render for the previous keystroke are still catching up,
+	// instead of both competing on the main thread for every character typed.
+	const deferredSource = useDeferredValue(source);
+	const parseResult = useMemo(() => tryParse(deferredSource, !excludeComments), [deferredSource, excludeComments]);
 
 	const activePath = useMemo<ASTNodeUnion[]>(() => {
 		if (!parseResult.ok || !cursorPosition) {
@@ -144,13 +165,22 @@ export function App() {
 		return containerPathTo(parseResult.tree, activeNode) ?? [];
 	}, [parseResult, activeNode]);
 
-	// Fold state is independent per view — the tree starts collapsed to just
-	// its top-level outline, the JSON view starts fully expanded — but each
-	// instance persists its own toggles across tab switches (switching tabs
-	// never resets what's expanded in either one). A global expand-all/
-	// collapse-all action drives whichever view is currently visible.
+	// Fold state is independent per view, but both now start collapsed to
+	// just their top-level outline — each instance persists its own toggles
+	// across tab switches (switching tabs never resets what's expanded in
+	// either one). A global expand-all/collapse-all action drives whichever
+	// view is currently visible.
+	//
+	// The JSON view used to default to fully expanded, which meant every
+	// tree change (a fresh parse on every keystroke, or the first mount)
+	// synchronously built JSX/DOM for every row in the file at once — on a
+	// large file, that's the actual source of the "slow"/"frozen" JSON view,
+	// not the (cheap, DOM-free) line-number bookkeeping in
+	// `computeLineNumbers`. Matching TreeView's collapsed-by-default start
+	// (which was never a problem) fixes it at the source instead of trying
+	// to schedule around it.
 	const treeState = useTreeState(parseResult.ok ? parseResult.tree : null, expandPath, "top-level");
-	const jsonState = useTreeState(parseResult.ok ? parseResult.tree : null, expandPath, "all");
+	const jsonState = useTreeState(parseResult.ok ? parseResult.tree : null, expandPath, "top-level");
 	const activeState = activeTab === "tree" ? treeState : jsonState;
 
 	// Expand-all/collapse-all is a deliberate, manual override of fold state —
@@ -239,27 +269,34 @@ export function App() {
 						onCollapseAll={handleCollapseAll}
 					/>
 					{parseResult.ok ? (
-						activeTab === "tree" ? (
-							<TreeView
-								tree={parseResult.tree}
-								activePath={activePath}
-								activeNode={activeNode}
-								expanded={treeState.expanded}
-								toggle={treeState.toggle}
-								registerRef={treeState.registerRef}
-								onHoverEnter={handleTreeHoverEnter}
-								onHoverLeave={handleTreeHoverLeave}
-							/>
-						) : (
-							<JsonView
-								tree={parseResult.tree}
-								activePath={activePath}
-								activeNode={activeNode}
-								expanded={jsonState.expanded}
-								toggle={jsonState.toggle}
-								registerRef={jsonState.registerRef}
-							/>
-						)
+						<>
+							<div className="node-view-slot" hidden={activeTab !== "tree"}>
+								<TreeView
+									tree={parseResult.tree}
+									activeContainerPath={expandPath}
+									activeNode={activeNode}
+									expanded={treeState.expanded}
+									expandedChangePath={treeState.expandedChangePath}
+									toggle={treeState.toggle}
+									registerRef={treeState.registerRef}
+									onHoverEnter={handleTreeHoverEnter}
+									onHoverLeave={handleTreeHoverLeave}
+								/>
+							</div>
+							{(jsonViewPrimed || activeTab === "json") && (
+								<div className="node-view-slot" hidden={activeTab !== "json"}>
+									<JsonView
+										tree={parseResult.tree}
+										activeContainerPath={expandPath}
+										activeNode={activeNode}
+										expanded={jsonState.expanded}
+										expandedChangePath={jsonState.expandedChangePath}
+										toggle={jsonState.toggle}
+										registerRef={jsonState.registerRef}
+									/>
+								</div>
+							)}
+						</>
 					) : (
 						<div className="error-banner">
 							<strong>Syntax error:</strong> {parseResult.error.message}

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 /**
  * Tracks nested hover regions as a stack, so that hovering anywhere within a
@@ -17,18 +17,21 @@ export function useHoverStack<T>() {
 	const [hovered, setHovered] = useState<T | null>(null);
 	const stack = useRef<T[]>([]);
 
-	const onEnter = (node: T) => {
+	// Stable identities (empty deps — `stack` is a ref and `setHovered` is a
+	// state setter, both already stable) so consumers memoized on these
+	// callbacks (e.g. TreeView) don't get invalidated by every hover.
+	const onEnter = useCallback((node: T) => {
 		stack.current.push(node);
 		setHovered(node);
-	};
+	}, []);
 
-	const onLeave = (node: T) => {
+	const onLeave = useCallback((node: T) => {
 		const index = stack.current.lastIndexOf(node);
 		if (index !== -1) {
 			stack.current.splice(index, 1);
 		}
 		setHovered(stack.current[stack.current.length - 1] ?? null);
-	};
+	}, []);
 
 	return { hovered, onEnter, onLeave };
 }

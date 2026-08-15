@@ -278,6 +278,25 @@ body {
 	user-select: none;
 }
 
+/**
+ * Wraps each of TreeView/JsonView so both can stay mounted simultaneously
+ * (see App.tsx) and be switched between with plain CSS instead of a
+ * mount/unmount — the inactive one is hidden rather than destroyed, so a tab
+ * switch is instant once the JSON view has been primed once in the
+ * background, rather than re-triggering its (expensive, on a large file)
+ * initial render synchronously on click.
+ */
+.node-view-slot {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+.node-view-slot[hidden] {
+	display: none;
+}
+
 .node-view {
 	flex: 1;
 	overflow: auto;
@@ -376,25 +395,42 @@ body {
 
 /*
  * JSON view: a code-editor-style read-only view, distinct from the tree
- * view's inline +/- disclosure rows. A sticky gutter (line numbers + fold
- * arrows) sits beside a selectable content pane; every gutter/content cell
- * pair is a direct grid child (rendered flat, not nested) so CSS Grid's
- * implicit row placement lines them up automatically regardless of fold
- * depth.
+ * view's inline +/- disclosure rows. Each line is one `.json-row` — a flex
+ * row holding a fixed-width gutter cell (line number + fold arrow) beside
+ * the content cell, both plain DOM siblings (see `JsonCodeView`/
+ * `GutterAndLine`) rather than being split across two independently
+ * portaled subtrees. `.json-code-view` (the outer pane, via `.node-view`)
+ * is the *only* scroll container, on both axes — it's bounded to the
+ * viewport's height, so its horizontal scrollbar always renders at the
+ * bottom of what's visible and stays reachable no matter how long the file
+ * is. `.json-gutter` uses `position: sticky; left: 0` on each row to stay
+ * visually pinned during that horizontal scroll.
+ *
+ * Each row is also its own independent block box rather than all rows
+ * sharing one CSS Grid: with a large file expanded, that used to mean
+ * thousands of cells as children of a single `display: grid` container,
+ * whose track sizing is computed holistically across the whole grid —
+ * showing, hiding, or inserting any one row could force a re-layout of
+ * every row's tracks. Plain block boxes (what TreeView already used, and
+ * never had this problem) let the browser treat each row independently.
  */
 .json-code-view {
 	padding: 0;
+	user-select: text;
 }
 
-.json-code-grid {
-	display: grid;
-	grid-template-columns: auto 1fr;
-	user-select: text;
-	width: fit-content;
+.json-row {
+	display: flex;
+	align-items: flex-start;
 	min-width: 100%;
+	width: max-content;
 }
 
 .json-gutter {
+	position: sticky;
+	left: 0;
+	z-index: 1;
+	flex: 0 0 auto;
 	display: flex;
 	align-items: center;
 	justify-content: flex-end;
@@ -404,8 +440,6 @@ body {
 	color: var(--text-dim);
 	background: var(--bg-header);
 	border-right: 1px solid var(--border);
-	position: sticky;
-	left: 0;
 }
 
 .json-linenum {
@@ -438,13 +472,28 @@ button.json-fold-arrow:hover {
 }
 
 .json-line {
+	flex: 1 0 auto;
 	white-space: pre;
 	padding: 0 0.6rem;
 }
 
-.json-gutter[data-active],
-.json-line[data-active] {
+.json-row[data-active] .json-line {
 	background: var(--highlight);
+}
+
+/*
+ * The gutter is `position: sticky`, so as the row scrolls horizontally,
+ * `.json-line`'s content passes underneath it — normally hidden because the
+ * gutter's own background is fully opaque. `var(--highlight)` alone is
+ * translucent (it's designed to tint whatever's already behind it, e.g. the
+ * editor's syntax-highlighted text), so using it as the gutter's *only*
+ * background on an active row let that scrolled-under line content show
+ * through, overlapping the line number. Layering it over the gutter's normal
+ * opaque background instead keeps the gutter fully opaque while still tinting
+ * it to match the active line.
+ */
+.json-row[data-active] .json-gutter {
+	background: linear-gradient(var(--highlight), var(--highlight)), var(--bg-header);
 }
 
 .error-banner {
