@@ -1,0 +1,26 @@
+{
+	"name": "py-ast-playground",
+	"private": true,
+	"version": "0.0.0",
+	"type": "module",
+	"scripts": {
+		"dev": "vite",
+		"build": "tsc --noEmit && vite build",
+		"preview": "vite preview"
+	},
+	"dependencies": {
+		"@codemirror/lang-python": "^6.1.7",
+		"@codemirror/state": "^6.5.0",
+		"@codemirror/view": "^6.36.1",
+		"@uiw/react-codemirror": "^4.23.7",
+		"react": "^18.3.1",
+		"react-dom": "^18.3.1"
+	},
+	"devDependencies": {
+		"@types/react": "^18.3.18",
+		"@types/react-dom": "^18.3.5",
+		"@vitejs/plugin-react": "^4.3.4",
+		"typescript": "^5.7.3",
+		"vite": "^6.0.11"
+	}
+}

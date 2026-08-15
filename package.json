@@ -40,7 +40,9 @@
 		"release:local:dry": "node scripts/release-local.mjs --dry-run",
 		"jsr:sync": "node scripts/jsr-release.mjs",
 		"jsr:publish": "npm run jsr:sync && npx jsr publish --allow-slow-types",
-		"docs": "npm --prefix docs-tooling install && npm --prefix docs-tooling run build"
+		"docs": "npm --prefix docs-tooling install && npm --prefix docs-tooling run build",
+		"playground": "npm --prefix playground install && npm --prefix playground run dev",
+		"playground:build": "npm --prefix playground install && npm --prefix playground run build"
 	},
 	"keywords": [
 		"python",
