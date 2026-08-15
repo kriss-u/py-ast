@@ -1060,6 +1060,20 @@ describe("parser edge cases", () => {
 			expect(inner?.values[0].value).toBe("\ninner ");
 		});
 
+		test("an emoji in literal text before an interpolation shifts the field's column by its UTF-8 byte length", () => {
+			// Verified against CPython 3.13 (`f"😀{x}"` inside `a = ...`): the
+			// emoji is 1 JS UTF-16 surrogate pair but 4 UTF-8 bytes, so the
+			// literal Constant spans 4 columns and the field starts right
+			// after it, not after just 1 (a naive JS-length count).
+			const expr = parseExpression('f"😀{x}"') as {
+				values: ExprNode[];
+			};
+			const literal = expr.values[0];
+			const field = expr.values[1];
+			expect(literal.end_col_offset - literal.col_offset).toBe(4);
+			expect(field.col_offset).toBe(literal.end_col_offset);
+		});
+
 		test("conversion specifier with format spec", () => {
 			const ast = parseCode('f"{x!r:>10}"\n');
 			expect(ast.body[0].nodeType).toBe("Expr");

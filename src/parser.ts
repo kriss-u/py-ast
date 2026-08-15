@@ -3,7 +3,7 @@
  * Based on the Python ASDL grammar specification
  */
 
-import { Lexer, type Token, TokenType } from "./lexer.js";
+import { Lexer, type Token, TokenType, utf8LengthAt } from "./lexer.js";
 import type {
 	Arg,
 	Arguments,
@@ -5391,8 +5391,20 @@ export class Parser {
 			if (text[i] === "\n") {
 				lineno++;
 				col_offset = 0;
-			} else {
-				col_offset++;
+				continue;
+			}
+			const code = text.charCodeAt(i);
+			const prevCode = i > 0 ? text.charCodeAt(i - 1) : 0;
+			const isLowSurrogateOfPreviousPair =
+				code >= 0xdc00 &&
+				code <= 0xdfff &&
+				prevCode >= 0xd800 &&
+				prevCode <= 0xdbff;
+			// A surrogate pair's byte length is attributed entirely to its
+			// high half (by utf8LengthAt, which looks ahead to combine the
+			// pair); skip the low half here so it isn't double-counted.
+			if (!isLowSurrogateOfPreviousPair) {
+				col_offset += utf8LengthAt(text, i);
 			}
 		}
 		return { lineno, col_offset };

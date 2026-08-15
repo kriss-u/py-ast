@@ -204,6 +204,43 @@ const KEYWORDS = new Map<string, TokenType>([
 ]);
 
 /**
+ * Returns the number of bytes `codePoint` takes when encoded as UTF-8,
+ * matching CPython's `col_offset`/`end_col_offset`, which count UTF-8 bytes
+ * rather than UTF-16 code units or Unicode codepoints. Every non-ASCII
+ * character (accented letters, em dashes, CJK text, emoji, ...) needs this:
+ * counting JS string length directly under-counts them relative to CPython.
+ * @param codePoint A full Unicode codepoint (not a lone UTF-16 surrogate).
+ * @returns `1`, `2`, `3`, or `4` — the codepoint's UTF-8 byte length.
+ */
+export function utf8Length(codePoint: number): number {
+	if (codePoint < 0x80) return 1;
+	if (codePoint < 0x800) return 2;
+	if (codePoint < 0x10000) return 3;
+	return 4;
+}
+
+/**
+ * Returns the UTF-8 byte length of the character at `text[index]`,
+ * transparently combining a UTF-16 surrogate pair (e.g. most emoji) into
+ * its single 4-byte codepoint. `index` should point at the start of a
+ * character, not the low half of a pair.
+ * @param text The string to read from.
+ * @param index Index of the character (or high surrogate) to measure.
+ * @returns The character's UTF-8 byte length.
+ */
+export function utf8LengthAt(text: string, index: number): number {
+	const code = text.charCodeAt(index);
+	if (code >= 0xd800 && code <= 0xdbff) {
+		const low = text.charCodeAt(index + 1);
+		if (low >= 0xdc00 && low <= 0xdfff) {
+			const codePoint = (code - 0xd800) * 0x400 + (low - 0xdc00) + 0x10000;
+			return utf8Length(codePoint);
+		}
+	}
+	return utf8Length(code);
+}
+
+/**
  * Tokenizes Python source code into a flat array of {@link Token}s.
  *
  * Handles Python's significant-whitespace grammar (emitting synthetic
@@ -1231,7 +1268,22 @@ export class Lexer {
 			this.position.line++;
 			this.position.column = 0;
 		} else {
-			this.position.column++;
+			const code = c.charCodeAt(0);
+			const prevCode =
+				this.position.index > 0
+					? this.source.charCodeAt(this.position.index - 1)
+					: 0;
+			const isLowSurrogateOfPreviousPair =
+				code >= 0xdc00 &&
+				code <= 0xdfff &&
+				prevCode >= 0xd800 &&
+				prevCode <= 0xdbff;
+			// A surrogate pair's byte length is attributed entirely to its
+			// high half (by utf8LengthAt, which looks ahead to combine the
+			// pair); skip the low half here so it isn't double-counted.
+			if (!isLowSurrogateOfPreviousPair) {
+				this.position.column += utf8LengthAt(this.source, this.position.index);
+			}
 		}
 		this.position.index++;
 		return c;
