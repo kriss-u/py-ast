@@ -1,7 +1,12 @@
 import { describe, expect, test } from "vitest";
 import { parse, unparse } from "../src/index.js";
-import type { Module } from "../src/types.js";
-import { assertNodeType, collectComments } from "./test-helpers.js";
+import type { ASTNode, Module, StmtNode } from "../src/types.js";
+import {
+	assertNodeType,
+	collectComments,
+	parseStatement,
+	testUnparse,
+} from "./test-helpers.js";
 
 describe("Comment Parsing", () => {
 	test("parse with comments disabled", () => {
@@ -123,51 +128,190 @@ y = 2`;
 	});
 });
 
+describe("Comment Attachment and Positions", () => {
+	test("standalone comment before any statement", () => {
+		const ast = parse("# leading\nx = 1\n", { comments: true });
+		expect(ast.body.some((s) => s.nodeType === "Comment")).toBe(true);
+	});
+
+	test("inline comment attaches to previous statement", () => {
+		const ast = parse("x = 1  # trailing\ny = 2\n", { comments: true });
+		const first = ast.body.find(
+			(s) => s.nodeType === "Assign" && "targets" in s,
+		);
+		expect(first?.inlineComment?.value).toBe("# trailing");
+	});
+
+	test("multiple standalone comments in a row at module level", () => {
+		const ast = parse("# one\n# two\nx = 1\n", { comments: true });
+		const comments = ast.body.filter((s) => s.nodeType === "Comment");
+		expect(comments.length).toBeGreaterThanOrEqual(2);
+	});
+
+	test("comment immediately after colon before newline in suite", () => {
+		const ast = parse("if True:  # note\n    pass\n", {
+			comments: true,
+		});
+		expect(ast.comments?.length).toBeGreaterThan(0);
+	});
+
+	test("comments before INDENT inside a block", () => {
+		const code = "if True:\n    # pre-indent comment\n    pass\n";
+		const ast = parse(code, { comments: true });
+		expect(ast.comments?.length).toBeGreaterThan(0);
+	});
+
+	test("comments nested in function/class/if/for/while/with/try/match bodies", () => {
+		const code = [
+			"def f():",
+			"    # comment in function",
+			"    pass",
+			"",
+			"class C:",
+			"    # comment in class",
+			"    pass",
+			"",
+			"if True:",
+			"    x = 1  # inline in if",
+			"else:",
+			"    y = 2  # inline in else",
+			"",
+			"for i in range(3):",
+			"    pass  # inline in for",
+			"else:",
+			"    pass  # inline in for-else",
+			"",
+			"while True:",
+			"    break  # inline in while",
+			"else:",
+			"    pass  # inline in while-else",
+			"",
+			"with open('x') as fh:",
+			"    pass  # inline in with",
+			"",
+			"try:",
+			"    pass  # inline in try",
+			"except Exception:",
+			"    pass  # inline in except",
+			"else:",
+			"    pass  # inline in try-else",
+			"finally:",
+			"    pass  # inline in finally",
+			"",
+			"match 1:",
+			"    case 1:",
+			"        pass  # inline in match case",
+			"",
+		].join("\n");
+		const ast = parse(code, { comments: true });
+		expect(ast.comments?.length).toBeGreaterThan(10);
+	});
+
+	test("chained assignment collects trailing comment", () => {
+		const ast = parse("x = y = 1  # chained\n", { comments: true });
+		const stmt = ast.body[0];
+		expect(stmt.nodeType).toBe("Assign");
+		expect(stmt.inlineComment?.value).toBe("# chained");
+	});
+
+	test("standalone comment inside parenthesized assignment value", () => {
+		const code = "x = (\n    # note\n    1\n)\n";
+		const ast = parse(code, { comments: true });
+		const stmt = ast.body[0] as ASTNode & {
+			expressionComments?: { value: string }[];
+		};
+		expect(stmt.nodeType).toBe("Assign");
+		expect(stmt.expressionComments?.length).toBe(1);
+	});
+
+	test("comment skipped after comma in list literal", () => {
+		const ast = parse("x = [1,  # c\n    2]\n", { comments: true });
+		expect(ast.comments?.length).toBeGreaterThan(0);
+	});
+
+	test("comments inside function parameter list", () => {
+		const code = "def f(\n    a,  # first\n    b,\n):\n    pass\n";
+		const ast = parse(code, { comments: true });
+		expect(ast.comments?.length).toBeGreaterThan(0);
+	});
+
+	test("standalone comment on its own line inside parameter list", () => {
+		const code = "def f(\n    a,\n    # standalone\n    b,\n):\n    pass\n";
+		const ast = parse(code, { comments: true });
+		expect(ast.comments?.length).toBeGreaterThan(0);
+	});
+
+	test("a second inline comment for a statement that already has one is discarded, at module level", () => {
+		// The parenthesized tuple's trailing comma pulls "# internal" into
+		// the Assign's own inlineComment while still inside expression
+		// parsing; the semicolon then lets a second, genuinely separate
+		// "# external" comment surface only once the statement has
+		// already returned with inlineComment set.
+		const src = "x = (1,  # internal\n)  ;  # external\n";
+		const ast = parse(src, { comments: true });
+		const assign = ast.body[0] as ASTNode & {
+			inlineComment?: { value: string };
+		};
+		expect(assign.inlineComment?.value).toBe("# internal");
+		expect(ast.comments?.some((c) => c.value === "# external")).toBe(false);
+	});
+
+	test("a second inline comment for a statement that already has one is discarded, inside a suite", () => {
+		const src =
+			"if True:\n    x = (1,  # internal\n    )  ;  # external\n    pass\n";
+		const ast = parse(src, { comments: true });
+		const ifStmt = ast.body[0] as ASTNode & { body: ASTNode[] };
+		const assign = ifStmt.body[0] as ASTNode & {
+			inlineComment?: { value: string };
+		};
+		expect(assign.inlineComment?.value).toBe("# internal");
+		expect(ast.comments?.some((c) => c.value === "# external")).toBe(false);
+	});
+});
+
+describe("single-line compound-statement body followed by a comment-only line", () => {
+	// A comment-only line between a single-line `if a: ...` body and its
+	// `elif`/`else` (or `except`/`finally`) previously left a stray
+	// NEWLINE in the way of the follow-up clause check.
+	test("elif after an inline if-body and a standalone comment", () => {
+		const stmt = parseStatement("if a: y = 1\n# comment\nelif b: y = 2\n") as {
+			orelse: StmtNode[];
+		};
+		expect(stmt.orelse[0].nodeType).toBe("If");
+	});
+
+	test("else after an inline while-body and a blank line", () => {
+		const stmt = parseStatement("while a: y = 1\n\nelse: y = 2\n") as {
+			orelse: StmtNode[];
+		};
+		expect(stmt.orelse).toHaveLength(1);
+	});
+
+	test("except after an inline try-body and a standalone comment", () => {
+		const stmt = parseStatement("try: y = 1\n# c\nexcept: y = 2\n") as {
+			handlers: unknown[];
+		};
+		expect(stmt.handlers).toHaveLength(1);
+	});
+
+	test("finally after an inline except-body and a standalone comment", () => {
+		const stmt = parseStatement(
+			"try: y = 1\nexcept: y = 2\n# c\nfinally: y = 3\n",
+		) as { finalbody: StmtNode[] };
+		expect(stmt.finalbody).toHaveLength(1);
+	});
+});
+
 describe("Quote Style Preservation", () => {
-	test("preserves single quotes", () => {
-		const code = "x = 'hello world'";
-		const ast = parse(code);
-		const unparsed = unparse(ast);
-		expect(unparsed).toBe("x = 'hello world'");
-	});
-
-	test("preserves double quotes", () => {
-		const code = 'x = "hello world"';
-		const ast = parse(code);
-		const unparsed = unparse(ast);
-		expect(unparsed).toBe('x = "hello world"');
-	});
-
-	test("preserves triple single quotes", () => {
-		const code = `x = '''hello
-world'''`;
-		const ast = parse(code);
-		const unparsed = unparse(ast);
-		expect(unparsed).toBe(`x = '''hello
-world'''`);
-	});
-
-	test("preserves triple double quotes", () => {
-		const code = `x = """hello
-world"""`;
-		const ast = parse(code);
-		const unparsed = unparse(ast);
-		expect(unparsed).toBe(`x = """hello
-world"""`);
-	});
-
-	test("preserves raw strings", () => {
-		const code = 'x = r"raw string"';
-		const ast = parse(code);
-		const unparsed = unparse(ast);
-		expect(unparsed).toBe('x = r"raw string"');
-	});
-
-	test("preserves f-strings", () => {
-		const code = 'x = f"hello {name}"';
-		const ast = parse(code);
-		const unparsed = unparse(ast);
-		expect(unparsed).toBe('x = f"hello {name}"');
+	test.each<[string, string]>([
+		["single quotes", "x = 'hello world'"],
+		["double quotes", 'x = "hello world"'],
+		["triple single quotes", "x = '''hello\nworld'''"],
+		["triple double quotes", 'x = """hello\nworld"""'],
+		["raw strings", 'x = r"raw string"'],
+		["f-strings", 'x = f"hello {name}"'],
+	])("preserves %s", (_name, code) => {
+		testUnparse(code, code);
 	});
 
 	test("preserves u-prefixed strings and sets Constant.kind to CPython's real 'u' value", () => {
@@ -215,11 +359,7 @@ world"""`);
 
 	test("preserves mixed quote styles in collections", () => {
 		const code = `lst = ['single', "double", '''triple''', """triple2"""]`;
-		const ast = parse(code);
-		const unparsed = unparse(ast);
-		expect(unparsed).toBe(
-			`lst = ['single', "double", '''triple''', """triple2"""]`,
-		);
+		testUnparse(code, code);
 	});
 
 	test("defaults to double quotes for strings without a recorded quote style", () => {

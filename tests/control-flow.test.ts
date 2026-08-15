@@ -1,158 +1,6 @@
 import { describe, expect, test } from "vitest";
+import type { ASTNode, Constant, Name, StmtNode } from "../src/types.js";
 import { assertNodeType, parseCode, parseStatement } from "./test-helpers.js";
-
-describe("Pattern Matching", () => {
-	describe("Dictionary/Mapping Patterns", () => {
-		test("simple dictionary pattern", () => {
-			const code = `
-match data:
-    case {'name': str(name)}:
-        return name
-`;
-			const ast = parseCode(code);
-			const matchStmt = ast.body[0];
-			assertNodeType(matchStmt, "Match");
-
-			const caseStmt = matchStmt.cases[0];
-			assertNodeType(caseStmt.pattern, "MatchMapping");
-			expect(caseStmt.pattern.keys).toHaveLength(1);
-			expect(caseStmt.pattern.patterns).toHaveLength(1);
-		});
-
-		test("complex dictionary pattern with multiple keys", () => {
-			const code = `
-match data:
-    case {'type': 'user', 'name': str(name), 'age': int(age)}:
-        return f'{name} is {age} years old'
-`;
-			const ast = parseCode(code);
-			const matchStmt = ast.body[0];
-			assertNodeType(matchStmt, "Match");
-
-			const caseStmt = matchStmt.cases[0];
-			assertNodeType(caseStmt.pattern, "MatchMapping");
-			expect(caseStmt.pattern.keys).toHaveLength(3);
-			expect(caseStmt.pattern.patterns).toHaveLength(3);
-		});
-
-		test("dictionary pattern with guard", () => {
-			const code = `
-match data:
-    case {'type': 'user', 'name': str(name), 'age': int(age)} if age >= 18:
-        return f'Adult: {name}'
-`;
-			const ast = parseCode(code);
-			const matchStmt = ast.body[0];
-			assertNodeType(matchStmt, "Match");
-
-			const caseStmt = matchStmt.cases[0];
-			assertNodeType(caseStmt.pattern, "MatchMapping");
-			expect(caseStmt.guard).toBeTruthy();
-			if (!caseStmt.guard) {
-				throw new Error("expected guard to be defined");
-			}
-			assertNodeType(caseStmt.guard, "Compare");
-		});
-
-		test("dictionary pattern with rest capture", () => {
-			const code = `
-match data:
-    case {'type': 'admin', **rest}:
-        return rest
-`;
-			const ast = parseCode(code);
-			const matchStmt = ast.body[0];
-			assertNodeType(matchStmt, "Match");
-
-			const caseStmt = matchStmt.cases[0];
-			assertNodeType(caseStmt.pattern, "MatchMapping");
-			expect(caseStmt.pattern.rest).toBe("rest");
-		});
-	});
-
-	describe("Class Pattern Fixes", () => {
-		test("class pattern with arguments", () => {
-			const code = `
-match value:
-    case str(name):
-        return f'String: {name}'
-`;
-			const ast = parseCode(code);
-			const matchStmt = ast.body[0];
-			assertNodeType(matchStmt, "Match");
-
-			const caseStmt = matchStmt.cases[0];
-			assertNodeType(caseStmt.pattern, "MatchClass");
-			expect(caseStmt.pattern.patterns).toHaveLength(1);
-		});
-
-		test("class pattern with multiple arguments", () => {
-			const code = `
-match point:
-    case Point(int(x), int(y)):
-        return f'Point at ({x}, {y})'
-`;
-			const ast = parseCode(code);
-			const matchStmt = ast.body[0];
-			assertNodeType(matchStmt, "Match");
-
-			const caseStmt = matchStmt.cases[0];
-			assertNodeType(caseStmt.pattern, "MatchClass");
-			expect(caseStmt.pattern.patterns).toHaveLength(2);
-		});
-
-		test("class pattern with keyword arguments", () => {
-			const code = `
-match point:
-    case Point(x=int(x_val), y=int(y_val)):
-        return f'Point at x={x_val}, y={y_val}'
-`;
-			const ast = parseCode(code);
-			const matchStmt = ast.body[0];
-			assertNodeType(matchStmt, "Match");
-
-			const caseStmt = matchStmt.cases[0];
-			assertNodeType(caseStmt.pattern, "MatchClass");
-			expect(caseStmt.pattern.kwd_attrs).toHaveLength(2);
-			expect(caseStmt.pattern.kwd_patterns).toHaveLength(2);
-		});
-
-		test("class pattern with mixed positional and keyword arguments", () => {
-			const code = `
-match data:
-    case Person(str(name), age=int(age)):
-        return f'{name} is {age} years old'
-`;
-			const ast = parseCode(code);
-			const matchStmt = ast.body[0];
-			assertNodeType(matchStmt, "Match");
-
-			const caseStmt = matchStmt.cases[0];
-			assertNodeType(caseStmt.pattern, "MatchClass");
-			expect(caseStmt.pattern.patterns).toHaveLength(1);
-			expect(caseStmt.pattern.kwd_attrs).toHaveLength(1);
-			expect(caseStmt.pattern.kwd_patterns).toHaveLength(1);
-		});
-	});
-
-	test("reject invalid one-line match statements", () => {
-		expect(() => {
-			parseCode("match x: case 1:");
-		}).toThrow();
-	});
-
-	test("accept valid multi-line match statements", () => {
-		const code = `
-match x:
-    case 1:
-        return "one"
-`;
-		const ast = parseCode(code);
-		const matchStmt = ast.body[0];
-		assertNodeType(matchStmt, "Match");
-		expect(matchStmt.cases).toHaveLength(1);
-	});
-});
 
 describe("Exception Handling", () => {
 	describe("TryStar (except*) Support", () => {
@@ -501,6 +349,39 @@ def func():
     pass`);
 		assertNodeType(stmt, "AsyncFunctionDef");
 	});
+
+	describe("Parameter list syntax quirks", () => {
+		// These are def-site parameter-list shapes rather than call-argument
+		// ordering (see error-handling.test.ts's "Parameter list ordering" for
+		// the rejected orderings); placed alongside the rest of this describe's
+		// FunctionDef coverage rather than function-calls.test.ts or
+		// statements.test.ts, since it's this describe that already owns
+		// FunctionDef parameter shape.
+		test("positional-only separator", () => {
+			const stmt = parseStatement("def f(a, b, /, c):\n    pass\n");
+			assertNodeType(stmt, "FunctionDef");
+			expect(stmt.args.posonlyargs.map((a) => a.arg)).toEqual(["a", "b"]);
+			expect(stmt.args.args.map((a) => a.arg)).toEqual(["c"]);
+		});
+
+		test("trailing comma in parameter list", () => {
+			const stmt = parseStatement("def f(a, b,):\n    pass\n");
+			assertNodeType(stmt, "FunctionDef");
+			expect(stmt.args.args.map((a) => a.arg)).toEqual(["a", "b"]);
+		});
+
+		test("blank line between trailing comma and closing paren", () => {
+			const stmt = parseStatement("def f(\n    a,\n\n):\n    pass\n");
+			assertNodeType(stmt, "FunctionDef");
+			expect(stmt.args.args.map((a) => a.arg)).toEqual(["a"]);
+		});
+
+		test("keyword-only params after bare star", () => {
+			const stmt = parseStatement("def f(a, *, b, c=1):\n    pass\n");
+			assertNodeType(stmt, "FunctionDef");
+			expect(stmt.args.kwonlyargs.map((a) => a.arg)).toEqual(["b", "c"]);
+		});
+	});
 });
 
 describe("Class Definitions", () => {
@@ -535,5 +416,161 @@ class MyClass:
     pass`);
 		assertNodeType(stmt, "ClassDef");
 		expect(stmt.decorator_list).toHaveLength(1);
+	});
+
+	describe("Metaclass Syntax", () => {
+		test("simple metaclass", () => {
+			const stmt = parseStatement(
+				`class DatabaseConnection(metaclass=SingletonMeta):
+    pass`,
+			);
+			assertNodeType(stmt, "ClassDef");
+			expect(stmt.name).toBe("DatabaseConnection");
+			expect(stmt.bases).toHaveLength(0);
+			expect(stmt.keywords).toHaveLength(1);
+			expect(stmt.keywords[0].arg).toBe("metaclass");
+			expect(stmt.keywords[0].value.nodeType).toBe("Name");
+			expect((stmt.keywords[0].value as Name).id).toBe("SingletonMeta");
+		});
+
+		test("class with base class and metaclass", () => {
+			const stmt = parseStatement(
+				`class MyClass(BaseClass, metaclass=MyMeta):
+    pass`,
+			);
+			assertNodeType(stmt, "ClassDef");
+			expect(stmt.name).toBe("MyClass");
+			expect(stmt.bases).toHaveLength(1);
+			expect(stmt.bases[0].nodeType).toBe("Name");
+			expect((stmt.bases[0] as Name).id).toBe("BaseClass");
+			expect(stmt.keywords).toHaveLength(1);
+			expect(stmt.keywords[0].arg).toBe("metaclass");
+			expect((stmt.keywords[0].value as Name).id).toBe("MyMeta");
+		});
+
+		test("class with multiple bases and keyword arguments", () => {
+			const stmt = parseStatement(
+				`class Complex(Base1, Base2, metaclass=Meta, foo=bar, baz=42):
+    pass`,
+			);
+			assertNodeType(stmt, "ClassDef");
+			expect(stmt.name).toBe("Complex");
+			expect(stmt.bases).toHaveLength(2);
+			expect((stmt.bases[0] as Name).id).toBe("Base1");
+			expect((stmt.bases[1] as Name).id).toBe("Base2");
+			expect(stmt.keywords).toHaveLength(3);
+
+			const metaclassKw = stmt.keywords.find((kw) => kw.arg === "metaclass");
+			expect(metaclassKw).toBeDefined();
+			expect((metaclassKw?.value as Name).id).toBe("Meta");
+
+			const fooKw = stmt.keywords.find((kw) => kw.arg === "foo");
+			expect(fooKw).toBeDefined();
+			expect((fooKw?.value as Name).id).toBe("bar");
+
+			const bazKw = stmt.keywords.find((kw) => kw.arg === "baz");
+			expect(bazKw).toBeDefined();
+			expect((bazKw?.value as Constant).value).toBe(42);
+		});
+
+		test("class with only keyword arguments (no bases)", () => {
+			const stmt = parseStatement(
+				`class MyClass(metaclass=SingletonMeta, abstract=True):
+    pass`,
+			);
+			assertNodeType(stmt, "ClassDef");
+			expect(stmt.name).toBe("MyClass");
+			expect(stmt.bases).toHaveLength(0);
+			expect(stmt.keywords).toHaveLength(2);
+		});
+	});
+});
+
+describe("Decorator and Class-Header Branch Coverage", () => {
+	test("decorator followed by async-non-def throws", () => {
+		expect(() => parseCode("@deco\nasync x = 1\n")).toThrow(
+			/Invalid decorator target/,
+		);
+	});
+
+	test("decorated async def without a return-type annotation", () => {
+		// Only the decorated path routes through parseAsyncFunctionDef; a bare
+		// top-level `async def` goes through parseAsyncStmt instead, which
+		// delegates to parseFunctionDef.
+		const module = parseCode("@deco\nasync def f():\n    pass\n");
+		const fn = module.body[0] as ASTNode & { returns?: ASTNode };
+		expect(fn.nodeType).toBe("AsyncFunctionDef");
+		expect(fn.returns).toBeUndefined();
+	});
+
+	test("class with empty parentheses has no bases or keywords", () => {
+		const module = parseCode("class Foo():\n    pass\n");
+		const cls = module.body[0] as ASTNode & {
+			bases: unknown[];
+			keywords: unknown[];
+		};
+		expect(cls.nodeType).toBe("ClassDef");
+		expect(cls.bases).toEqual([]);
+		expect(cls.keywords).toEqual([]);
+	});
+
+	test("comment-only line between a decorator and its target does not throw", () => {
+		const module = parseCode(
+			"@deco\n# pragma: valid SAT pragma\ndef f():\n    pass\n",
+		);
+		const fn = module.body[0] as ASTNode & { lineno: number };
+		expect(fn.nodeType).toBe("FunctionDef");
+		expect(fn.lineno).toBe(3);
+	});
+
+	test("blank line between a decorator and its target does not throw", () => {
+		const module = parseCode("@deco\n\ndef f():\n    pass\n");
+		const fn = module.body[0] as ASTNode & { lineno: number };
+		expect(fn.nodeType).toBe("FunctionDef");
+		expect(fn.lineno).toBe(3);
+	});
+
+	test("multiple comment-only lines between stacked decorators do not throw", () => {
+		const module = parseCode(
+			"@deco1\n# note one\n# note two\n@deco2\n\nclass C:\n    pass\n",
+		);
+		const cls = module.body[0] as ASTNode & {
+			decorator_list: unknown[];
+			lineno: number;
+		};
+		expect(cls.nodeType).toBe("ClassDef");
+		expect(cls.decorator_list).toHaveLength(2);
+		expect(cls.lineno).toBe(6);
+	});
+});
+
+describe("Multiple ';'-separated statements in a single-line suite", () => {
+	// Verified against CPython 3.13: `simple_stmts: simple_stmt (';'
+	// simple_stmt)* [';'] NEWLINE` — a single-line suite can hold more than
+	// one `;`-separated statement, not just the first.
+	test("two statements, then a following 'else' clause", () => {
+		const stmt = parseStatement("if a: b = 1; del c\nelse: b = 2\n") as {
+			body: StmtNode[];
+		};
+		expect(stmt.body.map((s) => s.nodeType)).toEqual(["Assign", "Delete"]);
+	});
+
+	test("three statements on one line", () => {
+		const stmt = parseStatement("if a: b = 1; c = 2; d = 3\n") as {
+			body: StmtNode[];
+		};
+		expect(stmt.body).toHaveLength(3);
+	});
+
+	test("a trailing ';' right before the newline", () => {
+		const stmt = parseStatement("if a: b = 1;\nelse: b = 2\n") as {
+			body: StmtNode[];
+		};
+		expect(stmt.body).toHaveLength(1);
+	});
+
+	test("a trailing ';' at end of file (no trailing newline)", () => {
+		const stmt = parseStatement("if a: b = 1;") as { body: StmtNode[] };
+		expect(stmt.body).toHaveLength(1);
 	});
 });

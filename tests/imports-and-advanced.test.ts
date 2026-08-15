@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { RELATIVE_IMPORT_DOT_CASES } from "./fixtures/index.js";
 import { assertNodeType, parseStatement } from "./test-helpers.js";
 
 describe("Import Statements", () => {
@@ -72,27 +73,6 @@ describe("From Import Statements", () => {
 		expect(stmt.names[0].name).toBe("*");
 	});
 
-	test("relative import - single dot", () => {
-		const stmt = parseStatement("from . import module");
-		assertNodeType(stmt, "ImportFrom");
-		expect(stmt.level).toBe(1);
-		expect(stmt.module).toBeUndefined();
-		expect(stmt.names[0].name).toBe("module");
-	});
-
-	test("relative import - multiple dots", () => {
-		const stmt = parseStatement("from ... import module");
-		assertNodeType(stmt, "ImportFrom");
-		expect(stmt.level).toBe(3);
-	});
-
-	test("relative import with module", () => {
-		const stmt = parseStatement("from ..parent import module");
-		assertNodeType(stmt, "ImportFrom");
-		expect(stmt.level).toBe(2);
-		expect(stmt.module).toBe("parent");
-	});
-
 	test("dotted module from import", () => {
 		const stmt = parseStatement("from xml.etree import ElementTree");
 		assertNodeType(stmt, "ImportFrom");
@@ -101,48 +81,82 @@ describe("From Import Statements", () => {
 	});
 });
 
-describe("Match Statements (Python 3.10+)", () => {
-	test("simple match statement", () => {
-		const stmt = parseStatement(`match value:
-    case 1:
-        pass
-    case 2:
-        pass`);
-		assertNodeType(stmt, "Match");
-		expect(stmt.subject.nodeType).toBe("Name");
-		expect(stmt.cases).toHaveLength(2);
+describe("Relative Imports", () => {
+	// Verified against CPython 3.13: the lexer tokenizes any run of 3+ dots
+	// as one or more `...` (ELLIPSIS) tokens rather than that many DOT
+	// tokens, so e.g. 4 dots comes through as ELLIPSIS + DOT; the parser
+	// must still recover the correct total dot count as `level`.
+	test.each(RELATIVE_IMPORT_DOT_CASES)(
+		"$dots leading dot(s) with a module name sets level=$expectedLevel, module=$expectedModule",
+		({ code, expectedLevel, expectedModule }) => {
+			const stmt = parseStatement(`${code}\n`);
+			assertNodeType(stmt, "ImportFrom");
+			expect(stmt.level).toBe(expectedLevel);
+			expect(stmt.module).toBe(expectedModule);
+		},
+	);
+
+	test("single dot with no module name after the dot leaves module undefined", () => {
+		const stmt = parseStatement("from . import module");
+		assertNodeType(stmt, "ImportFrom");
+		expect(stmt.level).toBe(1);
+		expect(stmt.module).toBeUndefined();
+		expect(stmt.names[0].name).toBe("module");
 	});
 
-	test("match with pattern and guard", () => {
-		const stmt = parseStatement(`match value:
-    case x if x > 0:
-        pass`);
-		assertNodeType(stmt, "Match");
-		expect(stmt.cases[0].guard?.nodeType).toBe("Compare");
+	test("multiple dots with no module name after the dots leaves module undefined", () => {
+		const stmt = parseStatement("from ... import module");
+		assertNodeType(stmt, "ImportFrom");
+		expect(stmt.level).toBe(3);
+		expect(stmt.module).toBeUndefined();
+	});
+});
+
+describe("Lazy Imports (PEP 810, Python 3.15+)", () => {
+	test("'lazy import module' sets is_lazy", () => {
+		const stmt = parseStatement("lazy import os\n");
+		assertNodeType(stmt, "Import");
+		expect(stmt.is_lazy).toBe(1);
+		expect(stmt.names[0].name).toBe("os");
 	});
 
-	test("match with wildcard", () => {
-		const stmt = parseStatement(`match value:
-    case 1:
-        pass
-    case _:
-        pass`);
-		assertNodeType(stmt, "Match");
-		expect(stmt.cases).toHaveLength(2);
+	test("'lazy from module import name' sets is_lazy", () => {
+		const stmt = parseStatement("lazy from os import path\n");
+		assertNodeType(stmt, "ImportFrom");
+		expect(stmt.is_lazy).toBe(1);
+		expect(stmt.module).toBe("os");
 	});
 
-	test("match with comments between statement and cases (regression test)", () => {
-		// This tests the fix for indentation parsing errors when comments appear
-		// between the match statement header and the case statements
-		const stmt = parseStatement(`match data:
-    # This is a comment
-    case {
-        'type': 'A'
-    }:
-        print("A")`);
-		assertNodeType(stmt, "Match");
-		expect(stmt.cases).toHaveLength(1);
-		expect(stmt.cases[0].pattern.nodeType).toBe("MatchMapping");
+	test("plain 'import'/'from...import' leave is_lazy unset", () => {
+		const importStmt = parseStatement("import os\n");
+		assertNodeType(importStmt, "Import");
+		expect(importStmt.is_lazy).toBeUndefined();
+
+		const fromStmt = parseStatement("from os import path\n");
+		assertNodeType(fromStmt, "ImportFrom");
+		expect(fromStmt.is_lazy).toBeUndefined();
+	});
+
+	test("'lazy' remains usable as an ordinary identifier (soft keyword)", () => {
+		expect(parseStatement("lazy = 5\n").nodeType).toBe("Assign");
+		expect(parseStatement("lazy(x)\n").nodeType).toBe("Expr");
+		expect(parseStatement("def lazy():\n    pass\n").nodeType).toBe(
+			"FunctionDef",
+		);
+	});
+
+	test("lazy import with dotted module and alias", () => {
+		const stmt = parseStatement("lazy import os.path as p\n");
+		assertNodeType(stmt, "Import");
+		expect(stmt.is_lazy).toBe(1);
+		expect(stmt.names[0]).toMatchObject({ name: "os.path", asname: "p" });
+	});
+
+	test("lazy relative from-import", () => {
+		const stmt = parseStatement("lazy from . import module\n");
+		assertNodeType(stmt, "ImportFrom");
+		expect(stmt.is_lazy).toBe(1);
+		expect(stmt.level).toBe(1);
 	});
 });
 

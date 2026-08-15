@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import type {
 	Arguments,
 	BinOp,
@@ -270,172 +270,246 @@ describe("getSourceSegment", () => {
 	});
 });
 
+interface AstFactoryCase {
+	name: string;
+	run: () => void;
+}
+
+const AST_FACTORY_CASES: AstFactoryCase[] = [
+	{
+		name: "Name",
+		run: () => {
+			const node = ast.Name("x");
+			expect(node.nodeType).toBe("Name");
+			expect(node.id).toBe("x");
+			expect(node.ctx.nodeType).toBe("Load");
+			expect(node.lineno).toBe(1);
+			expect(node.col_offset).toBe(0);
+		},
+	},
+	{
+		name: "Name (explicit context)",
+		run: () => {
+			const node = ast.Name("x", "Store");
+			expect(node.ctx.nodeType).toBe("Store");
+		},
+	},
+	{
+		name: "Constant",
+		run: () => {
+			const node = ast.Constant(42);
+			expect(node.nodeType).toBe("Constant");
+			expect(node.value).toBe(42);
+			expect(node.kind).toBeUndefined();
+		},
+	},
+	{
+		name: "Constant (with kind)",
+		run: () => {
+			const node = ast.Constant("hi", "u");
+			expect(node.kind).toBe("u");
+		},
+	},
+	{
+		name: "Call (defaults)",
+		run: () => {
+			const node = ast.Call(ast.Name("print"));
+			expect(node.nodeType).toBe("Call");
+			expect(node.args).toEqual([]);
+			expect(node.keywords).toEqual([]);
+		},
+	},
+	{
+		name: "Call (args and keywords)",
+		run: () => {
+			const node = ast.Call(ast.Name("print"), [ast.Constant("hi")], []);
+			expect(node.args).toHaveLength(1);
+		},
+	},
+	{
+		name: "BinOp (operator node)",
+		run: () => {
+			const node = ast.BinOp(
+				ast.Constant(1),
+				{ nodeType: "Add" } as Operator,
+				ast.Constant(2),
+			);
+			expect(node.op.nodeType).toBe("Add");
+		},
+	},
+	{
+		name: "BinOp (string operator shorthand)",
+		run: () => {
+			const node = ast.BinOp(ast.Constant(1), "Add", ast.Constant(2));
+			expect(node.op.nodeType).toBe("Add");
+		},
+	},
+	{
+		name: "Assign",
+		run: () => {
+			const node = ast.Assign([ast.Name("x", "Store")], ast.Constant(1));
+			expect(node.nodeType).toBe("Assign");
+			expect(node.type_comment).toBeUndefined();
+		},
+	},
+	{
+		name: "Assign (with type comment)",
+		run: () => {
+			const node = ast.Assign([ast.Name("x", "Store")], ast.Constant(1), "int");
+			expect(node.type_comment).toBe("int");
+		},
+	},
+	{
+		name: "Expr",
+		run: () => {
+			const node = ast.Expr(ast.Constant(1));
+			expect(node.nodeType).toBe("Expr");
+		},
+	},
+	{
+		name: "List",
+		run: () => {
+			const node = ast.List([ast.Constant(1)]);
+			expect(node.nodeType).toBe("List");
+			expect(node.ctx.nodeType).toBe("Load");
+		},
+	},
+	{
+		name: "Tuple",
+		run: () => {
+			const node = ast.Tuple([ast.Constant(1)], "Store");
+			expect(node.nodeType).toBe("Tuple");
+			expect(node.ctx.nodeType).toBe("Store");
+		},
+	},
+	{
+		name: "Attribute",
+		run: () => {
+			const node = ast.Attribute(ast.Name("obj"), "attr");
+			expect(node.nodeType).toBe("Attribute");
+			expect(node.attr).toBe("attr");
+		},
+	},
+	{
+		name: "Dict",
+		run: () => {
+			const node = ast.Dict([ast.Constant("k")], [ast.Constant("v")]);
+			expect(node.nodeType).toBe("Dict");
+		},
+	},
+	{
+		name: "NamedExpr",
+		run: () => {
+			const node = ast.NamedExpr(ast.Name("x", "Store"), ast.Constant(1));
+			expect(node.nodeType).toBe("NamedExpr");
+		},
+	},
+	{
+		name: "Lambda",
+		run: () => {
+			const emptyArgs = {
+				posonlyargs: [],
+				args: [],
+				vararg: undefined,
+				kwonlyargs: [],
+				kw_defaults: [],
+				kwarg: undefined,
+				defaults: [],
+			} as unknown as Arguments;
+			const node = ast.Lambda(emptyArgs, ast.Constant(1));
+			expect(node.nodeType).toBe("Lambda");
+		},
+	},
+	{
+		name: "IfExp",
+		run: () => {
+			const node = ast.IfExp(
+				ast.Name("cond"),
+				ast.Constant(1),
+				ast.Constant(2),
+			);
+			expect(node.nodeType).toBe("IfExp");
+		},
+	},
+	{
+		name: "Await",
+		run: () => {
+			const node = ast.Await(ast.Name("x"));
+			expect(node.nodeType).toBe("Await");
+		},
+	},
+	{
+		name: "Yield (no value)",
+		run: () => {
+			const node = ast.Yield();
+			expect(node.nodeType).toBe("Yield");
+			expect(node.value).toBeUndefined();
+		},
+	},
+	{
+		name: "Yield (with value)",
+		run: () => {
+			const node = ast.Yield(ast.Constant(1));
+			expect(node.value).toBeDefined();
+		},
+	},
+	{
+		name: "YieldFrom",
+		run: () => {
+			const node = ast.YieldFrom(ast.Name("gen"));
+			expect(node.nodeType).toBe("YieldFrom");
+		},
+	},
+	{
+		name: "Starred",
+		run: () => {
+			const node = ast.Starred(ast.Name("args"));
+			expect(node.nodeType).toBe("Starred");
+			expect(node.ctx.nodeType).toBe("Load");
+		},
+	},
+	{
+		name: "Slice (all bounds)",
+		run: () => {
+			const node = ast.Slice(
+				ast.Constant(0),
+				ast.Constant(10),
+				ast.Constant(2),
+			);
+			expect(node.nodeType).toBe("Slice");
+			expect(node.lower).toBeDefined();
+			expect(node.upper).toBeDefined();
+			expect(node.step).toBeDefined();
+		},
+	},
+	{
+		name: "Slice (no bounds)",
+		run: () => {
+			const node = ast.Slice();
+			expect(node.lower).toBeUndefined();
+			expect(node.upper).toBeUndefined();
+			expect(node.step).toBeUndefined();
+		},
+	},
+	{
+		name: "Delete",
+		run: () => {
+			const node = ast.Delete([ast.Name("x", "Del")]);
+			expect(node.nodeType).toBe("Delete");
+		},
+	},
+	{
+		name: "Nonlocal",
+		run: () => {
+			const node = ast.Nonlocal(["x", "y"]);
+			expect(node.nodeType).toBe("Nonlocal");
+			expect(node.names).toEqual(["x", "y"]);
+		},
+	},
+];
+
 describe("ast factory", () => {
-	it("builds a Name node", () => {
-		const node = ast.Name("x");
-		expect(node.nodeType).toBe("Name");
-		expect(node.id).toBe("x");
-		expect(node.ctx.nodeType).toBe("Load");
-		expect(node.lineno).toBe(1);
-		expect(node.col_offset).toBe(0);
-	});
-
-	it("builds a Name node with an explicit context", () => {
-		const node = ast.Name("x", "Store");
-		expect(node.ctx.nodeType).toBe("Store");
-	});
-
-	it("builds a Constant node", () => {
-		const node = ast.Constant(42);
-		expect(node.nodeType).toBe("Constant");
-		expect(node.value).toBe(42);
-		expect(node.kind).toBeUndefined();
-	});
-
-	it("builds a Constant node with a kind", () => {
-		const node = ast.Constant("hi", "u");
-		expect(node.kind).toBe("u");
-	});
-
-	it("builds a Call node with defaults", () => {
-		const node = ast.Call(ast.Name("print"));
-		expect(node.nodeType).toBe("Call");
-		expect(node.args).toEqual([]);
-		expect(node.keywords).toEqual([]);
-	});
-
-	it("builds a Call node with args and keywords", () => {
-		const node = ast.Call(ast.Name("print"), [ast.Constant("hi")], []);
-		expect(node.args).toHaveLength(1);
-	});
-
-	it("builds a BinOp node with an operator node", () => {
-		const node = ast.BinOp(
-			ast.Constant(1),
-			{ nodeType: "Add" } as Operator,
-			ast.Constant(2),
-		);
-		expect(node.op.nodeType).toBe("Add");
-	});
-
-	it("builds a BinOp node with a string operator shorthand", () => {
-		const node = ast.BinOp(ast.Constant(1), "Add", ast.Constant(2));
-		expect(node.op.nodeType).toBe("Add");
-	});
-
-	it("builds an Assign node", () => {
-		const node = ast.Assign([ast.Name("x", "Store")], ast.Constant(1));
-		expect(node.nodeType).toBe("Assign");
-		expect(node.type_comment).toBeUndefined();
-	});
-
-	it("builds an Assign node with a type comment", () => {
-		const node = ast.Assign([ast.Name("x", "Store")], ast.Constant(1), "int");
-		expect(node.type_comment).toBe("int");
-	});
-
-	it("builds an Expr node", () => {
-		const node = ast.Expr(ast.Constant(1));
-		expect(node.nodeType).toBe("Expr");
-	});
-
-	it("builds a List node", () => {
-		const node = ast.List([ast.Constant(1)]);
-		expect(node.nodeType).toBe("List");
-		expect(node.ctx.nodeType).toBe("Load");
-	});
-
-	it("builds a Tuple node", () => {
-		const node = ast.Tuple([ast.Constant(1)], "Store");
-		expect(node.nodeType).toBe("Tuple");
-		expect(node.ctx.nodeType).toBe("Store");
-	});
-
-	it("builds an Attribute node", () => {
-		const node = ast.Attribute(ast.Name("obj"), "attr");
-		expect(node.nodeType).toBe("Attribute");
-		expect(node.attr).toBe("attr");
-	});
-
-	it("builds a Dict node", () => {
-		const node = ast.Dict([ast.Constant("k")], [ast.Constant("v")]);
-		expect(node.nodeType).toBe("Dict");
-	});
-
-	it("builds a NamedExpr node", () => {
-		const node = ast.NamedExpr(ast.Name("x", "Store"), ast.Constant(1));
-		expect(node.nodeType).toBe("NamedExpr");
-	});
-
-	it("builds a Lambda node", () => {
-		const emptyArgs = {
-			posonlyargs: [],
-			args: [],
-			vararg: undefined,
-			kwonlyargs: [],
-			kw_defaults: [],
-			kwarg: undefined,
-			defaults: [],
-		} as unknown as Arguments;
-		const node = ast.Lambda(emptyArgs, ast.Constant(1));
-		expect(node.nodeType).toBe("Lambda");
-	});
-
-	it("builds an IfExp node", () => {
-		const node = ast.IfExp(ast.Name("cond"), ast.Constant(1), ast.Constant(2));
-		expect(node.nodeType).toBe("IfExp");
-	});
-
-	it("builds an Await node", () => {
-		const node = ast.Await(ast.Name("x"));
-		expect(node.nodeType).toBe("Await");
-	});
-
-	it("builds a Yield node with no value", () => {
-		const node = ast.Yield();
-		expect(node.nodeType).toBe("Yield");
-		expect(node.value).toBeUndefined();
-	});
-
-	it("builds a Yield node with a value", () => {
-		const node = ast.Yield(ast.Constant(1));
-		expect(node.value).toBeDefined();
-	});
-
-	it("builds a YieldFrom node", () => {
-		const node = ast.YieldFrom(ast.Name("gen"));
-		expect(node.nodeType).toBe("YieldFrom");
-	});
-
-	it("builds a Starred node", () => {
-		const node = ast.Starred(ast.Name("args"));
-		expect(node.nodeType).toBe("Starred");
-		expect(node.ctx.nodeType).toBe("Load");
-	});
-
-	it("builds a Slice node with all bounds", () => {
-		const node = ast.Slice(ast.Constant(0), ast.Constant(10), ast.Constant(2));
-		expect(node.nodeType).toBe("Slice");
-		expect(node.lower).toBeDefined();
-		expect(node.upper).toBeDefined();
-		expect(node.step).toBeDefined();
-	});
-
-	it("builds a Slice node with no bounds", () => {
-		const node = ast.Slice();
-		expect(node.lower).toBeUndefined();
-		expect(node.upper).toBeUndefined();
-		expect(node.step).toBeUndefined();
-	});
-
-	it("builds a Delete node", () => {
-		const node = ast.Delete([ast.Name("x", "Del")]);
-		expect(node.nodeType).toBe("Delete");
-	});
-
-	it("builds a Nonlocal node", () => {
-		const node = ast.Nonlocal(["x", "y"]);
-		expect(node.nodeType).toBe("Nonlocal");
-		expect(node.names).toEqual(["x", "y"]);
+	test.each(AST_FACTORY_CASES)("builds a $name node", ({ run }) => {
+		run();
 	});
 });

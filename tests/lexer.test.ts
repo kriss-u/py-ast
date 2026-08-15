@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import { Lexer, TokenType, utf8Length, utf8LengthAt } from "../src/lexer.js";
+import { parseCode, parseStatement } from "./test-helpers.js";
 
 function tokenTypes(source: string) {
 	return new Lexer(source).tokenize().map((t) => t.type);
@@ -92,13 +93,14 @@ describe("Lexer f-strings", () => {
 		expect(strTok?.value).toBe('f"abc}def"');
 	});
 
-	it("scans a closed raw f-string (rf/fr), tracking braces so a quote inside them doesn't end the string early", () => {
-		for (const prefix of ["rf", "fr"]) {
+	test.each(["rf", "fr"])(
+		"scans a closed raw f-string with the %s prefix, tracking braces so a quote inside them doesn't end the string early",
+		(prefix) => {
 			const tokens = new Lexer(`${prefix}"{d['key']}"`).tokenize();
 			const strTok = tokens.find((t) => t.type === TokenType.STRING);
 			expect(strTok?.value).toBe(`${prefix}"{d['key']}"`);
-		}
-	});
+		},
+	);
 });
 
 describe("Lexer t-strings", () => {
@@ -138,21 +140,23 @@ describe("Lexer t-strings", () => {
 		expect(strTok?.value).toContain("d['key']");
 	});
 
-	it("scans a closed raw t-string (tr/rt), tracking braces so a quote inside them doesn't end the string early", () => {
-		for (const prefix of ["tr", "rt"]) {
+	test.each(["tr", "rt"])(
+		"scans a closed raw t-string with the %s prefix, tracking braces so a quote inside them doesn't end the string early",
+		(prefix) => {
 			const tokens = new Lexer(`${prefix}"{d['key']}"`).tokenize();
 			const strTok = tokens.find((t) => t.type === TokenType.STRING);
 			expect(strTok?.value).toBe(`${prefix}"{d['key']}"`);
-		}
-	});
+		},
+	);
 
-	it("does not go negative on a stray closing brace in a raw f-string/t-string outside any field", () => {
-		for (const prefix of ["rf", "tr"]) {
+	test.each(["rf", "tr"])(
+		"does not go negative on a stray closing brace in a raw %s-prefixed string outside any field",
+		(prefix) => {
 			const tokens = new Lexer(`${prefix}"abc}def"`).tokenize();
 			const strTok = tokens.find((t) => t.type === TokenType.STRING);
 			expect(strTok?.value).toBe(`${prefix}"abc}def"`);
-		}
-	});
+		},
+	);
 });
 
 describe("Lexer prefixed strings", () => {
@@ -336,7 +340,7 @@ describe("UTF-8 byte-offset column tracking", () => {
 	});
 
 	it("utf8LengthAt: falls back to 3 bytes for an unpaired high surrogate", () => {
-		const lone = String.fromCharCode(0xd800) + "x";
+		const lone = `${String.fromCharCode(0xd800)}x`;
 		expect(utf8LengthAt(lone, 0)).toBe(3);
 	});
 
@@ -352,5 +356,72 @@ describe("UTF-8 byte-offset column tracking", () => {
 		const tokens = new Lexer("x = '😀' + 1\n").tokenize();
 		const plus = tokens.find((t) => t.type === TokenType.PLUS);
 		expect(plus?.col_offset).toBe(11);
+	});
+});
+
+describe("CRLF line endings", () => {
+	// Verified against CPython 3.13: `ast.parse` performs universal-newline
+	// translation (`\r\n`/`\r` -> `\n`) on the whole source, including inside
+	// string literals, before tokenizing.
+	it("indentation tracking isn't thrown off by \\r\\n", () => {
+		const ast = parseCode(
+			"class C:\r\n    x = 1\r\n\r\n    def f(self):\r\n        pass\r\n",
+		);
+		const cls = ast.body[0] as { body: import("../src/types.js").StmtNode[] };
+		expect(cls.body).toHaveLength(2);
+		expect(cls.body[1].nodeType).toBe("FunctionDef");
+	});
+
+	it("a \\r\\n inside a triple-quoted string is normalized to \\n", () => {
+		const tokens = new Lexer('"""line1\r\nline2"""').tokenize();
+		const strTok = tokens.find((t) => t.type === TokenType.STRING);
+		expect(strTok?.value).toBe('"""line1\nline2"""');
+	});
+
+	it("lone \\r line endings are also normalized", () => {
+		const ast = parseCode("x = 1\ry = 2\r");
+		expect(ast.body).toHaveLength(2);
+	});
+});
+
+describe("Source with no trailing newline", () => {
+	// Verified against CPython 3.13: `ast.parse("def f():\n    return")` (no
+	// trailing `\n`) is valid. Without a real `\n` character, nothing emitted
+	// the `NEWLINE` a `return`/`yield` normally ends on, so the parser read
+	// straight into `DEDENT`/`EOF` and misread it as the statement's optional
+	// value.
+	it("synthesizes a trailing NEWLINE before EOF", () => {
+		const tokens = new Lexer("x = 1").tokenize();
+		expect(tokens.at(-2)?.type).toBe(TokenType.NEWLINE);
+		expect(tokens.at(-1)?.type).toBe(TokenType.EOF);
+	});
+
+	it("a bare 'return' as the last line", () => {
+		const stmt = parseStatement("def f():\n    return") as {
+			body: import("../src/types.js").StmtNode[];
+		};
+		const ret = stmt.body[0] as { nodeType: string; value?: unknown };
+		expect(ret.nodeType).toBe("Return");
+		expect(ret.value).toBeUndefined();
+	});
+
+	it("a bare 'yield' as the last line", () => {
+		const stmt = parseStatement("def f():\n    yield") as {
+			body: { value: { value?: unknown } }[];
+		};
+		const yieldExpr = stmt.body[0].value;
+		expect(yieldExpr.value).toBeUndefined();
+	});
+
+	it("a value-bearing 'return' as the last line still parses its value", () => {
+		const stmt = parseStatement("def f():\n    return 1") as {
+			body: { value: { value: number } }[];
+		};
+		expect(stmt.body[0].value.value).toBe(1);
+	});
+
+	it("a simple statement with no trailing newline", () => {
+		const ast = parseCode("x = 1");
+		expect(ast.body).toHaveLength(1);
 	});
 });
