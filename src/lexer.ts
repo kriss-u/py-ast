@@ -1182,9 +1182,7 @@ export class Lexer {
 				// Handle line continuation
 				if (this.peek(1) === "\n") {
 					this.advance(); // consume '\\'
-					this.advance(); // consume '\n'
-					this.position.line++;
-					this.position.column = 0;
+					this.advance(); // consume '\n' (already advances line/column)
 					return; // Don't emit a token, just continue
 				} else {
 					throw new Error(

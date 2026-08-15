@@ -170,6 +170,49 @@ world"""`);
 		expect(unparsed).toBe('x = f"hello {name}"');
 	});
 
+	test("preserves u-prefixed strings and sets Constant.kind to CPython's real 'u' value", () => {
+		const code = 'x = u"hello world"';
+		const ast = parse(code);
+		const assign = ast.body[0] as Extract<
+			(typeof ast.body)[number],
+			{ nodeType: "Assign" }
+		>;
+		const constant = assign.value as Extract<
+			typeof assign.value,
+			{ nodeType: "Constant" }
+		>;
+		expect(constant.kind).toBe("u");
+		expect(unparse(ast)).toBe('x = u"hello world"');
+	});
+
+	test("an uppercase U-prefixed string also gets kind 'u'", () => {
+		const code = "x = U'hello world'";
+		const ast = parse(code);
+		const assign = ast.body[0] as Extract<
+			(typeof ast.body)[number],
+			{ nodeType: "Assign" }
+		>;
+		const constant = assign.value as Extract<
+			typeof assign.value,
+			{ nodeType: "Constant" }
+		>;
+		expect(constant.kind).toBe("u");
+	});
+
+	test("a plain (non-u-prefixed) string has no kind, matching CPython", () => {
+		const code = 'x = "hello world"';
+		const ast = parse(code);
+		const assign = ast.body[0] as Extract<
+			(typeof ast.body)[number],
+			{ nodeType: "Assign" }
+		>;
+		const constant = assign.value as Extract<
+			typeof assign.value,
+			{ nodeType: "Constant" }
+		>;
+		expect(constant.kind).toBeUndefined();
+	});
+
 	test("preserves mixed quote styles in collections", () => {
 		const code = `lst = ['single', "double", '''triple''', """triple2"""]`;
 		const ast = parse(code);
@@ -179,8 +222,10 @@ world"""`);
 		);
 	});
 
-	test("defaults to double quotes for strings without kind info", () => {
-		// Create a constant node manually without kind info
+	test("defaults to double quotes for strings without a recorded quote style", () => {
+		// Create a constant node manually, not via parse() — no original
+		// quote style is recorded for it, so the unparser falls back to its
+		// default.
 		const ast: Module = {
 			nodeType: "Module",
 			body: [

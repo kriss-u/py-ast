@@ -651,7 +651,6 @@ describe("Unparser Edge Cases", () => {
 				conversion: -1,
 				format_spec: {
 					nodeType: "JoinedStr",
-					kind: 'f"',
 					values: [
 						{
 							nodeType: "Constant",
@@ -690,7 +689,6 @@ describe("Unparser Edge Cases", () => {
 		test("JoinedStr value with a non-JoinedStr format_spec on its FormattedValue", () => {
 			const node: JoinedStr = {
 				nodeType: "JoinedStr",
-				kind: 'f"',
 				values: [
 					{
 						nodeType: "FormattedValue",
@@ -722,7 +720,6 @@ describe("Unparser Edge Cases", () => {
 		test("JoinedStr containing a raw expression value (not Constant/FormattedValue)", () => {
 			const node: JoinedStr = {
 				nodeType: "JoinedStr",
-				kind: 'f"',
 				values: [
 					{
 						nodeType: "Name",
@@ -847,7 +844,6 @@ describe("Unparser Edge Cases", () => {
 		test("FormattedValue inside a JoinedStr with an unrecognized conversion code writes no conversion marker", () => {
 			const node: JoinedStr = {
 				nodeType: "JoinedStr",
-				kind: 'f"',
 				values: [
 					{
 						nodeType: "FormattedValue",

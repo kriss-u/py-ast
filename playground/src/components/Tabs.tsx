@@ -7,9 +7,11 @@ export interface TabsProps {
 	onToggleExcludeComments: (value: boolean) => void;
 	onCopyJson: () => void;
 	copied: boolean;
+	onExpandAll: () => void;
+	onCollapseAll: () => void;
 }
 
-/** Tab switcher for the tree/JSON panes, the "exclude comments" toggle, and a copy-JSON action. */
+/** Tab switcher for the tree/JSON panes, fold-all actions, the "exclude comments" toggle, and a copy-JSON action. */
 export function Tabs({
 	activeTab,
 	onTabChange,
@@ -17,6 +19,8 @@ export function Tabs({
 	onToggleExcludeComments,
 	onCopyJson,
 	copied,
+	onExpandAll,
+	onCollapseAll,
 }: TabsProps) {
 	return (
 		<div className="tabs">
@@ -37,6 +41,12 @@ export function Tabs({
 				</button>
 			</div>
 			<div className="tabs-actions">
+				<button type="button" className="fold-action-button" onClick={onExpandAll} title="Expand all">
+					Expand All
+				</button>
+				<button type="button" className="fold-action-button" onClick={onCollapseAll} title="Collapse all">
+					Collapse All
+				</button>
 				<button type="button" className="copy-json-button" onClick={onCopyJson}>
 					{copied ? "Copied!" : "Copy JSON"}
 				</button>

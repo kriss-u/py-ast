@@ -122,17 +122,29 @@ body {
 	min-height: 0;
 }
 
+.panes-resizing {
+	cursor: col-resize;
+	user-select: none;
+}
+
 .pane {
 	flex: 1;
 	min-width: 0;
 	min-height: 0;
 	display: flex;
 	flex-direction: column;
-	border-right: 1px solid var(--border);
 }
 
-.pane-output {
-	border-right: none;
+.pane-resizer {
+	flex: 0 0 auto;
+	width: 6px;
+	background: var(--border);
+	cursor: col-resize;
+}
+
+.pane-resizer:hover,
+.panes-resizing .pane-resizer {
+	background: var(--accent);
 }
 
 .pane-editor {
@@ -189,6 +201,21 @@ body {
 	background: var(--hover-bg);
 }
 
+.fold-action-button {
+	background: transparent;
+	border: 1px solid var(--border);
+	color: var(--text-dim);
+	padding: 0.2rem 0.6rem;
+	border-radius: 4px;
+	cursor: pointer;
+	font-size: 0.8rem;
+}
+
+.fold-action-button:hover {
+	color: var(--text);
+	background: var(--hover-bg);
+}
+
 .tab-button {
 	background: transparent;
 	border: 1px solid transparent;
@@ -228,6 +255,10 @@ body {
 	line-height: 1.5;
 	padding: 0.5rem 0;
 	user-select: none;
+}
+
+.tree-view {
+	padding-left: 0.5rem;
 }
 
 .node-row {
@@ -313,6 +344,79 @@ body {
 .tok-nodetype {
 	color: var(--tok-nodetype);
 	font-weight: 600;
+}
+
+/*
+ * JSON view: a code-editor-style read-only view, distinct from the tree
+ * view's inline +/- disclosure rows. A sticky gutter (line numbers + fold
+ * arrows) sits beside a selectable content pane; every gutter/content cell
+ * pair is a direct grid child (rendered flat, not nested) so CSS Grid's
+ * implicit row placement lines them up automatically regardless of fold
+ * depth.
+ */
+.json-code-view {
+	padding: 0;
+}
+
+.json-code-grid {
+	display: grid;
+	grid-template-columns: auto 1fr;
+	user-select: text;
+	width: fit-content;
+	min-width: 100%;
+}
+
+.json-gutter {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 0.35rem;
+	padding: 0 0.6rem;
+	user-select: none;
+	color: var(--text-dim);
+	background: var(--bg-header);
+	border-right: 1px solid var(--border);
+	position: sticky;
+	left: 0;
+}
+
+.json-linenum {
+	width: var(--json-linenum-width, 2ch);
+	text-align: right;
+}
+
+.json-fold-arrow {
+	appearance: none;
+	background: transparent;
+	border: none;
+	color: var(--text-dim);
+	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0.15rem;
+	margin: 0;
+	font-size: 1rem;
+	width: 1.1rem;
+	height: 1.1rem;
+	line-height: 1;
+	border-radius: 3px;
+	flex-shrink: 0;
+}
+
+button.json-fold-arrow:hover {
+	color: var(--text);
+	background: var(--hover-bg);
+}
+
+.json-line {
+	white-space: pre;
+	padding: 0 0.6rem;
+}
+
+.json-gutter[data-active],
+.json-line[data-active] {
+	background: var(--highlight);
 }
 
 .error-banner {
