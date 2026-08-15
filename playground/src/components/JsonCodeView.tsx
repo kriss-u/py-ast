@@ -124,6 +124,12 @@ interface RenderContext {
 	toggle: (key: unknown) => void;
 	activeNode: ASTNodeUnion | null;
 	registerRef: (key: unknown, el: HTMLDivElement | null) => void;
+	/**
+	 * Set while descending into an active node's expanded children, so every
+	 * row belonging to its block (not just its own header/close lines) is
+	 * rendered active — matching {@link TreeView}'s whole-block highlight.
+	 */
+	forceActive?: boolean;
 }
 
 /**
@@ -187,6 +193,7 @@ function renderRows(
 		foldable: false,
 		isOpen: false,
 		onToggle: null,
+		isActive: ctx.forceActive,
 		content: (
 			<span style={indent}>
 				{labelNode}
@@ -212,7 +219,8 @@ function renderContainer(
 	indent: React.CSSProperties,
 ): React.ReactNode[] {
 	const isOpen = ctx.expanded.has(value);
-	const isActive = ctx.activeNode !== null && (value as ASTNodeUnion) === ctx.activeNode;
+	const isOwnActive = ctx.activeNode !== null && (value as ASTNodeUnion) === ctx.activeNode;
+	const isActive = ctx.forceActive || isOwnActive;
 	const closesInline = isEmpty || !isOpen;
 
 	const rows: React.ReactNode[] = [];
@@ -240,6 +248,7 @@ function renderContainer(
 	rows.push(<GutterAndLine key={headerRow.key} row={headerRow} />);
 
 	if (isOpen && !isEmpty) {
+		const childCtx = isActive ? { ...ctx, forceActive: true } : ctx;
 		for (let i = 0; i < entries.length; i++) {
 			const entry = entries[i];
 			const isRecordKeepingOnly = entry.key === RECORD_KEEPING_ONLY_FIELD;
@@ -249,7 +258,9 @@ function renderContainer(
 					entry.value,
 					depth + 1,
 					i < entries.length - 1,
-					isRecordKeepingOnly ? { ...ctx, activeNode: null, registerRef: () => {} } : ctx,
+					isRecordKeepingOnly
+						? { ...childCtx, activeNode: null, forceActive: false, registerRef: () => {} }
+						: childCtx,
 					`${keyPrefix}.${entry.key}`,
 				),
 			);
@@ -263,6 +274,7 @@ function renderContainer(
 			foldable: false,
 			isOpen: false,
 			onToggle: null,
+			isActive,
 			content: (
 				<span style={indent}>
 					<span className="node-bracket">{bracketClose}</span>
