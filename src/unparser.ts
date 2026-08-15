@@ -749,6 +749,16 @@ class Unparser extends NodeVisitor {
 	/** Renders an expression-statement (an expression evaluated for its side effects). */
 	visit_Expr(node: Extract<StmtNode, { nodeType: "Expr" }>): void {
 		this.fill();
+		// A bare `x := 1` expression statement is a syntax error in CPython
+		// (the walrus target needs enclosing parens outside of contexts like
+		// `if`/`while` conditions and comprehensions) — match `ast.unparse`,
+		// which always parenthesizes a top-level `NamedExpr` statement.
+		if (node.value.nodeType === "NamedExpr") {
+			this.write("(");
+			this.visit(node.value);
+			this.write(")");
+			return;
+		}
 		this.visit(node.value);
 	}
 
@@ -1096,7 +1106,16 @@ class Unparser extends NodeVisitor {
 		}
 	}
 
-	/** Renders a boolean operator expression, joining `values` with `" and "`/`" or "`. */
+	/**
+	 * Renders a boolean operator expression, joining `values` with
+	 * `" and "`/`" or "`. An operand that is itself a `BoolOp` with the
+	 * *same* operator always gets explicit parens, even though flattening
+	 * it would be semantically equivalent (`and`/`or` are associative) —
+	 * `values` is a flat n-ary list, so without parens a nested same-op
+	 * `BoolOp` and a naturally-flat chain unparse identically and can't be
+	 * told apart on re-parse. Matches CPython's own `ast.unparse`, which
+	 * makes the same choice to preserve the original tree shape.
+	 */
 	visit_BoolOp(node: Extract<ExprNode, { nodeType: "BoolOp" }>): void {
 		const precedence =
 			node.op.nodeType === "Or" ? Precedence.OR : Precedence.AND;
@@ -1104,7 +1123,17 @@ class Unparser extends NodeVisitor {
 
 		this.interleave(
 			opSymbol,
-			(value) => this.visitParenthesizedIfNeeded(precedence, value),
+			(value) => {
+				const needsParens =
+					value.nodeType === "BoolOp" && value.op.nodeType === node.op.nodeType;
+				if (needsParens) {
+					this.write("(");
+					this.visit(value);
+					this.write(")");
+				} else {
+					this.visitParenthesizedIfNeeded(precedence, value);
+				}
+			},
 			node.values,
 		);
 	}
@@ -1180,7 +1209,12 @@ class Unparser extends NodeVisitor {
 	 */
 	visit_Lambda(node: Extract<ExprNode, { nodeType: "Lambda" }>): void {
 		this.write("lambda");
-		if (node.args.args.length > 0 || node.args.vararg || node.args.kwarg) {
+		if (
+			node.args.args.length > 0 ||
+			node.args.vararg ||
+			node.args.kwarg ||
+			node.args.kwonlyargs.length > 0
+		) {
 			this.write(" ");
 			this.visit_arguments(node.args);
 		}
@@ -1380,7 +1414,18 @@ class Unparser extends NodeVisitor {
 		style: InterpolatedStringLiteralStyle,
 	): void {
 		this.write("{");
+		// If `value` renders starting with its own literal `{` (a `Dict`,
+		// `DictComp`, `Set`, or `SetComp`), that `{` would sit directly next
+		// to this field's own opening `{` — CPython's f-string tokenizer
+		// folds a leading `{{` to an escaped literal brace before it even
+		// considers field boundaries, so `f"{{1: 2}}"` doesn't mean what it
+		// looks like. A space between them disambiguates, matching what
+		// CPython requires source-side for the same expression.
+		const exprStart = this.context.source.length;
 		this.visit(value);
+		if (this.context.source[exprStart]?.startsWith("{")) {
+			this.context.source.splice(exprStart, 0, " ");
+		}
 		if (conversion !== -1) {
 			if (conversion === 115) this.write("!s");
 			else if (conversion === 114) this.write("!r");
@@ -1509,6 +1554,17 @@ class Unparser extends NodeVisitor {
 			return this.formatString(value, node);
 		}
 		if (typeof value === "number") {
+			// `Infinity`/`NaN` have no float literal in Python — CPython's
+			// own `ast.unparse` renders them as arithmetic on `1e309` (a
+			// literal that itself overflows to `inf` at parse time), the
+			// same trick used here. A negative-infinity `Constant` doesn't
+			// reach this branch as `-Infinity`: CPython represents `-1e1000`
+			// as `UnaryOp(USub, Constant(inf))`, not a directly negative
+			// constant, so `visit_UnaryOp` supplies the `-` and only the
+			// positive form needs handling here.
+			if (Number.isNaN(value)) return "(1e309-1e309)";
+			if (value === Infinity) return "1e309";
+			if (value === -Infinity) return "-1e309";
 			return value.toString();
 		}
 		if (value instanceof PyComplex) {
@@ -1589,21 +1645,27 @@ class Unparser extends NodeVisitor {
 
 	/**
 	 * Escapes a non-raw triple-quoted string literal's decoded content for
-	 * safe re-embedding. Unlike {@link escapeString}, literal newlines are
-	 * left as-is (triple-quoted strings span lines natively) — but
-	 * backslashes must still be escaped, or a literal backslash in the
-	 * decoded value (e.g. from a source `\\n`, decoding to a literal
-	 * backslash + `n`, not a newline) would read back as the start of a
-	 * new escape sequence and silently change meaning on re-parse. The
-	 * closing delimiter (`"""`/`'''`) is also escaped if it occurs in the
-	 * content, or as a lone trailing quote char that would otherwise merge
-	 * with the real closing delimiter appended right after this.
+	 * safe re-embedding. Unlike {@link escapeString}, literal `\n`s are left
+	 * as-is (triple-quoted strings span lines natively) — but backslashes
+	 * must still be escaped, or a literal backslash in the decoded value
+	 * (e.g. from a source `\\n`, decoding to a literal backslash + `n`, not
+	 * a newline) would read back as the start of a new escape sequence and
+	 * silently change meaning on re-parse. A literal `\r` must also be
+	 * escaped (unlike `\n`): CPython's tokenizer applies universal-newline
+	 * translation to a *raw* `\r`/`\r\n` in the source — including inside a
+	 * triple-quoted literal's body — collapsing it to `\n` on re-parse, so a
+	 * `Constant.value` that came from an explicit `\r` escape (as opposed to
+	 * a real source line ending) would silently become `\n` if left
+	 * unescaped here. The closing delimiter (`"""`/`'''`) is also escaped if
+	 * it occurs in the content, or as a lone trailing quote char that would
+	 * otherwise merge with the real closing delimiter appended right after
+	 * this.
 	 * @param value - Decoded string content to escape.
 	 * @param quoteChar - The quote character (`"` or `'`) whose tripled form delimits the literal.
 	 * @returns The escaped string body (without surrounding triple quotes).
 	 */
 	private escapeTripleQuoted(value: string, quoteChar: string): string {
-		let result = value.replace(/\\/g, "\\\\");
+		let result = value.replace(/\\/g, "\\\\").replace(/\r/g, "\\r");
 		const closing = quoteChar.repeat(3);
 		result = result
 			.split(closing)
@@ -1663,8 +1725,16 @@ class Unparser extends NodeVisitor {
 		// (`a[()]`, e.g. `Unpack[tuple[()]]`) is different: `a[]` isn't
 		// valid syntax at all (a subscript can't be empty), so it must
 		// still render through `visit_Tuple`, which writes the `()` itself.
+		// A single-element tuple slice (`a[x,]`) needs its trailing comma
+		// kept, unlike the bare multi-element case — `a[x]` and `a[x,]` mean
+		// different things (a plain index vs. a 1-tuple index), whereas
+		// `visit_Tuple`'s own comma-adding logic doesn't apply here since
+		// this branch deliberately skips the wrapping parens it would add.
 		if (node.slice.nodeType === "Tuple" && node.slice.elts.length > 0) {
 			this.interleave(", ", (elt) => this.visit(elt), node.slice.elts);
+			if (node.slice.elts.length === 1) {
+				this.write(",");
+			}
 		} else {
 			this.visit(node.slice);
 		}
@@ -2004,9 +2074,7 @@ class Unparser extends NodeVisitor {
 		node: Extract<import("./types.js").PatternNode, { nodeType: "MatchStar" }>,
 	): void {
 		this.write("*");
-		if (node.name) {
-			this.write(node.name);
-		}
+		this.write(node.name ?? "_");
 	}
 
 	/**
@@ -2020,9 +2088,7 @@ class Unparser extends NodeVisitor {
 			this.visit(node.pattern);
 			this.write(" as ");
 		}
-		if (node.name) {
-			this.write(node.name);
-		}
+		this.write(node.name ?? "_");
 	}
 
 	/**

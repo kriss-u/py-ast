@@ -80,8 +80,10 @@ repeatedly in reports until addressed:
 - **`\N{...}` named Unicode escapes** aren't resolved to the character they
   name (e.g. `\N{DEGREE SIGN}` stays as that literal text rather than
   becoming `°`) — this library doesn't carry a Unicode name database.
-  Round-trips fine (the literal text is stable), but won't match CPython's
-  resolved value in `run.mjs`.
+  Round-trips fine (the literal text is stable). `run.mjs`'s `compareConstants`
+  (`compare.mjs`) explicitly excludes any string containing an unresolved
+  `\N{...}` from being reported as a value mismatch, rather than flagging it
+  every run.
 - **`type_ignores`** has no py-ast field at all (there's no `# type:
   ignore` comment tracking), stripped from the CPython side before
   `run.mjs` diffs.

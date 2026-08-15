@@ -205,10 +205,15 @@ describe("Unparser Edge Cases", () => {
 			);
 		});
 
-		test("match star pattern without a bound name", () => {
+		test("match star pattern without a bound name unparses as the '*_' wildcard", () => {
+			// `case [*]:` (no name at all) isn't valid CPython syntax — this
+			// parser is more permissive and accepts it as `MatchStar(name=
+			// undefined)`, the same shape CPython gives `*_`. Since that's
+			// exactly what `MatchStar(name=None)` means, unparsing it must
+			// produce the one CPython form with that meaning: `*_`.
 			testUnparse(
 				"match p:\n    case [*]:\n        pass",
-				"match p:\n    case [*]:\n        pass",
+				"match p:\n    case [*_]:\n        pass",
 			);
 		});
 
@@ -370,8 +375,8 @@ describe("Unparser Edge Cases", () => {
 			testRoundtrip("y = (x := 5) + 1");
 		});
 
-		test("bare named expression statement stays unparenthesized", () => {
-			testUnparse("x := 42", "x := 42");
+		test("bare named expression statement is parenthesized (bare form is invalid in CPython)", () => {
+			testUnparse("x := 42", "(x := 42)");
 		});
 
 		test("named expression as a conditional expression's test requires parens", () => {
@@ -462,6 +467,15 @@ describe("Unparser Edge Cases", () => {
 		test("tuple slice is unpacked without extra parens", () => {
 			testUnparse("arr[i, j:k]", "arr[i, j:k]");
 		});
+
+		test("a single-element tuple slice keeps its trailing comma", () => {
+			// A prior bug: `arr[x,]` (a 1-tuple index, distinct from the bare
+			// index `arr[x]`) lost its trailing comma when unparsed, silently
+			// changing `slice` from `Tuple(elts=[x])` to just `x` on re-parse.
+			testUnparse("arr[x,]", "arr[x,]");
+			testUnparse("mgrid[0.1:0.33:0.1,]", "mgrid[0.1:0.33:0.1,]");
+			testRoundtrip("arr[x,]");
+		});
 	});
 
 	describe("Comprehensions", () => {
@@ -505,6 +519,49 @@ describe("Unparser Edge Cases", () => {
 		test("except* with no exception type", () => {
 			const code = "try:\n    risky()\nexcept*:\n    handle()";
 			testUnparse(code, code);
+		});
+	});
+
+	describe("Non-finite float constants", () => {
+		// A prior bug: `formatConstant` fell through to JS's default
+		// `Number.prototype.toString`, writing the bare identifiers
+		// `Infinity`/`NaN` — not valid Python float literals, so a
+		// unary-minus/round-trip read them back as an undefined `Name`
+		// instead of the intended value. CPython's own `ast.unparse` writes
+		// `1e309` (a literal that itself overflows to `inf`) for `inf`, and
+		// `(1e309-1e309)` for `nan`; matched here for the same reason.
+		test("a float literal that overflows to inf round-trips through 1e309", () => {
+			testUnparse("x = 1e1000", "x = 1e309");
+			testRoundtrip("x = 1e1000");
+		});
+
+		test("a negative-infinity UnaryOp round-trips through -1e309", () => {
+			testUnparse("x = -1e1000", "x = -1e309");
+			testRoundtrip("x = -1e1000");
+		});
+
+		test("a NaN Constant unparses as the (1e309-1e309) arithmetic trick", () => {
+			const node: Constant = {
+				nodeType: "Constant",
+				value: Number.NaN,
+				lineno: 1,
+				col_offset: 0,
+			};
+			expect(unparse(node)).toBe("(1e309-1e309)");
+		});
+
+		test("a directly-constructed negative-Infinity Constant still unparses correctly", () => {
+			// Unlike a parsed `-1e1000` (a `UnaryOp` wrapping a positive-`inf`
+			// `Constant`, see above), a hand-built AST could set `value:
+			// -Infinity` directly on a `Constant` — still handled, not just
+			// the `UnaryOp`-wrapped form.
+			const node: Constant = {
+				nodeType: "Constant",
+				value: Number.NEGATIVE_INFINITY,
+				lineno: 1,
+				col_offset: 0,
+			};
+			expect(unparse(node)).toBe("-1e309");
 		});
 	});
 
@@ -949,13 +1006,13 @@ describe("Unparser Edge Cases", () => {
 			expect(unparse(node)).toBe("42");
 		});
 
-		test("MatchAs with neither a wrapped pattern nor a bound name renders nothing", () => {
+		test("MatchAs with neither a wrapped pattern nor a bound name renders the wildcard '_'", () => {
 			const node: MatchAs = {
 				nodeType: "MatchAs",
 				lineno: 1,
 				col_offset: 0,
 			};
-			expect(unparse(node)).toBe("");
+			expect(unparse(node)).toBe("_");
 		});
 	});
 

@@ -21,6 +21,7 @@ import type {
 	JoinedStr,
 	Keyword,
 	Load,
+	Located,
 	MatchCase,
 	Module,
 	OperatorNode,
@@ -88,6 +89,16 @@ export class Parser {
 	private includeComments: boolean;
 	private lastNonCommentTokenLine = 0; // Track the line of the last non-comment, non-newline token
 	private pendingComments: Comment[] = []; // Temporary storage for comments during expression parsing
+	/**
+	 * Set by {@link parseSuite} when the just-parsed single-line suite
+	 * (`if a: b = 1;`) ends with a trailing `;` — CPython extends the
+	 * *enclosing compound statement's* end position past that `;` (unlike
+	 * the last simple statement's own end, which excludes it). Reset at the
+	 * top of every `parseSuite` call and consumed (read then cleared) by
+	 * {@link lastStmtEnd}, so it only ever reflects the most recently parsed
+	 * suite by the time a compound statement's own end position is computed.
+	 */
+	private trailingSemicolonSuiteEnd?: SourcePosition;
 
 	/**
 	 * Lexes `source` and prepares the parser to consume the resulting tokens.
@@ -305,6 +316,12 @@ export class Parser {
 	 * @throws {ParseError} On an unexpected `INDENT` or other syntax error.
 	 */
 	private parseStatement(): StmtNode | null {
+		// Reset before parsing so a stale trailing-`;` position from an
+		// earlier, unrelated statement never leaks into a later compound
+		// statement's end position (see `trailingSemicolonSuiteEnd`'s
+		// docstring) — only `parseSimpleStmt` sets it back, and only when
+		// the statement it just parsed truly ends the line with a `;`.
+		this.trailingSemicolonSuiteEnd = undefined;
 		// Handle indentation
 		if (this.check(TokenType.INDENT)) {
 			// INDENT tokens should only appear after compound statements
@@ -396,6 +413,25 @@ export class Parser {
 			!this.isAtEnd()
 		) {
 			throw this.error("invalid syntax");
+		}
+
+		// A `;` with nothing else before the line ends (CPython:
+		// `simple_stmts: simple_stmt (';' simple_stmt)* [';'] NEWLINE`) — as
+		// opposed to one separating this statement from another small_stmt
+		// on the same line — extends the *enclosing compound statement's*
+		// end position past it (see `trailingSemicolonSuiteEnd`'s
+		// docstring), even though this statement's own end excludes it.
+		if (
+			hadSemi &&
+			(this.check(TokenType.NEWLINE) ||
+				this.check(TokenType.DEDENT) ||
+				this.isAtEnd())
+		) {
+			const semi = this.previous();
+			this.trailingSemicolonSuiteEnd = {
+				lineno: semi.end_lineno,
+				col_offset: semi.end_col_offset,
+			};
 		}
 
 		this.match(TokenType.NEWLINE); // Optional newline
@@ -1422,8 +1458,13 @@ export class Parser {
 			finalbody = this.parseSuite();
 		}
 
-		const lastHandlerBody =
-			handlers.length > 0 ? handlers[handlers.length - 1].body : undefined;
+		// The last handler's own end (not its raw `body` array) is used here:
+		// it already accounts for a trailing `;` on its last statement (see
+		// `trailingSemicolonSuiteEnd`'s docstring), which `lastStmtEnd`
+		// itself can no longer see once the `ExceptHandler` above has
+		// already consumed that field for its own end position.
+		const lastHandler =
+			handlers.length > 0 ? [handlers[handlers.length - 1]] : undefined;
 
 		return {
 			nodeType: hasStarHandler ? "TryStar" : "Try",
@@ -1433,7 +1474,7 @@ export class Parser {
 			finalbody,
 			lineno: start.lineno,
 			col_offset: start.col_offset,
-			...this.lastStmtEnd(body, lastHandlerBody, orelse, finalbody),
+			...this.lastStmtEnd(body, lastHandler, orelse, finalbody),
 		} as Try | TryStar;
 	}
 
@@ -1713,13 +1754,14 @@ export class Parser {
 		if (this.check(TokenType.NAME)) {
 			const nameToken = this.peek();
 
-			// A bare, undotted `_` is the wildcard pattern.
+			// A bare, undotted `_` is the wildcard pattern. CPython represents
+			// it as `MatchAs(pattern=None, name=None)`, not `name="_"`.
 			if (nameToken.value === "_" && this.peekNext().type !== TokenType.DOT) {
 				this.advance(); // consume the _
 				return {
 					nodeType: "MatchAs",
 					pattern: undefined,
-					name: "_",
+					name: undefined,
 					lineno: start.lineno,
 					col_offset: start.col_offset,
 					end_lineno: this.previous().end_lineno,
@@ -2020,27 +2062,31 @@ export class Parser {
 			};
 		}
 
-		if (
-			this.match(
-				TokenType.STRING,
-				TokenType.TRUE,
-				TokenType.FALSE,
-				TokenType.NONE,
-			)
-		) {
+		// `True`/`False`/`None` are `MatchSingleton` patterns in CPython, not
+		// `MatchValue` — `MatchValue` is reserved for literals whose equality
+		// (`==`) is checked, while singletons are checked with `is`.
+		if (this.match(TokenType.TRUE, TokenType.FALSE, TokenType.NONE)) {
 			const token = this.previous();
-			// biome-ignore lint/suspicious/noExplicitAny: Value can be string, boolean, or null
-			let value: any;
+			const value =
+				token.type === TokenType.TRUE
+					? true
+					: token.type === TokenType.FALSE
+						? false
+						: null;
 
-			if (token.type === TokenType.STRING) {
-				value = this.parseString(token.value);
-			} else if (token.type === TokenType.TRUE) {
-				value = true;
-			} else if (token.type === TokenType.FALSE) {
-				value = false;
-			} else {
-				value = null;
-			}
+			return {
+				nodeType: "MatchSingleton",
+				value,
+				lineno: start.lineno,
+				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
+			};
+		}
+
+		if (this.match(TokenType.STRING)) {
+			const token = this.previous();
+			const value = this.parseString(token.value);
 
 			return {
 				nodeType: "MatchValue",
@@ -2059,11 +2105,16 @@ export class Parser {
 			};
 		}
 
-		// Wildcard pattern
+		// Wildcard pattern. `*_` is CPython's star-wildcard, represented as
+		// `MatchStar(name=None)` just like `_` alone is `MatchAs(name=None)`
+		// — the captured name is only set for `*rest` with a real name.
 		if (this.match(TokenType.STAR)) {
 			let name: string | undefined;
 			if (this.check(TokenType.NAME)) {
-				name = this.advance().value;
+				const nameToken = this.advance();
+				if (nameToken.value !== "_") {
+					name = nameToken.value;
+				}
 			}
 
 			return {
@@ -2220,10 +2271,12 @@ export class Parser {
 		const start = this.peek();
 		const expr = this.parseNotTest();
 
-		// Check for named expression (walrus operator :=)
+		// Check for named expression (walrus operator :=). CPython's RHS is a
+		// full `test` (`x := a or b`, `x := a if b else c`, `x := lambda: 1`
+		// all bind the whole expression to `value`), not just an `and_test`.
 		if (this.match(TokenType.COLONEQUAL)) {
 			this.setContext(expr, this.createStore());
-			const value = this.parseAndTest();
+			const value = this.parseTest();
 			return {
 				nodeType: "NamedExpr",
 				target: expr,
@@ -3052,6 +3105,7 @@ export class Parser {
 	 * @throws {ParseError} If the block is not properly indented/dedented.
 	 */
 	private parseSuite(): StmtNode[] {
+		this.trailingSemicolonSuiteEnd = undefined;
 		if (this.match(TokenType.NEWLINE)) {
 			// Skip any additional newlines before the indent
 			while (this.match(TokenType.NEWLINE)) {
@@ -3104,19 +3158,51 @@ export class Parser {
 
 			return stmts;
 		} else {
-			// Simple statement on the same line
-			const stmt = this.parseSimpleStmt();
+			// One or more `;`-separated simple statements on the same line
+			// as the `:` (`simple_stmts: simple_stmt (';' simple_stmt)*
+			// [';'] NEWLINE`) — e.g. `if a: b = 1; del c`. `parseSmallStmt`
+			// only parses a single one; loop here rather than delegating to
+			// `parseSimpleStmt` (which is for the *file/block*-level
+			// statement loop, where the next `;`-separated small_stmt is
+			// picked up by that loop's next iteration — a single-line suite
+			// has no such outer loop of its own).
+			const stmts: StmtNode[] = [];
+			while (true) {
+				const stmt = this.parseSmallStmt();
+				if (stmt) stmts.push(stmt);
+				if (!this.match(TokenType.SEMI)) break;
+				if (this.check(TokenType.NEWLINE) || this.isAtEnd()) {
+					// Trailing `;`: CPython extends the enclosing compound
+					// statement's end position past it (see
+					// `trailingSemicolonSuiteEnd`'s docstring).
+					const semi = this.previous();
+					this.trailingSemicolonSuiteEnd = {
+						lineno: semi.end_lineno,
+						col_offset: semi.end_col_offset,
+					};
+					break;
+				}
+			}
+
+			if (
+				!this.check(TokenType.NEWLINE) &&
+				!this.check(TokenType.DEDENT) &&
+				!this.isAtEnd()
+			) {
+				throw this.error("invalid syntax");
+			}
+
 			// Blank/comment-only lines between a single-line suite and a
 			// following clause (`elif`/`else`/`except`/`finally`) aren't
-			// skipped by `parseSimpleStmt` itself (it only consumes its own
-			// line's `NEWLINE`), unlike the block-body path above, which
-			// already consumes them while scanning for the closing `DEDENT`.
-			// Skip them here too so both paths leave the same token position
-			// behind for the caller's follow-up clause check.
+			// skipped just by consuming this line's own `NEWLINE`, unlike
+			// the block-body path above, which already consumes them while
+			// scanning for the closing `DEDENT`. Skip them here too so both
+			// paths leave the same token position behind for the caller's
+			// follow-up clause check.
 			while (this.match(TokenType.NEWLINE)) {
 				// Continue skipping blank/comment-only lines.
 			}
-			return stmt ? [stmt] : [];
+			return stmts;
 		}
 	}
 
@@ -4698,9 +4784,15 @@ export class Parser {
 			const decoded = isRaw
 				? literalText
 				: this.decodeEscapes(literalText, false);
+			const value = this.decodeDoubledBraces(decoded);
+			// A `\`-newline continuation decodes to nothing, but still
+			// consumes source text (`end > literalStart`) — CPython's
+			// tokenizer never sees a separate token for it, so no `Constant`
+			// (not even an empty one) should be emitted here.
+			if (value.length === 0) return;
 			pushValue({
 				nodeType: "Constant",
-				value: this.decodeDoubledBraces(decoded),
+				value,
 				lineno: segStart.lineno,
 				col_offset: segStart.col_offset,
 				end_lineno: pos.lineno,
@@ -5531,10 +5623,19 @@ export class Parser {
 	 * @param groups Candidate statement lists, lowest priority first.
 	 * @returns The end position of the last statement in the highest-priority non-empty group, or of the last consumed token if every group is empty.
 	 */
-	private lastStmtEnd(...groups: (StmtNode[] | undefined)[]): {
+	private lastStmtEnd(...groups: (Located[] | undefined)[]): {
 		end_lineno: number;
 		end_col_offset: number;
 	} {
+		// A trailing `;` on the suite just parsed extends the *compound*
+		// statement's own end past it (see `trailingSemicolonSuiteEnd`'s
+		// docstring); consume it here so it doesn't leak into unrelated
+		// later end-position computations.
+		if (this.trailingSemicolonSuiteEnd) {
+			const end = this.trailingSemicolonSuiteEnd;
+			this.trailingSemicolonSuiteEnd = undefined;
+			return { end_lineno: end.lineno, end_col_offset: end.col_offset };
+		}
 		for (let i = groups.length - 1; i >= 0; i--) {
 			const group = groups[i];
 			if (group && group.length > 0) {
@@ -5548,7 +5649,12 @@ export class Parser {
 				};
 			}
 		}
+		// Every call site passes at least one non-empty statement group —
+		// every suite this parser produces has >=1 statement — so this
+		// fallback is unreachable defensive code.
+		/* v8 ignore next */
 		const token = this.previous();
+		/* v8 ignore next 4 */
 		return {
 			end_lineno: token.end_lineno,
 			end_col_offset: token.end_col_offset,

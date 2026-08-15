@@ -301,6 +301,22 @@ describe("Unparser", () => {
 			testRoundtrip("match x:\n    case 1:\n        pass");
 		});
 
+		test("singleton patterns (None/True/False) round-trip through MatchSingleton", () => {
+			testUnparse(
+				"match x:\n    case None:\n        pass",
+				"match x:\n    case None:\n        pass",
+			);
+			testUnparse(
+				"match x:\n    case True:\n        pass",
+				"match x:\n    case True:\n        pass",
+			);
+			testUnparse(
+				"match x:\n    case False:\n        pass",
+				"match x:\n    case False:\n        pass",
+			);
+			testRoundtrip("match x:\n    case None:\n        pass");
+		});
+
 		test("or-pattern alternatives", () => {
 			testUnparse(
 				"match x:\n    case 1 | 2 | 3:\n        pass",
@@ -366,6 +382,23 @@ describe("Unparser", () => {
 			testRoundtrip("a and b or c");
 		});
 
+		test("a nested BoolOp with the same operator keeps its parens", () => {
+			// Matches CPython's own `ast.unparse`: `values` is a flat n-ary
+			// list, so an explicitly-nested same-op `BoolOp` (from real
+			// source parens) and a naturally-flat chain would otherwise
+			// unparse identically — dropping the parens (as pure precedence
+			// rules would allow, since same-precedence needs none in
+			// general) loses that distinction on re-parse. A *different*
+			// operator needs no such help: normal precedence disambiguates
+			// `and` binding tighter than `or` either way.
+			testUnparse("a and b and (c and d)", "a and b and (c and d)");
+			testUnparse("(a and b) and c", "(a and b) and c");
+			testUnparse("a or (b or c)", "a or (b or c)");
+			testUnparse("(a and b) or c", "a and b or c");
+			testUnparse("a and (b or c)", "a and (b or c)");
+			testRoundtrip("a and b and (c and d)");
+		});
+
 		test("comparison operations", () => {
 			testUnparse("x == y", "x == y");
 			testUnparse("x != y", "x != y");
@@ -418,6 +451,10 @@ describe("Unparser", () => {
 			testUnparse("a if (y := 1) else z", "a if (y := 1) else z");
 		});
 
+		test("a walrus RHS containing 'or' round-trips as a single NamedExpr, not a split BoolOp", () => {
+			testRoundtrip("if not c and (s := w or r):\n    pass");
+		});
+
 		test("a lambda in the body slot keeps its parens; in orelse it doesn't", () => {
 			testUnparse("(lambda: a) if b else c", "(lambda: a) if b else c");
 			testUnparse("a if b else lambda: c", "a if b else lambda: c");
@@ -428,6 +465,15 @@ describe("Unparser", () => {
 			testUnparse("lambda x, y=1: x + y", "lambda x, y=1: x + y");
 			testUnparse("lambda: 42", "lambda: 42");
 			testRoundtrip("lambda x, y: x + y");
+		});
+
+		test("a lambda with only keyword-only parameters keeps its bare '*' separator", () => {
+			// A prior bug: `visit_Lambda` only checked `args`/`vararg`/`kwarg`
+			// before deciding whether to render a parameter list at all, so a
+			// lambda with *just* keyword-only params (no positional ones, no
+			// `*args`/`**kwargs`) had its entire `*, file=None` dropped.
+			testUnparse("lambda *, file=None: False", "lambda *, file=None: False");
+			testRoundtrip("lambda *, file=None: False");
 		});
 
 		test("a yield body keeps its parens", () => {
@@ -517,7 +563,12 @@ describe("Unparser", () => {
 		});
 
 		test("named expression (walrus operator)", () => {
-			testUnparse("x := 42", "x := 42");
+			// A bare `x := 42` statement is invalid in CPython (the walrus
+			// target needs enclosing parens outside contexts like `if`/`while`
+			// conditions), so `ast.unparse` always parenthesizes a top-level
+			// `NamedExpr` — matched here even though this parser is more
+			// permissive than CPython about accepting the bare form.
+			testUnparse("x := 42", "(x := 42)");
 			testRoundtrip("if (n := len(items)) > 0:\n    print(n)");
 		});
 	});
@@ -695,6 +746,19 @@ describe("Unparser", () => {
 		test("f-strings with conversions", () => {
 			// Skip for now - conversion handling may have issues
 			testRoundtrip("f'{obj!r}'");
+		});
+
+		test("a field expression starting with '{' gets a disambiguating space", () => {
+			// A prior bug: a field whose expression itself starts with `{`
+			// (a `Dict`/`DictComp`/`Set`/`SetComp`) unparsed with its `{`
+			// sitting directly against the field's own opening `{` — but
+			// CPython's tokenizer folds a leading `{{` to an escaped literal
+			// brace *before* considering field boundaries, so `f"{{1: 2}}"`
+			// doesn't mean "a field containing the dict `{1: 2}`". A space
+			// disambiguates, matching what CPython requires source-side.
+			testUnparse('f"{ {1: 2} }"', 'f"{ {1: 2}}"');
+			testRoundtrip("f'{ {k: v for k, v in d.items()} }'");
+			testRoundtrip("f'{ {1, 2, 3} }'");
 		});
 
 		test("raw f-strings (rf/fr prefixes) round-trip with interpolations intact", () => {
@@ -881,9 +945,8 @@ describe("Unparser", () => {
 						values: { nodeType: string; value?: string }[];
 					}
 				).values;
-				const literalValues = (
-					vals: { nodeType: string; value?: string }[],
-				) => vals.filter((v) => v.nodeType === "Constant").map((v) => v.value);
+				const literalValues = (vals: { nodeType: string; value?: string }[]) =>
+					vals.filter((v) => v.nodeType === "Constant").map((v) => v.value);
 				expect(literalValues(reparsed)).toEqual(literalValues(original));
 				expect(reparsed.map((v) => v.nodeType)).toEqual(
 					original.map((v) => v.nodeType),
@@ -961,6 +1024,18 @@ describe("Unparser", () => {
 
 			test("raw triple-quoted strings still round-trip verbatim", () => {
 				roundtripValue(String.raw`r"""a \raw \backslash"""`);
+			});
+
+			test("a \\r escape (carriage return) survives round-tripping", () => {
+				// A prior bug: `escapeTripleQuoted` left a decoded `\r` as a
+				// literal CR byte in the regenerated source. CPython applies
+				// universal-newline translation to a raw `\r`/`\r\n` even
+				// inside a triple-quoted literal's body, silently collapsing
+				// it to `\n` on re-parse — so an escaped `\r` (as opposed to
+				// an actual source line ending) must stay an explicit `\r`
+				// escape to round-trip.
+				roundtripValue(String.raw`b"""a\rb"""`);
+				roundtripValue(String.raw`"""a\rb"""`);
 			});
 		});
 	});

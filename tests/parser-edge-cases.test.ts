@@ -290,12 +290,49 @@ describe("parser edge cases", () => {
 		});
 	});
 
-	describe("branch coverage: suite with an empty single-line body", () => {
-		test("a compound-statement keyword right after ':' yields an empty suite body", () => {
-			const module = parseCode("if True: class Foo: pass\n");
-			const ifStmt = module.body[0] as ASTNode & { body: ASTNode[] };
-			expect(ifStmt.body).toEqual([]);
-			expect(module.body[1]?.nodeType).toBe("ClassDef");
+	describe("a compound statement can't be a single-line suite's inline body", () => {
+		test("a compound-statement keyword right after ':' throws (matches CPython)", () => {
+			// Verified against CPython 3.13: `ast.parse('if True: class Foo: pass')`
+			// raises `SyntaxError: invalid syntax` — a compound statement
+			// (`class`/`def`/`if`/... ) can only start a *block* body
+			// (`if True:\n    class Foo: ...`), never a single-line one.
+			// This previously silently accepted it, treating the `if`'s body
+			// as empty and `class Foo: pass` as a new top-level statement —
+			// itself a bug, not a documented/intentional shape.
+			expect(() => parseCode("if True: class Foo: pass\n")).toThrow(
+				/invalid syntax/,
+			);
+		});
+	});
+
+	describe("multiple ';'-separated statements in a single-line suite", () => {
+		// Verified against CPython 3.13: `simple_stmts: simple_stmt (';'
+		// simple_stmt)* [';'] NEWLINE` — a single-line suite can hold more
+		// than one `;`-separated statement, not just the first.
+		test("two statements, then a following 'else' clause", () => {
+			const stmt = parseStatement("if a: b = 1; del c\nelse: b = 2\n") as {
+				body: StmtNode[];
+			};
+			expect(stmt.body.map((s) => s.nodeType)).toEqual(["Assign", "Delete"]);
+		});
+
+		test("three statements on one line", () => {
+			const stmt = parseStatement("if a: b = 1; c = 2; d = 3\n") as {
+				body: StmtNode[];
+			};
+			expect(stmt.body).toHaveLength(3);
+		});
+
+		test("a trailing ';' right before the newline", () => {
+			const stmt = parseStatement("if a: b = 1;\nelse: b = 2\n") as {
+				body: StmtNode[];
+			};
+			expect(stmt.body).toHaveLength(1);
+		});
+
+		test("a trailing ';' at end of file (no trailing newline)", () => {
+			const stmt = parseStatement("if a: b = 1;") as { body: StmtNode[] };
+			expect(stmt.body).toHaveLength(1);
 		});
 	});
 
@@ -525,6 +562,40 @@ describe("parser edge cases", () => {
 			);
 			expect(stmt.nodeType).toBe("Match");
 		});
+
+		test("a bare wildcard 'case _:' produces MatchAs with no pattern and no name", () => {
+			// Verified against CPython 3.13: `ast.parse('match x:\n case _:\n  pass')`
+			// produces `MatchAs(pattern=None, name=None)`, not `name="_"`.
+			const ast = parseCode("match x:\n    case _:\n        pass\n");
+			const matchStmt = ast.body[0] as Extract<StmtNode, { nodeType: "Match" }>;
+			expect(matchStmt.cases[0].pattern).toMatchObject({
+				nodeType: "MatchAs",
+				pattern: undefined,
+				name: undefined,
+			});
+		});
+
+		test.each([
+			["None", null],
+			["True", true],
+			["False", false],
+		])(
+			"'case %s:' produces MatchSingleton, not MatchValue(Constant)",
+			(literal, expectedValue) => {
+				// Verified against CPython 3.13: `case None/True/False:` produces
+				// `MatchSingleton(value=...)`, checked with `is`, not
+				// `MatchValue(value=Constant(...))`, which is checked with `==`.
+				const ast = parseCode(`match x:\n    case ${literal}:\n        pass\n`);
+				const matchStmt = ast.body[0] as Extract<
+					StmtNode,
+					{ nodeType: "Match" }
+				>;
+				expect(matchStmt.cases[0].pattern).toMatchObject({
+					nodeType: "MatchSingleton",
+					value: expectedValue,
+				});
+			},
+		);
 
 		test("a class pattern with positional and keyword sub-patterns", () => {
 			const ast = parseCode(
@@ -1240,6 +1311,28 @@ describe("parser edge cases", () => {
 			expect(expr.values).toHaveLength(1);
 			expect(expr.values[0].nodeType).toBe("Constant");
 			expect(expr.values[0].value).toBe("{literal}");
+		});
+
+		test("a line continuation between two fields produces no empty Constant", () => {
+			// Verified against CPython 3.13: `ast.parse('f"""\\\n{a}\n    {b}"""')`
+			// merges the surrounding text into a single `Constant('\n    ')`
+			// with no empty `Constant` for the `\`-newline itself — a prior
+			// bug emitted `Constant('')` for the consumed-but-decodes-to-
+			// nothing continuation text.
+			const expr = parseExpression('f"""\\\n{a}\n    {b}"""') as {
+				values: { nodeType: string; value?: string }[];
+			};
+			expect(expr.values.map((v) => v.nodeType)).toEqual([
+				"FormattedValue",
+				"Constant",
+				"FormattedValue",
+			]);
+			expect(expr.values[1].value).toBe("\n    ");
+		});
+
+		test("a line continuation as an f-string's entire content produces an empty JoinedStr", () => {
+			const expr = parseExpression('f"""\\\n"""') as { values: unknown[] };
+			expect(expr.values).toHaveLength(0);
 		});
 
 		test("a real interpolation flanked by doubled-brace literals", () => {
@@ -1972,6 +2065,48 @@ describe("parser edge cases", () => {
 		test("walrus operator in expression", () => {
 			const ast = parseCode("if (n := 10) > 5:\n    pass\n");
 			expect(ast.body[0].nodeType).toBe("If");
+		});
+
+		test.each([
+			["(x := a or b)", "BoolOp"],
+			["(x := a if b else c)", "IfExp"],
+			["(x := lambda: 1)", "Lambda"],
+		])(
+			"walrus RHS %s binds a full 'test', not just an 'and_test' (CPython: value=%s)",
+			(src, expectedValueNodeType) => {
+				const expr = parseExpression(src);
+				expect(expr.nodeType).toBe("NamedExpr");
+				if (expr.nodeType === "NamedExpr") {
+					expect(expr.value.nodeType).toBe(expectedValueNodeType);
+				}
+			},
+		);
+
+		test("walrus RHS containing 'or' isn't split across the enclosing BoolOp", () => {
+			// Verified against CPython 3.13: `not c and (s := w or r)` binds
+			// the whole `w or r` as the NamedExpr's value; a prior bug parsed
+			// the walrus RHS at `and_test` precedence, splitting the trailing
+			// `or r` out into the *enclosing* BoolOp instead.
+			const ast = parseCode("if not c and (s := w or r):\n    pass\n");
+			const ifStmt = ast.body[0] as Extract<StmtNode, { nodeType: "If" }>;
+			expect(ifStmt.test).toMatchObject({
+				nodeType: "BoolOp",
+				op: { nodeType: "And" },
+				values: [
+					{ nodeType: "UnaryOp" },
+					{
+						nodeType: "NamedExpr",
+						value: {
+							nodeType: "BoolOp",
+							op: { nodeType: "Or" },
+							values: [
+								{ nodeType: "Name", id: "w" },
+								{ nodeType: "Name", id: "r" },
+							],
+						},
+					},
+				],
+			});
 		});
 
 		test("setContext no-op branch: a non-target-shaped walrus target is left structurally unchanged", () => {

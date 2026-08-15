@@ -288,6 +288,50 @@ describe("end_lineno / end_col_offset", () => {
 		});
 	});
 
+	describe("a trailing ';' on a suite's last statement extends the enclosing compound statement's end past it", () => {
+		// Verified against CPython 3.13: a `;` with nothing else before the
+		// line ends is consumed as part of the suite, extending the
+		// *compound* statement's own `end_col_offset` by one — but not the
+		// last simple statement's own end, which excludes it.
+		test("single-line suite", () => {
+			const mod = parse("def f(): yield x;\n");
+			const fn = mod.body[0] as FunctionDef;
+			expect(fn.end_col_offset).toBe(17);
+			expect(fn.body[0].end_col_offset).toBe(16);
+		});
+
+		test("block-indented suite", () => {
+			const mod = parse("if a:\n    x = 1;\n");
+			const ifStmt = mod.body[0] as If;
+			expect(ifStmt.end_lineno).toBe(2);
+			expect(ifStmt.end_col_offset).toBe(10);
+			expect(ifStmt.body[0].end_col_offset).toBe(9);
+		});
+
+		test("does not leak across an unrelated later statement without a trailing ';'", () => {
+			const mod = parse("if a:\n    x = 1;\n    y = 2\n");
+			const ifStmt = mod.body[0] as If;
+			expect(ifStmt.end_lineno).toBe(3);
+			expect(ifStmt.end_col_offset).toBe(9);
+		});
+
+		test("does not leak across a nested compound statement", () => {
+			const mod = parse("if a:\n    x = 1;\n    if b:\n        y = 2\n");
+			const ifStmt = mod.body[0] as If;
+			expect(ifStmt.end_lineno).toBe(4);
+			expect(ifStmt.end_col_offset).toBe(13);
+		});
+
+		test("try/except: the last handler's own end is used, not its raw body array", () => {
+			const mod = parse("try:\n    x = 1\nexcept:\n    pass;\n");
+			const tryStmt = mod.body[0] as Try;
+			expect(tryStmt.end_lineno).toBe(4);
+			expect(tryStmt.end_col_offset).toBe(9);
+			expect(tryStmt.handlers[0].end_col_offset).toBe(9);
+			expect(tryStmt.handlers[0].body[0].end_col_offset).toBe(8);
+		});
+	});
+
 	test("parenthesized comparison keeps CPython's node-shape quirks unaffected by this change", () => {
 		// Regression guard: adding end positions must not disturb existing
 		// (already-correct) start-position behavior for ordinary comparisons.

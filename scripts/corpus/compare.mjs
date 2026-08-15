@@ -66,8 +66,16 @@ export function stripExtensions(node) {
 	return node;
 }
 
-/** Best-effort decoding of a py-ast `Constant` node into the same `{$type, $value}` shape `dump_ast.py` emits. */
-export function encodePyAstConstant(constNode, PyComplex) {
+/**
+ * Best-effort decoding of a py-ast `Constant` node into the same `{$type, $value}` shape `dump_ast.py` emits.
+ * @param constNode The py-ast `Constant` node to decode.
+ * @param PyComplex The `PyComplex` class from py-ast, for complex-value detection.
+ * @param inJoinedStrLiteral Whether this `Constant` is a literal-text segment
+ *   inside a `JoinedStr`/`TemplateStr`'s `values` array — those are always
+ *   plain strings (even a literal `"..."` substring), never the `Ellipsis`
+ *   singleton, so the ellipsis heuristic below must be skipped there.
+ */
+export function encodePyAstConstant(constNode, PyComplex, inJoinedStrLiteral = false) {
 	const { value, kind, quote_style: quoteStyle } = constNode;
 
 	if (value === null) return { $type: "NoneType", $value: null };
@@ -84,7 +92,7 @@ export function encodePyAstConstant(constNode, PyComplex) {
 		return { $type: "number", $value: value };
 	}
 	if (typeof value === "string") {
-		if (value === "..." && kind === undefined && quoteStyle === undefined) {
+		if (value === "..." && kind === undefined && quoteStyle === undefined && !inJoinedStrLiteral) {
 			return { $type: "ellipsis", $value: null };
 		}
 		if (quoteStyle && /^[a-zA-Z]*b/i.test(quoteStyle)) {
@@ -127,9 +135,15 @@ function compareConstants(cpy, pyast) {
 		return null;
 	}
 	if (cpy.$type === "str") {
-		return cpy.$value === pyast.$value
-			? null
-			: `str constant mismatch ${JSON.stringify(cpy.$value)} !== ${JSON.stringify(pyast.$value)}`;
+		if (cpy.$value === pyast.$value) return null;
+		// Known gap (see README's "Known, expected gaps"): py-ast doesn't
+		// carry a Unicode name database, so a `\N{...}` named escape is left
+		// as that literal text instead of being resolved to the character
+		// it names. Any string containing one will practically always
+		// mismatch CPython's resolved value here for that reason alone, so
+		// it's excluded rather than reported as a real value mismatch.
+		if (/\\N\{[^}]*\}/.test(pyast.$value)) return null;
+		return `str constant mismatch ${JSON.stringify(cpy.$value)} !== ${JSON.stringify(pyast.$value)}`;
 	}
 	return null;
 }
@@ -144,8 +158,12 @@ function compareConstants(cpy, pyast) {
  * @param path Human-readable path to the current node, for reporting.
  * @param diffs Accumulator array of `{path, message}` mismatches.
  * @param maxDiffs Stop recursing into new diffs once this many are collected.
+ * @param inJoinedStrLiteral Whether `cpy`/`pyast` are the direct `values`
+ *   array (or an element of it) of a `JoinedStr`/`TemplateStr` — threaded
+ *   through so a literal-text `Constant` there is never mistaken for an
+ *   `Ellipsis` (see {@link encodePyAstConstant}).
  */
-export function diffTrees(cpy, pyast, PyComplex, path, diffs, maxDiffs) {
+export function diffTrees(cpy, pyast, PyComplex, path, diffs, maxDiffs, inJoinedStrLiteral = false) {
 	if (diffs.length >= maxDiffs) return;
 
 	if (cpy && typeof cpy === "object" && "nodeType" in cpy) {
@@ -158,14 +176,23 @@ export function diffTrees(cpy, pyast, PyComplex, path, diffs, maxDiffs) {
 			return;
 		}
 		if (cpy.nodeType === "Constant") {
-			const pyastEncoded = encodePyAstConstant(pyast, PyComplex);
+			const pyastEncoded = encodePyAstConstant(pyast, PyComplex, inJoinedStrLiteral);
 			const reason = compareConstants(cpy.value, pyastEncoded);
 			if (reason) diffs.push({ path: `${path}.value`, message: reason });
 			return;
 		}
+		const isJoinedStr = cpy.nodeType === "JoinedStr" || cpy.nodeType === "TemplateStr";
 		for (const key of Object.keys(cpy)) {
 			if (key === "nodeType") continue;
-			diffTrees(cpy[key], pyast[key], PyComplex, `${path}.${key}`, diffs, maxDiffs);
+			diffTrees(
+				cpy[key],
+				pyast[key],
+				PyComplex,
+				`${path}.${key}`,
+				diffs,
+				maxDiffs,
+				isJoinedStr && key === "values",
+			);
 			if (diffs.length >= maxDiffs) return;
 		}
 		return;
@@ -181,7 +208,7 @@ export function diffTrees(cpy, pyast, PyComplex, path, diffs, maxDiffs) {
 			return;
 		}
 		for (let i = 0; i < cpy.length; i++) {
-			diffTrees(cpy[i], pyast[i], PyComplex, `${path}[${i}]`, diffs, maxDiffs);
+			diffTrees(cpy[i], pyast[i], PyComplex, `${path}[${i}]`, diffs, maxDiffs, inJoinedStrLiteral);
 			if (diffs.length >= maxDiffs) return;
 		}
 		return;
