@@ -131,23 +131,24 @@ export function App() {
 
 	const activeNode = activePath.length > 0 ? activePath[activePath.length - 1] : null;
 
-	// Fold state is shared between TreeView and JsonView (both render the same
-	// `tree`) so switching tabs doesn't reset what's expanded, and so a global
-	// expand-all/collapse-all action can drive whichever view is visible.
-	const { expanded, setExpanded, toggle, registerRef } = useTreeState(
-		parseResult.ok ? parseResult.tree : null,
-		activePath,
-	);
+	// Fold state is independent per view — the tree starts collapsed to just
+	// its top-level outline, the JSON view starts fully expanded — but each
+	// instance persists its own toggles across tab switches (switching tabs
+	// never resets what's expanded in either one). A global expand-all/
+	// collapse-all action drives whichever view is currently visible.
+	const treeState = useTreeState(parseResult.ok ? parseResult.tree : null, activePath, "top-level");
+	const jsonState = useTreeState(parseResult.ok ? parseResult.tree : null, activePath, "all");
+	const activeState = activeTab === "tree" ? treeState : jsonState;
 
 	const handleExpandAll = () => {
 		if (parseResult.ok) {
-			setExpanded(collectContainers(parseResult.tree));
+			activeState.setExpanded(collectContainers(parseResult.tree));
 		}
 	};
 
 	const handleCollapseAll = () => {
 		if (parseResult.ok) {
-			setExpanded(collectTopLevelContainers(parseResult.tree));
+			activeState.setExpanded(collectTopLevelContainers(parseResult.tree));
 		}
 	};
 
@@ -224,9 +225,9 @@ export function App() {
 								tree={parseResult.tree}
 								activePath={activePath}
 								activeNode={activeNode}
-								expanded={expanded}
-								toggle={toggle}
-								registerRef={registerRef}
+								expanded={treeState.expanded}
+								toggle={treeState.toggle}
+								registerRef={treeState.registerRef}
 								onHoverEnter={handleTreeHoverEnter}
 								onHoverLeave={handleTreeHoverLeave}
 							/>
@@ -235,9 +236,9 @@ export function App() {
 								tree={parseResult.tree}
 								activePath={activePath}
 								activeNode={activeNode}
-								expanded={expanded}
-								toggle={toggle}
-								registerRef={registerRef}
+								expanded={jsonState.expanded}
+								toggle={jsonState.toggle}
+								registerRef={jsonState.registerRef}
 							/>
 						)
 					) : (

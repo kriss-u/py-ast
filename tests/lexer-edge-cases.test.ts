@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Lexer, TokenType } from "../src/lexer.js";
+import { Lexer, TokenType, utf8Length, utf8LengthAt } from "../src/lexer.js";
 
 function tokenTypes(source: string) {
 	return new Lexer(source).tokenize().map((t) => t.type);
@@ -254,6 +254,10 @@ describe("Lexer numbers", () => {
 			TokenType.NUMBER,
 			TokenType.DOT,
 			TokenType.NAME,
+			// The source has no trailing newline; the lexer synthesizes one
+			// (matching CPython) so a statement ending at EOF still gets a
+			// terminating NEWLINE, same as one ending mid-file.
+			TokenType.NEWLINE,
 			TokenType.EOF,
 		]);
 		const numTok = tokens.find((t) => t.type === TokenType.NUMBER);
@@ -303,5 +307,50 @@ describe("Lexer operators", () => {
 		expect(() => new Lexer("x = $\n").tokenize()).toThrow(
 			/Unexpected character/,
 		);
+	});
+});
+
+describe("UTF-8 byte-offset column tracking", () => {
+	// CPython's col_offset/end_col_offset count UTF-8 bytes, not UTF-16 code
+	// units or codepoints, so a non-ASCII character before a node shifts its
+	// column by more than 1 relative to naive JS string indexing.
+	it("utf8Length: ASCII is 1 byte", () => {
+		expect(utf8Length("a".codePointAt(0) as number)).toBe(1);
+	});
+
+	it("utf8Length: Latin-1 supplement (e.g. é) is 2 bytes", () => {
+		expect(utf8Length("é".codePointAt(0) as number)).toBe(2);
+	});
+
+	it("utf8Length: BMP characters like em dash or CJK are 3 bytes", () => {
+		expect(utf8Length("—".codePointAt(0) as number)).toBe(3);
+		expect(utf8Length("日".codePointAt(0) as number)).toBe(3);
+	});
+
+	it("utf8Length: astral characters (e.g. emoji) are 4 bytes", () => {
+		expect(utf8Length("😀".codePointAt(0) as number)).toBe(4);
+	});
+
+	it("utf8LengthAt: combines a UTF-16 surrogate pair into one 4-byte codepoint", () => {
+		expect(utf8LengthAt("😀x", 0)).toBe(4);
+	});
+
+	it("utf8LengthAt: falls back to 3 bytes for an unpaired high surrogate", () => {
+		const lone = String.fromCharCode(0xd800) + "x";
+		expect(utf8LengthAt(lone, 0)).toBe(3);
+	});
+
+	it("a multi-byte character earlier on the line shifts later token columns", () => {
+		const tokens = new Lexer("x = 'é' + 1\n").tokenize();
+		const plus = tokens.find((t) => t.type === TokenType.PLUS);
+		// 'é' is 2 UTF-8 bytes but 1 JS character; naive counting would put
+		// '+' one column earlier than CPython does.
+		expect(plus?.col_offset).toBe(9);
+	});
+
+	it("an emoji (surrogate pair) earlier on the line shifts later token columns", () => {
+		const tokens = new Lexer("x = '😀' + 1\n").tokenize();
+		const plus = tokens.find((t) => t.type === TokenType.PLUS);
+		expect(plus?.col_offset).toBe(11);
 	});
 });

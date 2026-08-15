@@ -43,6 +43,19 @@ enum Precedence {
 }
 
 /**
+ * How an f-string/t-string's literal text segments must be escaped, derived
+ * from its chosen quote style. See {@link Unparser.escapeInterpolatedStringLiteral}.
+ */
+interface InterpolatedStringLiteralStyle {
+	/** Whether the enclosing literal has a `r`/`R` prefix (backslashes/newlines are already exact source text). */
+	isRaw: boolean;
+	/** Whether the enclosing literal uses triple quotes (`"""`/`'''`) rather than a single quote char. */
+	isTriple: boolean;
+	/** The quote character (`"` or `'`) the enclosing literal uses, tripled if `isTriple`. */
+	quoteChar: string;
+}
+
+/**
  * Mutable state threaded through a single `unparse` call. `source` accumulates
  * the emitted text as an array of fragments (joined once at the end);
  * `precedence` tracks the minimum precedence the currently-visited expression
@@ -289,7 +302,16 @@ class Unparser extends NodeVisitor {
 	private getPrecedence(node: ExprNode): Precedence {
 		switch (node.nodeType) {
 			case "Tuple":
-				return Precedence.TUPLE;
+				// `visit_Tuple` always writes its own `(...)` unconditionally
+				// (see there), so — per this method's own stated principle —
+				// it's self-delimited and never needs a caller-added
+				// wrapping paren on top, i.e. `ATOM`, not the (unrelated)
+				// `Precedence.TUPLE` used only as `unparse`'s loosest initial
+				// context. Reporting `TUPLE` here caused a real bug: e.g. a
+				// starred/IfExp/Compare operand that's an empty tuple would
+				// get double-wrapped, `*(())`, once by `visit_Tuple` itself
+				// and once more by the caller's precedence check.
+				return Precedence.ATOM;
 			case "Yield":
 			case "YieldFrom":
 				return Precedence.YIELD;
@@ -727,6 +749,16 @@ class Unparser extends NodeVisitor {
 	/** Renders an expression-statement (an expression evaluated for its side effects). */
 	visit_Expr(node: Extract<StmtNode, { nodeType: "Expr" }>): void {
 		this.fill();
+		// A bare `x := 1` expression statement is a syntax error in CPython
+		// (the walrus target needs enclosing parens outside of contexts like
+		// `if`/`while` conditions and comprehensions) — match `ast.unparse`,
+		// which always parenthesizes a top-level `NamedExpr` statement.
+		if (node.value.nodeType === "NamedExpr") {
+			this.write("(");
+			this.visit(node.value);
+			this.write(")");
+			return;
+		}
 		this.visit(node.value);
 	}
 
@@ -1038,16 +1070,21 @@ class Unparser extends NodeVisitor {
 	 * Renders a unary operator expression (`-x`, `~x`, `not x`, `+x`).
 	 * `not` is written with a trailing space (word operator); the symbolic
 	 * operators (`-`, `~`, `+`) are written flush against the operand.
+	 *
+	 * Doesn't parenthesize itself based on the ambient `this.context.precedence`
+	 * — like `visit_BinOp`, it only wraps its own operand, and relies on the
+	 * caller (`visitParenthesizedIfNeeded`/`withPrecedence` at the point this
+	 * node is visited as someone else's child) to wrap the whole node when the
+	 * surrounding context needs it, using `getPrecedence`'s per-operator-kind
+	 * value (`NOT` for `not`, `FACTOR` for `-`/`~`/`+`).
 	 */
 	visit_UnaryOp(node: Extract<ExprNode, { nodeType: "UnaryOp" }>): void {
-		const precedence = Precedence.FACTOR;
-		const needParens = this.requireParens(precedence, node);
+		const operandPrecedence =
+			node.op.nodeType === "Not" ? Precedence.NOT : Precedence.FACTOR;
 
-		if (needParens) this.write("(");
 		this.write(this.getUnaryOpSymbol(node.op));
 		if (node.op.nodeType === "Not") this.write(" ");
-		this.withPrecedence(precedence, node.operand);
-		if (needParens) this.write(")");
+		this.visitParenthesizedIfNeeded(operandPrecedence, node.operand);
 	}
 
 	/**
@@ -1069,7 +1106,16 @@ class Unparser extends NodeVisitor {
 		}
 	}
 
-	/** Renders a boolean operator expression, joining `values` with `" and "`/`" or "`. */
+	/**
+	 * Renders a boolean operator expression, joining `values` with
+	 * `" and "`/`" or "`. An operand that is itself a `BoolOp` with the
+	 * *same* operator always gets explicit parens, even though flattening
+	 * it would be semantically equivalent (`and`/`or` are associative) —
+	 * `values` is a flat n-ary list, so without parens a nested same-op
+	 * `BoolOp` and a naturally-flat chain unparse identically and can't be
+	 * told apart on re-parse. Matches CPython's own `ast.unparse`, which
+	 * makes the same choice to preserve the original tree shape.
+	 */
 	visit_BoolOp(node: Extract<ExprNode, { nodeType: "BoolOp" }>): void {
 		const precedence =
 			node.op.nodeType === "Or" ? Precedence.OR : Precedence.AND;
@@ -1077,14 +1123,33 @@ class Unparser extends NodeVisitor {
 
 		this.interleave(
 			opSymbol,
-			(value) => this.visitParenthesizedIfNeeded(precedence, value),
+			(value) => {
+				const needsParens =
+					value.nodeType === "BoolOp" && value.op.nodeType === node.op.nodeType;
+				if (needsParens) {
+					this.write("(");
+					this.visit(value);
+					this.write(")");
+				} else {
+					this.visitParenthesizedIfNeeded(precedence, value);
+				}
+			},
 			node.values,
 		);
 	}
 
-	/** Renders a chained comparison expression (`left op1 c1 op2 c2 ...`). */
+	/**
+	 * Renders a chained comparison expression (`left op1 c1 op2 c2 ...`).
+	 * Each operand is rendered at `Precedence.EXPR` (CPython's grammar:
+	 * `comparison: bitor_expr (comp_op bitor_expr)*`), one level tighter
+	 * than `Precedence.CMP` itself — comparisons aren't associative the way
+	 * left-associative `BinOp`s are, so a `Compare` operand (equal
+	 * precedence to the enclosing one) always needs parens to keep
+	 * `(a == b) != c` from rendering as the chained `a == b != c`, which
+	 * means something different.
+	 */
 	visit_Compare(node: Extract<ExprNode, { nodeType: "Compare" }>): void {
-		const precedence = Precedence.CMP;
+		const precedence = Precedence.EXPR;
 
 		this.visitParenthesizedIfNeeded(precedence, node.left);
 		for (let i = 0; i < node.ops.length; i++) {
@@ -1135,35 +1200,46 @@ class Unparser extends NodeVisitor {
 	}
 
 	/** Renders a `lambda [params]: body` expression. */
+	/**
+	 * Renders a `lambda` expression. The body is rendered at
+	 * `Precedence.TEST`: CPython's grammar (`lambdef: 'lambda' [params] ':'
+	 * test`) excludes a bare `yield`/`yield from` there (`YIELD` is one
+	 * level looser) — `lambda: yield x` is a syntax error, it must be
+	 * `lambda: (yield x)`.
+	 */
 	visit_Lambda(node: Extract<ExprNode, { nodeType: "Lambda" }>): void {
 		this.write("lambda");
-		if (node.args.args.length > 0 || node.args.vararg || node.args.kwarg) {
+		if (
+			node.args.args.length > 0 ||
+			node.args.vararg ||
+			node.args.kwarg ||
+			node.args.kwonlyargs.length > 0
+		) {
 			this.write(" ");
 			this.visit_arguments(node.args);
 		}
 		this.write(": ");
-		this.visit(node.body);
+		this.visitParenthesizedIfNeeded(Precedence.TEST, node.body);
 	}
 
 	/**
 	 * Renders a conditional expression (`body if test else orelse`).
-	 * The `test` slot requires parentheses around a bare `NamedExpr`
-	 * (`x if y := 1 else z` is a `SyntaxError` in CPython) since the
-	 * grammar there only accepts an `or_test`, not a `namedexpr_test`.
+	 * CPython's grammar (`test: or_test ['if' or_test 'else' test]`)
+	 * restricts both the `body` and `test` slots to `or_test` — a bare
+	 * nested ternary, `lambda`, or `NamedExpr` (all `Precedence.TEST`,
+	 * CPython's `namedexpr_test`/`test`) is a syntax error unparenthesized
+	 * in either slot (`(a if b else c) if d else e` needs its parens, and
+	 * `x if y := 1 else z` is a `SyntaxError` outright). `orelse` has no
+	 * such restriction — it's the recursive `test` itself, which is how
+	 * `a if b else c if d else e` chains without parens — so it's rendered
+	 * bare.
 	 */
 	visit_IfExp(node: Extract<ExprNode, { nodeType: "IfExp" }>): void {
-		const precedence = Precedence.TEST;
-		this.withPrecedence(precedence, node.body);
+		this.visitParenthesizedIfNeeded(Precedence.OR, node.body);
 		this.write(" if ");
-		if (node.test.nodeType === "NamedExpr") {
-			this.write("(");
-			this.visit(node.test);
-			this.write(")");
-		} else {
-			this.withPrecedence(precedence, node.test);
-		}
+		this.visitParenthesizedIfNeeded(Precedence.OR, node.test);
 		this.write(" else ");
-		this.withPrecedence(precedence, node.orelse);
+		this.withPrecedence(Precedence.TEST, node.orelse);
 	}
 
 	/** Renders an `await value` expression. */
@@ -1188,9 +1264,15 @@ class Unparser extends NodeVisitor {
 	}
 
 	/** Renders a starred expression (`*value`), e.g. in call args or assignment targets. */
+	/**
+	 * Renders a starred expression (`*x`). CPython's grammar restricts the
+	 * operand to `bitor` (`star_expr: '*' bitor`) — a bare `BoolOp`,
+	 * `Compare`, ternary, or `lambda` there is a syntax error unparenthesized
+	 * (`*a or b` doesn't parse), so it's rendered at `Precedence.EXPR`.
+	 */
 	visit_Starred(node: Extract<ExprNode, { nodeType: "Starred" }>): void {
 		this.write("*");
-		this.visit(node.value);
+		this.visitParenthesizedIfNeeded(Precedence.EXPR, node.value);
 	}
 
 	/** Renders a slice (`lower:upper[:step]`) used inside a `Subscript`. */
@@ -1215,7 +1297,10 @@ class Unparser extends NodeVisitor {
 			'f"',
 		);
 		this.write(openQuote);
-		this.writeInterpolatedStringContent(node.values);
+		this.writeInterpolatedStringContent(
+			node.values,
+			this.interpolatedStringLiteralStyle(openQuote, closeQuote),
+		);
 		this.write(closeQuote);
 	}
 
@@ -1228,8 +1313,29 @@ class Unparser extends NodeVisitor {
 			't"',
 		);
 		this.write(openQuote);
-		this.writeInterpolatedStringContent(node.values);
+		this.writeInterpolatedStringContent(
+			node.values,
+			this.interpolatedStringLiteralStyle(openQuote, closeQuote),
+		);
 		this.write(closeQuote);
+	}
+
+	/**
+	 * Derives how an f-string/t-string's literal text segments must be
+	 * escaped from its chosen open/close quote text.
+	 * @param openQuote - The full prefix+quote text (e.g. `rf"""`).
+	 * @param closeQuote - Just the quote part (e.g. `"""`).
+	 */
+	private interpolatedStringLiteralStyle(
+		openQuote: string,
+		closeQuote: string,
+	): InterpolatedStringLiteralStyle {
+		const prefix = openQuote.slice(0, openQuote.length - closeQuote.length);
+		return {
+			isRaw: /r/i.test(prefix),
+			isTriple: closeQuote.length === 3,
+			quoteChar: closeQuote[0],
+		};
 	}
 
 	/**
@@ -1242,11 +1348,17 @@ class Unparser extends NodeVisitor {
 	 * surrounding quotes.
 	 *
 	 * @param values - The `JoinedStr`/`TemplateStr` node's `values` to render.
+	 * @param style - The enclosing f-string/t-string's raw/triple/quote-char style, for escaping literal segments.
 	 */
-	private writeInterpolatedStringContent(values: ExprNode[]): void {
+	private writeInterpolatedStringContent(
+		values: ExprNode[],
+		style: InterpolatedStringLiteralStyle,
+	): void {
 		for (const value of values) {
 			if (value.nodeType === "Constant") {
-				this.write(String(value.value));
+				this.write(
+					this.escapeInterpolatedStringLiteral(String(value.value), style),
+				);
 			} else if (
 				value.nodeType === "FormattedValue" ||
 				value.nodeType === "Interpolation"
@@ -1255,11 +1367,34 @@ class Unparser extends NodeVisitor {
 					value.value,
 					value.conversion,
 					value.format_spec,
+					style,
 				);
 			} else {
 				this.visit(value);
 			}
 		}
+	}
+
+	/**
+	 * Escapes an f-string/t-string literal text segment for safe
+	 * re-embedding. `{`/`}` are always re-doubled to `{{`/`}}` (the parser's
+	 * `decodeDoubledBraces` folded them the other way when reading the
+	 * segment, regardless of raw-ness — braces are structurally significant
+	 * in every f-string), since otherwise they'd misread as a field
+	 * boundary. Raw literals need nothing else (their backslashes/newlines
+	 * are already exactly the original source text); non-raw literals go
+	 * through the same backslash/control-character escaping as a plain
+	 * string ({@link escapeString}/{@link escapeTripleQuoted}).
+	 */
+	private escapeInterpolatedStringLiteral(
+		value: string,
+		{ isRaw, isTriple, quoteChar }: InterpolatedStringLiteralStyle,
+	): string {
+		const braceDoubled = value.replace(/\{/g, "{{").replace(/\}/g, "}}");
+		if (isRaw) return braceDoubled;
+		return isTriple
+			? this.escapeTripleQuoted(braceDoubled, quoteChar)
+			: this.escapeString(braceDoubled, quoteChar);
 	}
 
 	/**
@@ -1276,9 +1411,21 @@ class Unparser extends NodeVisitor {
 		value: ExprNode,
 		conversion: number,
 		formatSpec: ExprNode | undefined,
+		style: InterpolatedStringLiteralStyle,
 	): void {
 		this.write("{");
+		// If `value` renders starting with its own literal `{` (a `Dict`,
+		// `DictComp`, `Set`, or `SetComp`), that `{` would sit directly next
+		// to this field's own opening `{` — CPython's f-string tokenizer
+		// folds a leading `{{` to an escaped literal brace before it even
+		// considers field boundaries, so `f"{{1: 2}}"` doesn't mean what it
+		// looks like. A space between them disambiguates, matching what
+		// CPython requires source-side for the same expression.
+		const exprStart = this.context.source.length;
 		this.visit(value);
+		if (this.context.source[exprStart]?.startsWith("{")) {
+			this.context.source.splice(exprStart, 0, " ");
+		}
 		if (conversion !== -1) {
 			if (conversion === 115) this.write("!s");
 			else if (conversion === 114) this.write("!r");
@@ -1287,7 +1434,7 @@ class Unparser extends NodeVisitor {
 		if (formatSpec) {
 			this.write(":");
 			if (formatSpec.nodeType === "JoinedStr") {
-				this.writeInterpolatedStringContent(formatSpec.values);
+				this.writeInterpolatedStringContent(formatSpec.values, style);
 			} else {
 				this.visit(formatSpec);
 			}
@@ -1297,23 +1444,36 @@ class Unparser extends NodeVisitor {
 
 	/**
 	 * Renders a standalone `FormattedValue` (a `{expr[!conv][:format_spec]}`
-	 * replacement field visited outside of a `JoinedStr` context).
+	 * replacement field visited outside of a `JoinedStr` context — not
+	 * something the parser ever produces, only a hand-built AST). Assumes
+	 * the default non-raw double-quote style, matching
+	 * {@link chooseInterpolatedStringQuotes}'s own fallback.
 	 */
 	visit_FormattedValue(
 		node: Extract<ExprNode, { nodeType: "FormattedValue" }>,
 	): void {
-		this.writeReplacementField(node.value, node.conversion, node.format_spec);
+		this.writeReplacementField(node.value, node.conversion, node.format_spec, {
+			isRaw: false,
+			isTriple: false,
+			quoteChar: '"',
+		});
 	}
 
 	/**
 	 * Renders a standalone `Interpolation` (a t-string's
 	 * `{expr[!conv][:format_spec]}` field visited outside of a `TemplateStr`
-	 * context).
+	 * context — not something the parser ever produces, only a hand-built
+	 * AST). Assumes the default non-raw double-quote style, matching
+	 * {@link chooseInterpolatedStringQuotes}'s own fallback.
 	 */
 	visit_Interpolation(
 		node: Extract<ExprNode, { nodeType: "Interpolation" }>,
 	): void {
-		this.writeReplacementField(node.value, node.conversion, node.format_spec);
+		this.writeReplacementField(node.value, node.conversion, node.format_spec, {
+			isRaw: false,
+			isTriple: false,
+			quoteChar: '"',
+		});
 	}
 
 	/**
@@ -1394,6 +1554,17 @@ class Unparser extends NodeVisitor {
 			return this.formatString(value, node);
 		}
 		if (typeof value === "number") {
+			// `Infinity`/`NaN` have no float literal in Python — CPython's
+			// own `ast.unparse` renders them as arithmetic on `1e309` (a
+			// literal that itself overflows to `inf` at parse time), the
+			// same trick used here. A negative-infinity `Constant` doesn't
+			// reach this branch as `-Infinity`: CPython represents `-1e1000`
+			// as `UnaryOp(USub, Constant(inf))`, not a directly negative
+			// constant, so `visit_UnaryOp` supplies the `-` and only the
+			// positive form needs handling here.
+			if (Number.isNaN(value)) return "(1e309-1e309)";
+			if (value === Infinity) return "1e309";
+			if (value === -Infinity) return "-1e309";
 			return value.toString();
 		}
 		if (value instanceof PyComplex) {
@@ -1429,12 +1600,16 @@ class Unparser extends NodeVisitor {
 			const quoteStyle = prefixMatch[2];
 			const isRaw = /[rR]/.test(prefix);
 
-			// Triple-quoted and raw strings round-trip verbatim: their body
-			// text is already exactly the original source text (raw strings
-			// never had escape sequences resolved; triple-quoted strings are
-			// re-wrapped in the same triple-quote regardless of newlines).
-			if (quoteStyle === '"""' || quoteStyle === "'''" || isRaw) {
+			// Raw strings' value is the exact original source text (their
+			// escape sequences were never decoded), so it's always safe to
+			// write back verbatim, regardless of quote style.
+			if (isRaw) {
 				return `${prefix}${quoteStyle}${value}${quoteStyle}`;
+			}
+
+			if (quoteStyle === '"""' || quoteStyle === "'''") {
+				const quoteChar = quoteStyle[0];
+				return `${prefix}${quoteStyle}${this.escapeTripleQuoted(value, quoteChar)}${quoteStyle}`;
 			}
 
 			if (quoteStyle === '"') {
@@ -1468,15 +1643,72 @@ class Unparser extends NodeVisitor {
 			.replace(new RegExp(`\\${quote}`, "g"), `\\${quote}`);
 	}
 
+	/**
+	 * Escapes a non-raw triple-quoted string literal's decoded content for
+	 * safe re-embedding. Unlike {@link escapeString}, literal `\n`s are left
+	 * as-is (triple-quoted strings span lines natively) — but backslashes
+	 * must still be escaped, or a literal backslash in the decoded value
+	 * (e.g. from a source `\\n`, decoding to a literal backslash + `n`, not
+	 * a newline) would read back as the start of a new escape sequence and
+	 * silently change meaning on re-parse. A literal `\r` must also be
+	 * escaped (unlike `\n`): CPython's tokenizer applies universal-newline
+	 * translation to a *raw* `\r`/`\r\n` in the source — including inside a
+	 * triple-quoted literal's body — collapsing it to `\n` on re-parse, so a
+	 * `Constant.value` that came from an explicit `\r` escape (as opposed to
+	 * a real source line ending) would silently become `\n` if left
+	 * unescaped here. The closing delimiter (`"""`/`'''`) is also escaped if
+	 * it occurs in the content, or as a lone trailing quote char that would
+	 * otherwise merge with the real closing delimiter appended right after
+	 * this.
+	 * @param value - Decoded string content to escape.
+	 * @param quoteChar - The quote character (`"` or `'`) whose tripled form delimits the literal.
+	 * @returns The escaped string body (without surrounding triple quotes).
+	 */
+	private escapeTripleQuoted(value: string, quoteChar: string): string {
+		let result = value.replace(/\\/g, "\\\\").replace(/\r/g, "\\r");
+		const closing = quoteChar.repeat(3);
+		result = result
+			.split(closing)
+			.join(`\\${quoteChar}${quoteChar}${quoteChar}`);
+		if (result.endsWith(quoteChar)) {
+			result = `${result.slice(0, -1)}\\${quoteChar}`;
+		}
+		return result;
+	}
+
 	/** Renders a bare identifier reference. */
 	visit_Name(node: Extract<ExprNode, { nodeType: "Name" }>): void {
 		this.write(node.id);
 	}
 
-	/** Renders attribute access (`value.attr`). */
+	/**
+	 * Renders attribute access (`value.attr`). A bare integer literal base
+	 * (`3571`) needs a space before the `.` — CPython's tokenizer would
+	 * otherwise read `3571.` as the start of a float literal and fail to
+	 * find `to_bytes` after it (`3571.to_bytes(...)` is a syntax error;
+	 * `(3571).to_bytes(...)` or `3571 .to_bytes(...)` both work). This
+	 * matches CPython's own `ast.unparse`, which also just adds a space
+	 * rather than parenthesizing.
+	 */
 	visit_Attribute(node: Extract<ExprNode, { nodeType: "Attribute" }>): void {
 		this.visitAtomBase(node.value);
+		if (this.isBareIntegerLiteral(node.value)) {
+			this.write(" ");
+		}
 		this.write(".", node.attr);
+	}
+
+	/**
+	 * Reports whether `node` renders as a bare sequence of decimal digits
+	 * with no `.`/`e`/`x` (a plain `Constant` int, not a float/hex/octal/
+	 * binary literal) — see {@link visit_Attribute}.
+	 */
+	private isBareIntegerLiteral(node: ExprNode): boolean {
+		return (
+			node.nodeType === "Constant" &&
+			typeof node.value === "number" &&
+			/^\d+$/.test(node.value.toString())
+		);
 	}
 
 	/**
@@ -1488,9 +1720,21 @@ class Unparser extends NodeVisitor {
 	visit_Subscript(node: Extract<ExprNode, { nodeType: "Subscript" }>): void {
 		this.visitAtomBase(node.value);
 		this.write("[");
-		// Special handling for tuples in subscripts - don't add parentheses
-		if (node.slice.nodeType === "Tuple") {
+		// A non-empty tuple slice (`a[1, 2]`) doesn't need its own `(...)` —
+		// matches CPython's own `ast.unparse`. An *empty* tuple slice
+		// (`a[()]`, e.g. `Unpack[tuple[()]]`) is different: `a[]` isn't
+		// valid syntax at all (a subscript can't be empty), so it must
+		// still render through `visit_Tuple`, which writes the `()` itself.
+		// A single-element tuple slice (`a[x,]`) needs its trailing comma
+		// kept, unlike the bare multi-element case — `a[x]` and `a[x,]` mean
+		// different things (a plain index vs. a 1-tuple index), whereas
+		// `visit_Tuple`'s own comma-adding logic doesn't apply here since
+		// this branch deliberately skips the wrapping parens it would add.
+		if (node.slice.nodeType === "Tuple" && node.slice.elts.length > 0) {
 			this.interleave(", ", (elt) => this.visit(elt), node.slice.elts);
+			if (node.slice.elts.length === 1) {
+				this.write(",");
+			}
 		} else {
 			this.visit(node.slice);
 		}
@@ -1523,6 +1767,14 @@ class Unparser extends NodeVisitor {
 	 * its value) represents a `**value` unpacking entry rather than an
 	 * explicit `key: value` pair.
 	 */
+	/**
+	 * Renders a dict display (`{key: value, ...}`), including `**expr`
+	 * unpacking entries (`key` is `null`). A key/value pair's `value`
+	 * accepts any expression (CPython's `test`), but `**expr`'s operand
+	 * binds at `bitor` precedence — same restriction as `**kwargs` in a
+	 * call — so a bare `BoolOp`/`Compare`/ternary/`lambda` there needs
+	 * parens (`{**a or b}` doesn't parse).
+	 */
 	visit_Dict(node: Extract<ExprNode, { nodeType: "Dict" }>): void {
 		this.write("{");
 		for (let i = 0; i < node.keys.length; i++) {
@@ -1531,10 +1783,11 @@ class Unparser extends NodeVisitor {
 			if (key) {
 				this.visit(key);
 				this.write(": ");
+				this.visit(node.values[i]);
 			} else {
 				this.write("**");
+				this.visitParenthesizedIfNeeded(Precedence.EXPR, node.values[i]);
 			}
-			this.visit(node.values[i]);
 		}
 		this.write("}");
 	}
@@ -1594,7 +1847,11 @@ class Unparser extends NodeVisitor {
 	 * Renders one `[async] for target in iter [if cond ...]` clause of a
 	 * comprehension. Writes its own leading space (` for `/` async for `) so
 	 * multiple clauses concatenate correctly when a comprehension has more
-	 * than one `for`.
+	 * than one `for`. `iter` and each `if` condition are rendered at
+	 * `Precedence.OR`: CPython's grammar restricts both to `or_test` (a bare
+	 * ternary or `lambda` is `test`, one level looser, and a syntax error
+	 * there unparenthesized — `for x in y if a else b` doesn't parse), so
+	 * either needs explicit parens whenever the source actually had one.
 	 */
 	visit_Comprehension(
 		node: Extract<
@@ -1609,10 +1866,10 @@ class Unparser extends NodeVisitor {
 		}
 		this.visit(node.target);
 		this.write(" in ");
-		this.visit(node.iter);
+		this.visitParenthesizedIfNeeded(Precedence.OR, node.iter);
 		for (const if_ of node.ifs) {
 			this.write(" if ");
-			this.visit(if_);
+			this.visitParenthesizedIfNeeded(Precedence.OR, if_);
 		}
 	}
 
@@ -1817,9 +2074,7 @@ class Unparser extends NodeVisitor {
 		node: Extract<import("./types.js").PatternNode, { nodeType: "MatchStar" }>,
 	): void {
 		this.write("*");
-		if (node.name) {
-			this.write(node.name);
-		}
+		this.write(node.name ?? "_");
 	}
 
 	/**
@@ -1833,16 +2088,32 @@ class Unparser extends NodeVisitor {
 			this.visit(node.pattern);
 			this.write(" as ");
 		}
-		if (node.name) {
-			this.write(node.name);
-		}
+		this.write(node.name ?? "_");
 	}
 
-	/** Renders an "or" pattern (`p1 | p2 | ...`). */
+	/**
+	 * Renders an "or" pattern (`p1 | p2 | ...`). CPython's grammar
+	 * (`or_pattern: '|'.closed_pattern+`) restricts each alternative to a
+	 * `closed_pattern`, which excludes a bare `as`-pattern (`MatchAs` with
+	 * a nested `pattern`, e.g. `X() as y`) — `X() as y | Z()` is a syntax
+	 * error unparenthesized, so that shape needs `(X() as y) | Z()`. A
+	 * plain capture (`MatchAs` with no nested `pattern`, just a bare name)
+	 * is itself already a `closed_pattern` and needs no parens.
+	 */
 	visit_MatchOr(
 		node: Extract<import("./types.js").PatternNode, { nodeType: "MatchOr" }>,
 	): void {
-		this.interleave(" | ", (pattern) => this.visit(pattern), node.patterns);
+		this.interleave(
+			" | ",
+			(pattern) => {
+				const needsParens =
+					pattern.nodeType === "MatchAs" && pattern.pattern !== undefined;
+				if (needsParens) this.write("(");
+				this.visit(pattern);
+				if (needsParens) this.write(")");
+			},
+			node.patterns,
+		);
 	}
 
 	// Helper method for type parameters

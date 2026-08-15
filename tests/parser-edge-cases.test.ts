@@ -290,12 +290,49 @@ describe("parser edge cases", () => {
 		});
 	});
 
-	describe("branch coverage: suite with an empty single-line body", () => {
-		test("a compound-statement keyword right after ':' yields an empty suite body", () => {
-			const module = parseCode("if True: class Foo: pass\n");
-			const ifStmt = module.body[0] as ASTNode & { body: ASTNode[] };
-			expect(ifStmt.body).toEqual([]);
-			expect(module.body[1]?.nodeType).toBe("ClassDef");
+	describe("a compound statement can't be a single-line suite's inline body", () => {
+		test("a compound-statement keyword right after ':' throws (matches CPython)", () => {
+			// Verified against CPython 3.13: `ast.parse('if True: class Foo: pass')`
+			// raises `SyntaxError: invalid syntax` — a compound statement
+			// (`class`/`def`/`if`/... ) can only start a *block* body
+			// (`if True:\n    class Foo: ...`), never a single-line one.
+			// This previously silently accepted it, treating the `if`'s body
+			// as empty and `class Foo: pass` as a new top-level statement —
+			// itself a bug, not a documented/intentional shape.
+			expect(() => parseCode("if True: class Foo: pass\n")).toThrow(
+				/invalid syntax/,
+			);
+		});
+	});
+
+	describe("multiple ';'-separated statements in a single-line suite", () => {
+		// Verified against CPython 3.13: `simple_stmts: simple_stmt (';'
+		// simple_stmt)* [';'] NEWLINE` — a single-line suite can hold more
+		// than one `;`-separated statement, not just the first.
+		test("two statements, then a following 'else' clause", () => {
+			const stmt = parseStatement("if a: b = 1; del c\nelse: b = 2\n") as {
+				body: StmtNode[];
+			};
+			expect(stmt.body.map((s) => s.nodeType)).toEqual(["Assign", "Delete"]);
+		});
+
+		test("three statements on one line", () => {
+			const stmt = parseStatement("if a: b = 1; c = 2; d = 3\n") as {
+				body: StmtNode[];
+			};
+			expect(stmt.body).toHaveLength(3);
+		});
+
+		test("a trailing ';' right before the newline", () => {
+			const stmt = parseStatement("if a: b = 1;\nelse: b = 2\n") as {
+				body: StmtNode[];
+			};
+			expect(stmt.body).toHaveLength(1);
+		});
+
+		test("a trailing ';' at end of file (no trailing newline)", () => {
+			const stmt = parseStatement("if a: b = 1;") as { body: StmtNode[] };
+			expect(stmt.body).toHaveLength(1);
 		});
 	});
 
@@ -525,6 +562,40 @@ describe("parser edge cases", () => {
 			);
 			expect(stmt.nodeType).toBe("Match");
 		});
+
+		test("a bare wildcard 'case _:' produces MatchAs with no pattern and no name", () => {
+			// Verified against CPython 3.13: `ast.parse('match x:\n case _:\n  pass')`
+			// produces `MatchAs(pattern=None, name=None)`, not `name="_"`.
+			const ast = parseCode("match x:\n    case _:\n        pass\n");
+			const matchStmt = ast.body[0] as Extract<StmtNode, { nodeType: "Match" }>;
+			expect(matchStmt.cases[0].pattern).toMatchObject({
+				nodeType: "MatchAs",
+				pattern: undefined,
+				name: undefined,
+			});
+		});
+
+		test.each([
+			["None", null],
+			["True", true],
+			["False", false],
+		])(
+			"'case %s:' produces MatchSingleton, not MatchValue(Constant)",
+			(literal, expectedValue) => {
+				// Verified against CPython 3.13: `case None/True/False:` produces
+				// `MatchSingleton(value=...)`, checked with `is`, not
+				// `MatchValue(value=Constant(...))`, which is checked with `==`.
+				const ast = parseCode(`match x:\n    case ${literal}:\n        pass\n`);
+				const matchStmt = ast.body[0] as Extract<
+					StmtNode,
+					{ nodeType: "Match" }
+				>;
+				expect(matchStmt.cases[0].pattern).toMatchObject({
+					nodeType: "MatchSingleton",
+					value: expectedValue,
+				});
+			},
+		);
 
 		test("a class pattern with positional and keyword sub-patterns", () => {
 			const ast = parseCode(
@@ -778,6 +849,449 @@ describe("parser edge cases", () => {
 		});
 	});
 
+	describe("match/case/type as soft keywords", () => {
+		// Verified against CPython 3.13: `match`, `case`, and `type` are soft
+		// keywords, valid as ordinary identifiers everywhere outside the
+		// specific syntax they introduce.
+		test("match as a plain assignment target", () => {
+			const stmt = parseStatement("match = 5\n");
+			expect(stmt.nodeType).toBe("Assign");
+		});
+
+		test("match as a function name", () => {
+			const stmt = parseStatement("def match():\n    pass\n");
+			expect(stmt.nodeType).toBe("FunctionDef");
+			expect((stmt as { name: string }).name).toBe("match");
+		});
+
+		test("match as an attribute name (re.match)", () => {
+			const expr = parseExpression("re.match(pattern, s)");
+			expect(expr.nodeType).toBe("Call");
+		});
+
+		test("case as a plain assignment target", () => {
+			const stmt = parseStatement("case = 3\n");
+			expect(stmt.nodeType).toBe("Assign");
+		});
+
+		test("match used as both the statement keyword and the subject name", () => {
+			const stmt = parseStatement(
+				"match match:\n    case case:\n        pass\n",
+			);
+			expect(stmt.nodeType).toBe("Match");
+		});
+
+		test("match followed by a subscript target is an annotated assignment, not a match statement", () => {
+			// `match[0]: int = 1` parses as `AnnAssign` in CPython: the
+			// match_stmt alternative fails (no NEWLINE after the header) and
+			// backtracks entirely, same as this parser's speculative attempt.
+			const stmt = parseStatement("match[0]: int = 1\n");
+			expect(stmt.nodeType).toBe("AnnAssign");
+		});
+
+		test("match header with an invalid body still reports the real match-statement error", () => {
+			// Once `match <expr> :` is followed by NEWLINE, CPython commits to
+			// match_stmt; a missing `case` clause is a hard error, not a
+			// backtrack into a different (also invalid) interpretation.
+			expect(() => parseCode("match x:\n    y = 1\n")).toThrow(
+				/Expected 'case'/,
+			);
+		});
+
+		test("type as a plain assignment target", () => {
+			const stmt = parseStatement("type = 5\n");
+			expect(stmt.nodeType).toBe("Assign");
+		});
+
+		test("type as a call", () => {
+			const expr = parseExpression("type(x)");
+			expect(expr.nodeType).toBe("Call");
+		});
+
+		test("type alias statement still parses", () => {
+			const stmt = parseStatement("type X = int\n");
+			expect(stmt.nodeType).toBe("TypeAlias");
+		});
+
+		test("type alias statement with type params still parses", () => {
+			const stmt = parseStatement("type X[T] = list[T]\n");
+			expect(stmt.nodeType).toBe("TypeAlias");
+			expect((stmt as { type_params: unknown[] }).type_params).toHaveLength(1);
+		});
+
+		test("match subject with no colon backtracks and reports invalid syntax", () => {
+			// Exercises tryParseMatchStmt's "not a match statement" backtrack
+			// when a colon never follows the subject expression.
+			expect(() => parseCode("match x\n")).toThrow(/invalid syntax/);
+		});
+
+		test("type NAME with no '=' backtracks and reports invalid syntax", () => {
+			// Exercises the type-alias attempt's "not a type alias" backtrack
+			// when '=' never follows the name (and optional type params).
+			expect(() => parseCode("type X\n")).toThrow(/invalid syntax/);
+		});
+	});
+
+	describe("string escape sequences", () => {
+		// Verified against CPython 3.13's escape table. Every case here
+		// shares the same shape (parse a literal, check its decoded
+		// `.value`), so it's one table rather than one `test()` per escape.
+		test.each<[string, string, string]>([
+			["hex escape \\x", '"\\x41"', "A"],
+			["4-digit unicode escape \\u", '"\\u0041"', "A"],
+			["8-digit unicode escape \\U", '"\\U0001F600"', "\u{1F600}"],
+			["octal escape", '"\\101\\102\\103"', "ABC"],
+			[
+				"bell, backspace, formfeed, vertical tab escapes",
+				'"\\a\\b\\f\\v"',
+				"\x07\b\f\v",
+			],
+			[
+				"line continuation is dropped entirely",
+				'"line1\\\nline2"',
+				"line1line2",
+			],
+			["unrecognized escape keeps the backslash literally", '"\\q"', "\\q"],
+			["\\u is not decoded in a bytes literal", 'b"\\u0041"', "\\u0041"],
+			[
+				"raw strings still skip all escape processing",
+				'r"\\x41\\n"',
+				"\\x41\\n",
+			],
+			[
+				"hex escape with fewer than 2 hex digits is kept literal",
+				'"\\xg1"',
+				"\\xg1",
+			],
+			[
+				"\\N{...} named escape is kept literal (no name database)",
+				'"\\N{DEGREE SIGN}"',
+				"\\N{DEGREE SIGN}",
+			],
+			[
+				"\\u escape with fewer than 4 hex digits is kept literal",
+				'"\\u12"',
+				"\\u12",
+			],
+			[
+				"\\U escape with fewer than 8 hex digits is kept literal",
+				'"\\U1234"',
+				"\\U1234",
+			],
+			["\\N{ with no closing brace is kept literal", '"\\N{ABC"', "\\N{ABC"],
+		])("%s", (_name, source, expected) => {
+			const expr = parseExpression(source) as { value: string };
+			expect(expr.value).toBe(expected);
+		});
+	});
+
+	describe("parenthesized-base position tracking", () => {
+		// Verified against CPython 3.13: a parenthesized atom keeps its inner
+		// expression's own (paren-excluded) position when used standalone,
+		// but a trailer chain built on top of one starts at the paren.
+		test("attribute access on a parenthesized name starts at the paren", () => {
+			const expr = parseExpression("(x).y") as ExprNode;
+			expect(expr.col_offset).toBe(0);
+			expect(expr.end_col_offset).toBe(5);
+		});
+
+		test("call on a parenthesized expression starts at the paren", () => {
+			const expr = parseExpression("(x)()") as ExprNode;
+			expect(expr.col_offset).toBe(0);
+		});
+
+		test("subscript on a parenthesized expression starts at the paren", () => {
+			const expr = parseExpression("(x)[0]") as ExprNode;
+			expect(expr.col_offset).toBe(0);
+		});
+
+		test("a bare parenthesized name stays transparent (no trailer applied)", () => {
+			const expr = parseExpression("(x)") as ExprNode;
+			expect(expr.nodeType).toBe("Name");
+			expect(expr.col_offset).toBe(1);
+		});
+	});
+
+	describe("slice with omitted lower bound", () => {
+		test("col_offset points at the colon, not the upper-bound expression", () => {
+			// Verified against CPython 3.13: `ast.parse('x[:3]', mode='eval')`
+			// gives the Slice node col_offset 2 (the `:`), not 3 (the `3`).
+			const expr = parseExpression("x[:3]") as {
+				slice: { col_offset: number };
+			};
+			expect(expr.slice.col_offset).toBe(2);
+		});
+	});
+
+	describe("decorated async function position", () => {
+		test("lineno/col_offset point at 'async', not 'def'", () => {
+			// Verified against CPython 3.13.
+			const stmt = parseStatement(
+				"class C:\n    @staticmethod\n    async def f():\n        pass\n",
+			);
+			const method = (stmt as { body: StmtNode[] }).body[0] as {
+				nodeType: string;
+				col_offset: number;
+			};
+			expect(method.nodeType).toBe("AsyncFunctionDef");
+			expect(method.col_offset).toBe(4);
+		});
+	});
+
+	describe("bare generator expression argument position", () => {
+		// Verified against CPython 3.13: a lone, unparenthesized generator
+		// expression argument (`f(x for x in y)`) uses the call's own parens
+		// as its own — its position starts at `(` and ends at `)`, unlike an
+		// explicitly-parenthesized one (`f((x for x in y))`), which keeps its
+		// own separate, inner parens instead.
+		test("bare generator expression spans the call's parens", () => {
+			const expr = parseExpression("any(x for x in y)") as {
+				args: ExprNode[];
+			};
+			const genexp = expr.args[0];
+			expect(genexp.nodeType).toBe("GeneratorExp");
+			expect(genexp.col_offset).toBe(3);
+			expect(genexp.end_col_offset).toBe(17);
+		});
+
+		test("explicitly-parenthesized generator expression keeps its own parens", () => {
+			const expr = parseExpression("f((x for x in y))") as {
+				args: ExprNode[];
+			};
+			const genexp = expr.args[0];
+			expect(genexp.nodeType).toBe("GeneratorExp");
+			expect(genexp.col_offset).toBe(2);
+			expect(genexp.end_col_offset).toBe(16);
+		});
+	});
+
+	describe("single-element tuple target/value with a trailing comma", () => {
+		// Verified against CPython 3.13: a trailing comma may be immediately
+		// followed by `=` (or end the statement), making a single-element
+		// `Tuple` rather than requiring another element after the comma.
+		test("single-element tuple assignment target", () => {
+			const stmt = parseStatement("a, = b\n") as {
+				nodeType: string;
+				targets: ExprNode[];
+			};
+			expect(stmt.nodeType).toBe("Assign");
+			expect(stmt.targets[0].nodeType).toBe("Tuple");
+			expect((stmt.targets[0] as { elts: ExprNode[] }).elts).toHaveLength(1);
+		});
+
+		test("multi-element tuple assignment target with trailing comma", () => {
+			const stmt = parseStatement("a, b, = c\n") as {
+				targets: ExprNode[];
+			};
+			expect((stmt.targets[0] as { elts: ExprNode[] }).elts).toHaveLength(2);
+		});
+
+		test("single-element tuple value in a chained assignment", () => {
+			const stmt = parseStatement("x = y, = z\n") as {
+				targets: ExprNode[];
+			};
+			expect(stmt.targets[1].nodeType).toBe("Tuple");
+			expect((stmt.targets[1] as { elts: ExprNode[] }).elts).toHaveLength(1);
+		});
+	});
+
+	describe("CRLF line endings", () => {
+		// Verified against CPython 3.13: `ast.parse` performs universal-newline
+		// translation (`\r\n`/`\r` -> `\n`) on the whole source, including
+		// inside string literals, before tokenizing.
+		test("indentation tracking isn't thrown off by \\r\\n", () => {
+			const ast = parseCode(
+				"class C:\r\n    x = 1\r\n\r\n    def f(self):\r\n        pass\r\n",
+			);
+			const cls = ast.body[0] as { body: StmtNode[] };
+			expect(cls.body).toHaveLength(2);
+			expect(cls.body[1].nodeType).toBe("FunctionDef");
+		});
+
+		test("a \\r\\n inside a triple-quoted string is normalized to \\n", () => {
+			const expr = parseExpression('"""line1\r\nline2"""') as {
+				value: string;
+			};
+			expect(expr.value).toBe("line1\nline2");
+		});
+
+		test("lone \\r line endings are also normalized", () => {
+			const ast = parseCode("x = 1\ry = 2\r");
+			expect(ast.body).toHaveLength(2);
+		});
+	});
+
+	describe("source with no trailing newline", () => {
+		// Verified against CPython 3.13: `ast.parse("def f():\n    return")`
+		// (no trailing `\n`) is valid. Without a real `\n` character, nothing
+		// emitted the `NEWLINE` a `return`/`yield` normally ends on, so the
+		// parser read straight into `DEDENT`/`EOF` and misread it as the
+		// statement's optional value.
+		test("a bare 'return' as the last line", () => {
+			const stmt = parseStatement("def f():\n    return") as {
+				body: StmtNode[];
+			};
+			const ret = stmt.body[0] as { nodeType: string; value?: unknown };
+			expect(ret.nodeType).toBe("Return");
+			expect(ret.value).toBeUndefined();
+		});
+
+		test("a bare 'yield' as the last line", () => {
+			const stmt = parseStatement("def f():\n    yield") as {
+				body: StmtNode[];
+			};
+			const yieldExpr = (stmt.body[0] as { value: { value?: unknown } }).value;
+			expect(yieldExpr.value).toBeUndefined();
+		});
+
+		test("a value-bearing 'return' as the last line still parses its value", () => {
+			const stmt = parseStatement("def f():\n    return 1") as {
+				body: StmtNode[];
+			};
+			const ret = stmt.body[0] as { value: { value: number } };
+			expect(ret.value.value).toBe(1);
+		});
+
+		test("a simple statement with no trailing newline", () => {
+			const ast = parseCode("x = 1");
+			expect(ast.body).toHaveLength(1);
+		});
+	});
+
+	describe("relative imports with 4+ leading dots", () => {
+		// Verified against CPython 3.13: the lexer tokenizes any run of 3+
+		// dots as one or more `...` (ELLIPSIS) tokens rather than that many
+		// DOTs, so e.g. 4 dots comes through as ELLIPSIS + DOT.
+		test.each([1, 2, 3, 4, 5, 6, 7])("%i leading dots", (n) => {
+			const stmt = parseStatement(`from ${".".repeat(n)}a import x\n`) as {
+				level: number;
+			};
+			expect(stmt.level).toBe(n);
+		});
+	});
+
+	describe("starred expressions in previously-unsupported positions", () => {
+		// Verified against CPython 3.13.
+		test("starred element in a set display", () => {
+			const expr = parseExpression("{*a, *b}") as { elts: ExprNode[] };
+			expect(expr.nodeType).toBe("Set");
+			expect(expr.elts.map((e) => e.nodeType)).toEqual(["Starred", "Starred"]);
+		});
+
+		test("starred element mixed with a plain element in a set display", () => {
+			const expr = parseExpression("{a, *b}") as { elts: ExprNode[] };
+			expect(expr.elts.map((e) => e.nodeType)).toEqual(["Name", "Starred"]);
+		});
+
+		test("set display starting with a starred element and a trailing comma", () => {
+			const expr = parseExpression("{*a, *b,}") as { elts: ExprNode[] };
+			expect(expr.elts.map((e) => e.nodeType)).toEqual(["Starred", "Starred"]);
+		});
+
+		test("starred return value", () => {
+			const stmt = parseStatement("def f():\n    return *a, b\n") as {
+				body: { value: ExprNode }[];
+			};
+			expect(stmt.body[0].value.nodeType).toBe("Tuple");
+		});
+
+		test("starred yield value", () => {
+			const stmt = parseStatement("def f():\n    yield *a, b\n") as {
+				body: { value: { value: ExprNode } }[];
+			};
+			expect(stmt.body[0].value.value.nodeType).toBe("Tuple");
+		});
+
+		test("starred assignment value", () => {
+			const stmt = parseStatement("x = *a, b\n") as { value: ExprNode };
+			expect(stmt.value.nodeType).toBe("Tuple");
+		});
+
+		test("starred chained-assignment value", () => {
+			const stmt = parseStatement("x = y = *a, b\n") as { value: ExprNode };
+			expect(stmt.value.nodeType).toBe("Tuple");
+		});
+
+		test("starred annotated-assignment value", () => {
+			const stmt = parseStatement("x: tuple = *a, b\n") as {
+				value: ExprNode;
+			};
+			expect(stmt.value.nodeType).toBe("Tuple");
+		});
+
+		test("starred for-loop iterable", () => {
+			const stmt = parseStatement("for x in *a, b:\n    pass\n") as {
+				iter: ExprNode;
+			};
+			expect(stmt.iter.nodeType).toBe("Tuple");
+		});
+
+		test("starred for-loop target", () => {
+			const stmt = parseStatement("for label, *data in x:\n    pass\n") as {
+				target: { elts: ExprNode[] };
+			};
+			expect(stmt.target.elts.map((e) => e.nodeType)).toEqual([
+				"Name",
+				"Starred",
+			]);
+		});
+
+		test("starred class base", () => {
+			const stmt = parseStatement("class C(*bases):\n    pass\n") as {
+				bases: ExprNode[];
+			};
+			expect(stmt.bases[0].nodeType).toBe("Starred");
+		});
+
+		test("double-starred class keyword", () => {
+			const stmt = parseStatement("class C(**kwds):\n    pass\n") as {
+				keywords: { arg?: string }[];
+			};
+			expect(stmt.keywords[0].arg).toBeUndefined();
+		});
+
+		test("class with a mix of base, starred base, keyword, and double-starred keyword", () => {
+			const stmt = parseStatement(
+				"class C(base, *more, meta=X, **kw):\n    pass\n",
+			) as { bases: ExprNode[]; keywords: { arg?: string }[] };
+			expect(stmt.bases.map((b) => b.nodeType)).toEqual(["Name", "Starred"]);
+			expect(stmt.keywords.map((k) => k.arg)).toEqual(["meta", undefined]);
+		});
+	});
+
+	describe("single-line compound-statement body followed by a comment-only line", () => {
+		// A comment-only line between a single-line `if a: ...` body and its
+		// `elif`/`else` (or `except`/`finally`) previously left a stray
+		// NEWLINE in the way of the follow-up clause check.
+		test("elif after an inline if-body and a standalone comment", () => {
+			const stmt = parseStatement(
+				"if a: y = 1\n# comment\nelif b: y = 2\n",
+			) as { orelse: StmtNode[] };
+			expect(stmt.orelse[0].nodeType).toBe("If");
+		});
+
+		test("else after an inline while-body and a blank line", () => {
+			const stmt = parseStatement("while a: y = 1\n\nelse: y = 2\n") as {
+				orelse: StmtNode[];
+			};
+			expect(stmt.orelse).toHaveLength(1);
+		});
+
+		test("except after an inline try-body and a standalone comment", () => {
+			const stmt = parseStatement("try: y = 1\n# c\nexcept: y = 2\n") as {
+				handlers: unknown[];
+			};
+			expect(stmt.handlers).toHaveLength(1);
+		});
+
+		test("finally after an inline except-body and a standalone comment", () => {
+			const stmt = parseStatement(
+				"try: y = 1\nexcept: y = 2\n# c\nfinally: y = 3\n",
+			) as { finalbody: StmtNode[] };
+			expect(stmt.finalbody).toHaveLength(1);
+		});
+	});
+
 	describe("f-strings", () => {
 		test("nested f-string inside interpolation", () => {
 			const expr = parseCode("f\"{f'{x}'}\"\n");
@@ -787,6 +1301,174 @@ describe("parser edge cases", () => {
 		test("quoted string literal inside interpolation", () => {
 			const ast = parseCode("f\"{'a' + 'b'}\"\n");
 			expect(ast.body[0].nodeType).toBe("Expr");
+		});
+
+		test("doubled braces are a literal brace, not an interpolation", () => {
+			// Verified against CPython 3.13.
+			const expr = parseExpression('f"{{literal}}"') as {
+				values: { nodeType: string; value?: string }[];
+			};
+			expect(expr.values).toHaveLength(1);
+			expect(expr.values[0].nodeType).toBe("Constant");
+			expect(expr.values[0].value).toBe("{literal}");
+		});
+
+		test("a line continuation between two fields produces no empty Constant", () => {
+			// Verified against CPython 3.13: `ast.parse('f"""\\\n{a}\n    {b}"""')`
+			// merges the surrounding text into a single `Constant('\n    ')`
+			// with no empty `Constant` for the `\`-newline itself — a prior
+			// bug emitted `Constant('')` for the consumed-but-decodes-to-
+			// nothing continuation text.
+			const expr = parseExpression('f"""\\\n{a}\n    {b}"""') as {
+				values: { nodeType: string; value?: string }[];
+			};
+			expect(expr.values.map((v) => v.nodeType)).toEqual([
+				"FormattedValue",
+				"Constant",
+				"FormattedValue",
+			]);
+			expect(expr.values[1].value).toBe("\n    ");
+		});
+
+		test("a line continuation as an f-string's entire content produces an empty JoinedStr", () => {
+			const expr = parseExpression('f"""\\\n"""') as { values: unknown[] };
+			expect(expr.values).toHaveLength(0);
+		});
+
+		test("a real interpolation flanked by doubled-brace literals", () => {
+			const expr = parseExpression('f"{a}{{b}}{c}"') as {
+				values: { nodeType: string; value?: string }[];
+			};
+			expect(expr.values.map((v) => v.nodeType)).toEqual([
+				"FormattedValue",
+				"Constant",
+				"FormattedValue",
+			]);
+			expect(expr.values[1].value).toBe("{b}");
+		});
+
+		test("doubled braces immediately wrapping a real interpolation", () => {
+			const expr = parseExpression('f"{{{x}}}"') as {
+				values: { nodeType: string; value?: string }[];
+			};
+			expect(expr.values.map((v) => v.nodeType)).toEqual([
+				"Constant",
+				"FormattedValue",
+				"Constant",
+			]);
+			expect(expr.values[0].value).toBe("{");
+			expect(expr.values[2].value).toBe("}");
+		});
+
+		test("four consecutive braces on each side collapse to pure literal text", () => {
+			const expr = parseExpression('f"{{{{nested}}}}"') as {
+				values: { nodeType: string; value?: string }[];
+			};
+			expect(expr.values).toHaveLength(1);
+			expect(expr.values[0].value).toBe("{{nested}}");
+		});
+
+		test("doubled braces between two real interpolations (dataclasses.py repr pattern)", () => {
+			const expr = parseExpression('f"{f.name}={{self.{f.name}!r}}"') as {
+				values: { nodeType: string; value?: string }[];
+			};
+			expect(expr.values.map((v) => v.nodeType)).toEqual([
+				"FormattedValue",
+				"Constant",
+				"FormattedValue",
+				"Constant",
+			]);
+			expect(expr.values[1].value).toBe("={self.");
+			expect(expr.values[3].value).toBe("!r}");
+		});
+
+		test("a doubled brace before the closing quote doesn't look unterminated (tkinter.py pattern)", () => {
+			// Verified against CPython 3.13: `f'if {{"[{funcid} '` — the `{{`
+			// must not count as opening a real field, or the lexer sees
+			// unbalanced brace nesting and never finds the closing `'`.
+			const expr = parseExpression(`f'if {{"[{funcid} '`) as {
+				values: { nodeType: string; value?: string }[];
+			};
+			expect(expr.values.map((v) => v.nodeType)).toEqual([
+				"Constant",
+				"FormattedValue",
+				"Constant",
+			]);
+			expect(expr.values[0].value).toBe('if {"[');
+			expect(expr.values[2].value).toBe(" ");
+		});
+
+		test("\\N{...} braces between two fields aren't mistaken for a field boundary", () => {
+			// Verified against CPython 3.13 (ptutils.py pattern): the `{`/`}`
+			// of a `\N{...}` named escape are part of the escape, not a
+			// field delimiter, even though this library leaves the name
+			// itself unresolved (see the string-escape-sequences tests).
+			const expr = parseExpression('f"{a}\\N{HORIZONTAL ELLIPSIS}{b}"') as {
+				values: { nodeType: string; value?: string }[];
+			};
+			expect(expr.values.map((v) => v.nodeType)).toEqual([
+				"FormattedValue",
+				"Constant",
+				"FormattedValue",
+			]);
+			expect(expr.values[1].value).toBe("\\N{HORIZONTAL ELLIPSIS}");
+		});
+
+		test("real nested braces inside a field still nest normally (not the doubling escape)", () => {
+			// Verified against CPython 3.13: `{ {1: 2} }` is a dict display
+			// inside the field, unrelated to the `{{`/`}}` literal-brace
+			// escape, which only applies outside a field.
+			const expr = parseExpression('f"{ {1: 2} }"') as {
+				values: { value: ExprNode }[];
+			};
+			expect(expr.values[0].value.nodeType).toBe("Dict");
+		});
+
+		test("escape sequences in literal text are decoded", () => {
+			// Verified against CPython 3.13: the literal portions of an
+			// f-string go through the same escape decoding as a plain string.
+			const expr = parseExpression('f"\\nvalue={x}"') as {
+				values: { nodeType: string; value?: string }[];
+			};
+			expect(expr.values[0].value).toBe("\nvalue=");
+		});
+
+		test("raw f-string literal text is not escape-decoded", () => {
+			const expr = parseExpression('rf"\\nvalue={x}"') as {
+				values: { nodeType: string; value?: string }[];
+			};
+			expect(expr.values[0].value).toBe("\\nvalue=");
+		});
+
+		test("escape sequences in a format spec are decoded", () => {
+			const expr = parseExpression('f"{x:\\n<5}"') as {
+				values: { format_spec?: { values: { value?: string }[] } }[];
+			};
+			expect(expr.values[0].format_spec?.values[0].value).toBe("\n<5");
+		});
+
+		test("escape sequences in a nested f-string's literal text are decoded", () => {
+			const expr = parseExpression("f\"outer {f'\\ninner {y}'}\"") as {
+				values: {
+					value?: { values: { value?: string }[] };
+				}[];
+			};
+			const inner = expr.values[1].value;
+			expect(inner?.values[0].value).toBe("\ninner ");
+		});
+
+		test("an emoji in literal text before an interpolation shifts the field's column by its UTF-8 byte length", () => {
+			// Verified against CPython 3.13 (`f"😀{x}"` inside `a = ...`): the
+			// emoji is 1 JS UTF-16 surrogate pair but 4 UTF-8 bytes, so the
+			// literal Constant spans 4 columns and the field starts right
+			// after it, not after just 1 (a naive JS-length count).
+			const expr = parseExpression('f"😀{x}"') as {
+				values: ExprNode[];
+			};
+			const literal = expr.values[0];
+			const field = expr.values[1];
+			expect(literal.end_col_offset - literal.col_offset).toBe(4);
+			expect(field.col_offset).toBe(literal.end_col_offset);
 		});
 
 		test("conversion specifier with format spec", () => {
@@ -955,6 +1637,21 @@ describe("parser edge cases", () => {
 			>;
 			expect(formatted.value).toMatchObject({ nodeType: "Name", id: "x" });
 			expect(formatted.conversion).toBe(114);
+		});
+
+		test("self-documenting expression's synthesized literal merges with preceding literal text", () => {
+			// Verified against CPython 3.13: `ast.parse('f"prefix: {x=}"')`
+			// produces a single merged Constant('prefix: x='), not two
+			// separate adjacent Constants.
+			const ast = parseCode('f"prefix: {x=}"\n');
+			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
+				.value as Extract<ExprNode, { nodeType: "JoinedStr" }>;
+			expect(expr.values).toHaveLength(2);
+			expect(expr.values[0]).toMatchObject({
+				nodeType: "Constant",
+				value: "prefix: x=",
+			});
+			expect(expr.values[1].nodeType).toBe("FormattedValue");
 		});
 
 		test("self-documenting expression preserves surrounding whitespace in the literal", () => {
@@ -1368,6 +2065,48 @@ describe("parser edge cases", () => {
 		test("walrus operator in expression", () => {
 			const ast = parseCode("if (n := 10) > 5:\n    pass\n");
 			expect(ast.body[0].nodeType).toBe("If");
+		});
+
+		test.each([
+			["(x := a or b)", "BoolOp"],
+			["(x := a if b else c)", "IfExp"],
+			["(x := lambda: 1)", "Lambda"],
+		])(
+			"walrus RHS %s binds a full 'test', not just an 'and_test' (CPython: value=%s)",
+			(src, expectedValueNodeType) => {
+				const expr = parseExpression(src);
+				expect(expr.nodeType).toBe("NamedExpr");
+				if (expr.nodeType === "NamedExpr") {
+					expect(expr.value.nodeType).toBe(expectedValueNodeType);
+				}
+			},
+		);
+
+		test("walrus RHS containing 'or' isn't split across the enclosing BoolOp", () => {
+			// Verified against CPython 3.13: `not c and (s := w or r)` binds
+			// the whole `w or r` as the NamedExpr's value; a prior bug parsed
+			// the walrus RHS at `and_test` precedence, splitting the trailing
+			// `or r` out into the *enclosing* BoolOp instead.
+			const ast = parseCode("if not c and (s := w or r):\n    pass\n");
+			const ifStmt = ast.body[0] as Extract<StmtNode, { nodeType: "If" }>;
+			expect(ifStmt.test).toMatchObject({
+				nodeType: "BoolOp",
+				op: { nodeType: "And" },
+				values: [
+					{ nodeType: "UnaryOp" },
+					{
+						nodeType: "NamedExpr",
+						value: {
+							nodeType: "BoolOp",
+							op: { nodeType: "Or" },
+							values: [
+								{ nodeType: "Name", id: "w" },
+								{ nodeType: "Name", id: "r" },
+							],
+						},
+					},
+				],
+			});
 		});
 
 		test("setContext no-op branch: a non-target-shaped walrus target is left structurally unchanged", () => {

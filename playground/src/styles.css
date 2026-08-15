@@ -7,8 +7,8 @@
 	--text: #d4d4d4;
 	--text-dim: #858585;
 	--accent: #569cd6;
-	--highlight: rgba(255, 215, 0, 0.35);
-	--highlight-outline: #ffd700;
+	--highlight: rgba(255, 215, 0, 0.16);
+	--highlight-outline: #d9b64a;
 	--tok-string: #ce9178;
 	--tok-number: #b5cea8;
 	--tok-boolean: #569cd6;
@@ -29,8 +29,8 @@
 	--text: #1e1e1e;
 	--text-dim: #6e6e6e;
 	--accent: #0b6fb8;
-	--highlight: rgba(255, 196, 0, 0.45);
-	--highlight-outline: #d69e00;
+	--highlight: rgba(255, 196, 0, 0.22);
+	--highlight-outline: #c9a227;
 	--tok-string: #a31515;
 	--tok-number: #098658;
 	--tok-boolean: #0000ff;
@@ -322,10 +322,6 @@ body {
 .node-block-active > .node-header,
 .node-block-active > .node-children {
 	background: var(--highlight);
-}
-
-.node-block-active > .node-header {
-	border-left: 3px solid var(--highlight-outline);
 }
 
 .node-disclosure {

@@ -189,8 +189,6 @@ const KEYWORDS = new Map<string, TokenType>([
 	["in", TokenType.IN],
 	["is", TokenType.IS],
 	["lambda", TokenType.LAMBDA],
-	["match", TokenType.MATCH],
-	["case", TokenType.CASE],
 	["None", TokenType.NONE],
 	["nonlocal", TokenType.NONLOCAL],
 	["not", TokenType.NOT],
@@ -204,6 +202,43 @@ const KEYWORDS = new Map<string, TokenType>([
 	["with", TokenType.WITH],
 	["yield", TokenType.YIELD],
 ]);
+
+/**
+ * Returns the number of bytes `codePoint` takes when encoded as UTF-8,
+ * matching CPython's `col_offset`/`end_col_offset`, which count UTF-8 bytes
+ * rather than UTF-16 code units or Unicode codepoints. Every non-ASCII
+ * character (accented letters, em dashes, CJK text, emoji, ...) needs this:
+ * counting JS string length directly under-counts them relative to CPython.
+ * @param codePoint A full Unicode codepoint (not a lone UTF-16 surrogate).
+ * @returns `1`, `2`, `3`, or `4` — the codepoint's UTF-8 byte length.
+ */
+export function utf8Length(codePoint: number): number {
+	if (codePoint < 0x80) return 1;
+	if (codePoint < 0x800) return 2;
+	if (codePoint < 0x10000) return 3;
+	return 4;
+}
+
+/**
+ * Returns the UTF-8 byte length of the character at `text[index]`,
+ * transparently combining a UTF-16 surrogate pair (e.g. most emoji) into
+ * its single 4-byte codepoint. `index` should point at the start of a
+ * character, not the low half of a pair.
+ * @param text The string to read from.
+ * @param index Index of the character (or high surrogate) to measure.
+ * @returns The character's UTF-8 byte length.
+ */
+export function utf8LengthAt(text: string, index: number): number {
+	const code = text.charCodeAt(index);
+	if (code >= 0xd800 && code <= 0xdbff) {
+		const low = text.charCodeAt(index + 1);
+		if (low >= 0xdc00 && low <= 0xdfff) {
+			const codePoint = (code - 0xd800) * 0x400 + (low - 0xdc00) + 0x10000;
+			return utf8Length(codePoint);
+		}
+	}
+	return utf8Length(code);
+}
 
 /**
  * Tokenizes Python source code into a flat array of {@link Token}s.
@@ -231,10 +266,15 @@ export class Lexer {
 	private braceLevel = 0;
 
 	/**
-	 * @param source - The full Python source text to tokenize.
+	 * @param source - The full Python source text to tokenize. Line endings
+	 * are normalized to `\n` first (CPython's universal-newline handling —
+	 * `\r\n` and lone `\r` both become `\n`, including inside string
+	 * literals), so indentation tracking isn't thrown off by `\r` and
+	 * `lineno`/`col_offset` land where CPython puts them regardless of the
+	 * source file's original line-ending style.
 	 */
 	constructor(source: string) {
-		this.source = source;
+		this.source = source.replace(/\r\n?/g, "\n");
 		this.position = { line: 1, column: 0, index: 0 };
 	}
 
@@ -261,6 +301,20 @@ export class Lexer {
 
 		while (this.position.index < this.source.length) {
 			this.scanToken();
+		}
+
+		// CPython's tokenizer treats the last logical line as terminated
+		// even when the source doesn't end with an actual `\n` (`"def
+		// f():\n    return"` — no trailing newline — is valid). Without a
+		// real `\n` character, `scanNewline` never runs, so nothing emits
+		// the `NEWLINE` a small_stmt like `return` normally ends on; the
+		// parser would otherwise see it run straight into `DEDENT`/`EOF`
+		// and, for a statement that can optionally be followed by a value
+		// (`return`, `yield`, ...), misread whatever comes next as that
+		// value. Synthesize the missing token here, mirroring CPython.
+		const lastToken = this.tokens[this.tokens.length - 1];
+		if (lastToken && lastToken.type !== TokenType.NEWLINE) {
+			this.addToken(TokenType.NEWLINE, "\n");
 		}
 
 		// Add final dedents
@@ -610,8 +664,22 @@ export class Lexer {
 				continue;
 			}
 
-			// Track braces to handle nested expressions
+			// Track braces to handle nested expressions. Outside of any
+			// field (`braceLevel === 0`), `{{`/`}}` is an escaped literal
+			// brace — not part of the grammar's rule for the literal text,
+			// so it must NOT open/close a field either, or a literal brace
+			// pair before the closing quote (as in `f'{{"[{x} '`) reads as
+			// unbalanced nesting and the literal looks unterminated. Inside
+			// a field (`braceLevel > 0`), braces are real Python syntax
+			// (e.g. a dict/set display) and always nest normally — the
+			// doubling escape only applies to the outer literal text.
 			if (c === "{") {
+				if (braceLevel === 0 && this.peekNext() === "{") {
+					value += c + this.peekNext();
+					this.advance();
+					this.advance();
+					continue;
+				}
 				braceLevel++;
 				value += c;
 				this.advance();
@@ -619,6 +687,12 @@ export class Lexer {
 			}
 
 			if (c === "}") {
+				if (braceLevel === 0 && this.peekNext() === "}") {
+					value += c + this.peekNext();
+					this.advance();
+					this.advance();
+					continue;
+				}
 				if (braceLevel > 0) {
 					braceLevel--;
 				}
@@ -1233,7 +1307,22 @@ export class Lexer {
 			this.position.line++;
 			this.position.column = 0;
 		} else {
-			this.position.column++;
+			const code = c.charCodeAt(0);
+			const prevCode =
+				this.position.index > 0
+					? this.source.charCodeAt(this.position.index - 1)
+					: 0;
+			const isLowSurrogateOfPreviousPair =
+				code >= 0xdc00 &&
+				code <= 0xdfff &&
+				prevCode >= 0xd800 &&
+				prevCode <= 0xdbff;
+			// A surrogate pair's byte length is attributed entirely to its
+			// high half (by utf8LengthAt, which looks ahead to combine the
+			// pair); skip the low half here so it isn't double-counted.
+			if (!isLowSurrogateOfPreviousPair) {
+				this.position.column += utf8LengthAt(this.source, this.position.index);
+			}
 		}
 		this.position.index++;
 		return c;
