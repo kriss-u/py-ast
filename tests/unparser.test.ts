@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { parse, unparse } from "../src/index.js";
 import type { ASTNodeUnion } from "../src/types.js";
 import { PyComplex } from "../src/types.js";
-import { testRoundtrip, testUnparse } from "./test-helpers.js";
+import { parseExpression, testRoundtrip, testUnparse } from "./test-helpers.js";
 
 describe("Unparser", () => {
 	describe("Basic Statements", () => {
@@ -292,6 +292,51 @@ describe("Unparser", () => {
 		});
 	});
 
+	describe("Match statements", () => {
+		test("basic match/case", () => {
+			testUnparse(
+				"match x:\n    case 1:\n        pass\n    case _:\n        pass",
+				"match x:\n    case 1:\n        pass\n    case _:\n        pass",
+			);
+			testRoundtrip("match x:\n    case 1:\n        pass");
+		});
+
+		test("or-pattern alternatives", () => {
+			testUnparse(
+				"match x:\n    case 1 | 2 | 3:\n        pass",
+				"match x:\n    case 1 | 2 | 3:\n        pass",
+			);
+			testRoundtrip("match x:\n    case 1 | 2 | 3:\n        pass");
+		});
+
+		test("an as-pattern alternative inside an or-pattern keeps its parens", () => {
+			// Verified against the pylint/extensions/code_style.py pattern
+			// that surfaced this: CPython's grammar restricts each `|`
+			// alternative to a `closed_pattern`, which excludes a bare
+			// as-pattern — `X() as y | Z()` is a syntax error unparenthesized.
+			testUnparse(
+				"match x:\n    case (X() as y) | Z():\n        pass",
+				"match x:\n    case (X() as y) | Z():\n        pass",
+			);
+			testRoundtrip("match x:\n    case (X() as y) | Z():\n        pass");
+		});
+
+		test("a plain capture pattern inside an or-pattern needs no parens", () => {
+			testUnparse(
+				"match x:\n    case 1 | y:\n        pass",
+				"match x:\n    case 1 | y:\n        pass",
+			);
+		});
+
+		test("as-pattern on the whole or-pattern (not an alternative)", () => {
+			testUnparse(
+				"match x:\n    case 1 | 2 as y:\n        pass",
+				"match x:\n    case 1 | 2 as y:\n        pass",
+			);
+			testRoundtrip("match x:\n    case 1 | 2 as y:\n        pass");
+		});
+	});
+
 	describe("Expressions", () => {
 		test("binary operations", () => {
 			testUnparse("x + y", "x + y");
@@ -317,7 +362,7 @@ describe("Unparser", () => {
 		test("boolean operations", () => {
 			testUnparse("x and y", "x and y");
 			testUnparse("x or y", "x or y");
-			testUnparse("not x", "(not x)"); // Unary not gets parentheses in expression context
+			testUnparse("not x", "not x"); // matches CPython's ast.unparse: no redundant parens
 			testRoundtrip("a and b or c");
 		});
 
@@ -339,8 +384,17 @@ describe("Unparser", () => {
 			testUnparse("+x", "+x");
 			testUnparse("-x", "-x");
 			testUnparse("~x", "~x");
-			testUnparse("not x", "(not x)"); // Unary not gets parentheses in expression context
+			testUnparse("not x", "not x"); // matches CPython's ast.unparse: no redundant parens
 			testRoundtrip("not condition");
+		});
+
+		test("symbolic unary operator as a binary operand", () => {
+			// Matches CPython's ast.unparse for both: `-a` needs no parens as
+			// a `+`'s left operand, but `**`'s right operand does (CPython's
+			// unparser is conservative there even though `-3` alone would
+			// parse the same without them).
+			testUnparse("-a + b", "-a + b");
+			testUnparse("2 ** -3", "2 ** (-3)");
 		});
 
 		test("conditional expression", () => {
@@ -348,11 +402,45 @@ describe("Unparser", () => {
 			testRoundtrip("'positive' if x > 0 else 'not positive'");
 		});
 
+		test("a nested ternary in the body or test slot keeps its parens", () => {
+			// Verified against the IPython/core/completer.py pattern that
+			// surfaced this: CPython's grammar restricts both slots to
+			// `or_test` (one level tighter than the ternary itself), unlike
+			// `orelse`, which is the recursive `test` and chains without
+			// parens (`a if b else c if d else e`).
+			testUnparse("(a if b else c) if d else e", "(a if b else c) if d else e");
+			testUnparse("a if (b if c else d) else e", "a if (b if c else d) else e");
+			testUnparse("a if b else c if d else e", "a if b else c if d else e");
+			testRoundtrip("(a if b else c) if d else e");
+		});
+
+		test("a walrus in the test slot keeps its parens", () => {
+			testUnparse("a if (y := 1) else z", "a if (y := 1) else z");
+		});
+
+		test("a lambda in the body slot keeps its parens; in orelse it doesn't", () => {
+			testUnparse("(lambda: a) if b else c", "(lambda: a) if b else c");
+			testUnparse("a if b else lambda: c", "a if b else lambda: c");
+		});
+
 		test("lambda expression", () => {
 			testUnparse("lambda x: x * 2", "lambda x: x * 2");
 			testUnparse("lambda x, y=1: x + y", "lambda x, y=1: x + y");
 			testUnparse("lambda: 42", "lambda: 42");
 			testRoundtrip("lambda x, y: x + y");
+		});
+
+		test("a yield body keeps its parens", () => {
+			// Verified against the torch opinfo/core.py pattern that surfaced
+			// this: CPython's grammar excludes a bare `yield` from a lambda's
+			// body (`lambda: yield x` doesn't parse; it must be
+			// `lambda: (yield x)`).
+			testUnparse("lambda: (yield x)", "lambda: (yield x)");
+			testUnparse(
+				"lambda *a, **kw: (yield (), {})",
+				"lambda *a, **kw: (yield ((), {}))",
+			);
+			testRoundtrip("lambda: (yield x)");
 		});
 
 		test("function calls", () => {
@@ -372,12 +460,48 @@ describe("Unparser", () => {
 			testRoundtrip("instance.method().result");
 		});
 
+		test("a bare integer literal base gets a space before the dot", () => {
+			// Verified against the importlib/_bootstrap_external.py pattern
+			// that surfaced this: CPython's tokenizer reads `3571.` as the
+			// start of a float literal, so `3571.to_bytes(...)` is a syntax
+			// error — a space (matching CPython's own `ast.unparse`) avoids
+			// it without needing parens.
+			testUnparse(
+				'(3571).to_bytes(2, "little")',
+				'3571 .to_bytes(2, "little")',
+			);
+			testRoundtrip('(3571).to_bytes(2, "little")');
+		});
+
+		test("a hex literal base is rendered in decimal, so it still needs the space", () => {
+			// The unparser always renders integers in decimal (numeric base
+			// isn't preserved), so a hex literal base is just as ambiguous
+			// as a plain decimal one once rendered.
+			testUnparse('0x10.to_bytes(2, "little")', '16 .to_bytes(2, "little")');
+		});
+
+		test("a float literal base needs no space before the dot", () => {
+			// Already renders with its own `.`, so there's no ambiguity.
+			testUnparse("(10.5).hex()", "10.5.hex()");
+		});
+
 		test("subscripting", () => {
 			testUnparse("arr[0]", "arr[0]");
 			testUnparse("arr[1:5]", "arr[1:5]");
 			testUnparse("arr[::2]", "arr[::2]");
 			testUnparse("arr[1:5:2]", "arr[1:5:2]");
 			testRoundtrip("matrix[i][j]");
+		});
+
+		test("an empty-tuple subscript keeps its parens; a non-empty one doesn't", () => {
+			// Verified against CPython 3.13's own ast.unparse, and against the
+			// aiosignal/__init__.py pattern (`Unpack[tuple[()]]`) that
+			// surfaced this: `a[]` isn't valid syntax (a subscript can't be
+			// empty), so the empty-tuple slice must still render as `()`,
+			// unlike a non-empty tuple slice, which drops the parens.
+			testUnparse("a[()]", "a[()]");
+			testUnparse("a[1, 2]", "a[1, 2]");
+			testRoundtrip("a[()]");
 		});
 
 		test("await expression", () => {
@@ -417,8 +541,23 @@ describe("Unparser", () => {
 		test("dictionaries", () => {
 			testUnparse("{}", "{}");
 			testUnparse("{'a': 1, 'b': 2}", "{'a': 1, 'b': 2}");
-			// Skip problematic {**other} syntax for now
+			testUnparse("{**other}", "{**other}");
+			testUnparse("{'a': 1, **other}", "{'a': 1, **other}");
 			testRoundtrip("{'key': 'value'}");
+			testRoundtrip("{**a, **b}");
+		});
+
+		test("a BoolOp/ternary operand of dict-unpacking `**` keeps its parens", () => {
+			// Verified against the build/_builder.py pattern that surfaced
+			// this: `**expr` binds at `bitor` precedence (same restriction as
+			// `**kwargs` in a call), so a bare `BoolOp` there is a syntax
+			// error unparenthesized (`{**a or b}` doesn't parse).
+			testUnparse("{**(a or b)}", "{**(a or b)}");
+			testUnparse(
+				"{**(env() or {}), **(extra or {})}",
+				"{**(env() or {}), **(extra or {})}",
+			);
+			testRoundtrip("{**(a or b)}");
 		});
 
 		test("sets", () => {
@@ -430,6 +569,22 @@ describe("Unparser", () => {
 		test("starred expressions", () => {
 			testUnparse("*args", "*args");
 			testRoundtrip("func(*args, **kwargs)");
+		});
+
+		test("a starred ternary/boolop operand keeps its parens", () => {
+			// Verified against the _pyrepl/reader.py pattern that surfaced
+			// this: CPython's grammar restricts a starred operand to `bitor`
+			// (`star_expr: '*' bitor`) — a bare ternary or `BoolOp` there is a
+			// syntax error unparenthesized, so the parser only ever produces
+			// this shape from already-parenthesized source, and the
+			// unparser must keep the parens or the result doesn't re-parse.
+			testUnparse("[*(() if a else (1,))]", "[*(() if a else (1,))]");
+			testUnparse("[*(a or b)]", "[*(a or b)]");
+			testRoundtrip("[*(() if a else (1,))]");
+		});
+
+		test("a starred bitor operand needs no parens", () => {
+			testUnparse("[*(a | b)]", "[*a | b]");
 		});
 	});
 
@@ -490,6 +645,39 @@ describe("Unparser", () => {
 				"(x async for x in async_items async for y in async_items2)",
 			);
 		});
+
+		test("a parenthesized ternary as an `if` filter keeps its parens", () => {
+			// Verified against the dataclasses.py pattern that surfaced this:
+			// CPython's grammar restricts a comprehension's `if` condition to
+			// `or_test` — a bare ternary is one level looser and a syntax
+			// error there unparenthesized (`if a if b else c` doesn't parse:
+			// it reads as two chained `if` clauses, not one `if` of a
+			// ternary).
+			testUnparse(
+				"[f for f in fields if (f.compare if f.hash is None else f.hash)]",
+				"[f for f in fields if (f.compare if f.hash is None else f.hash)]",
+			);
+			testRoundtrip(
+				"[f for f in fields if (f.compare if f.hash is None else f.hash)]",
+			);
+		});
+
+		test("a parenthesized ternary as the iterable keeps its parens", () => {
+			// Same grammar restriction applies to `in <iter>`.
+			testUnparse(
+				"[i for i in (a if b else c)]",
+				"[i for i in (a if b else c)]",
+			);
+			testRoundtrip("[i for i in (a if b else c)]");
+		});
+
+		test("a bare `or`/`and` filter or iterable needs no parens", () => {
+			testUnparse("[i for i in a or b]", "[i for i in a or b]");
+			testUnparse(
+				"[i for i in items if a or b]",
+				"[i for i in items if a or b]",
+			);
+		});
 	});
 
 	describe("F-strings", () => {
@@ -530,6 +718,49 @@ describe("Unparser", () => {
 		test("triple-quoted f-strings round-trip", () => {
 			testRoundtrip("f'''Hello, {name}!'''");
 		});
+
+		describe("literal text segment escaping", () => {
+			// `testRoundtrip` only checks shallow structure; these check the
+			// actual decoded literal-text values survive round-tripping.
+			function roundtripLiteralValues(code: string): void {
+				const original = (
+					parseExpression(code) as {
+						values: { nodeType: string; value?: string }[];
+					}
+				).values;
+				const reparsed = (
+					parseExpression(unparse(parse(code)).trim()) as {
+						values: { nodeType: string; value?: string }[];
+					}
+				).values;
+				expect(reparsed.map((v) => v.value)).toEqual(
+					original.map((v) => v.value),
+				);
+			}
+
+			test("a trailing \\n escape (not a real newline) survives round-tripping", () => {
+				// Verified against the _osx_support.py pattern that surfaced
+				// this: the decoded literal text ends in an actual newline
+				// character, which a single-quoted (non-triple) f-string can't
+				// contain unescaped — writing it back raw produced invalid,
+				// unterminated source.
+				roundtripLiteralValues(
+					String.raw`f"Compiling with an SDK that does not exist: {sysroot}\n"`,
+				);
+			});
+
+			test("a doubled brace in literal text is re-doubled on the way out", () => {
+				roundtripLiteralValues(String.raw`f"literal {{brace}} and {y}"`);
+			});
+
+			test("raw f-string literal text (including a literal backslash) round-trips verbatim", () => {
+				roundtripLiteralValues(String.raw`rf"raw \n {y}"`);
+			});
+
+			test("triple-quoted f-string literal text with a trailing-newline escape round-trips", () => {
+				roundtripLiteralValues(String.raw`f"""value: {x}\n"""`);
+			});
+		});
 	});
 
 	describe("T-strings (PEP 750 template strings)", () => {
@@ -555,6 +786,109 @@ describe("Unparser", () => {
 		test("nested f-string/t-string interpolations round-trip", () => {
 			testRoundtrip("t\"outer {f'inner {y}'} end\"");
 			testRoundtrip("t\"outer {t'inner {y}'} end\"");
+		});
+	});
+
+	describe("Implicit string concatenation", () => {
+		// Verified against the importlib/__init__.py pattern that surfaced
+		// this: adjacent string literals concatenate into one `JoinedStr`
+		// with the parser (see `parseConcatenatedStringLiteral`). Its
+		// `quote_style` must reflect that the merged result needs an `f`/`t`
+		// prefix even when the *first* literal in the concatenation is a
+		// plain (non-f/t) string — otherwise the unparser drops the prefix
+		// and re-parses the `{...}` field as literal text instead.
+		test("a plain string followed by an f-string keeps the f prefix", () => {
+			const code = '"plain " f"{value!r}"';
+			const original = (parseExpression(code) as { nodeType: string }).nodeType;
+			expect(original).toBe("JoinedStr");
+
+			const reparsed = (
+				parseExpression(unparse(parse(code)).trim()) as {
+					nodeType: string;
+				}
+			).nodeType;
+			expect(reparsed).toBe("JoinedStr");
+		});
+
+		test("an f-string followed by a plain string still round-trips", () => {
+			testRoundtrip('f"{value!r}" " plain"');
+		});
+
+		describe("mixed raw and non-raw bytes/string parts", () => {
+			// Verified against the PIL/XbmImagePlugin.py pattern that
+			// surfaced this: concatenated parts merge into one `Constant`
+			// with a single `quote_style` (see
+			// `parseConcatenatedStringLiteral`), which can't record that
+			// only *some* parts were raw. Marking the merge raw when a
+			// non-raw part contributed already-escape-decoded text (e.g. a
+			// real tab or newline from a `\t`/`\n` escape) made the
+			// unparser write that decoded content back completely
+			// unescaped into a raw literal — invalid source.
+			function roundtripValue(code: string): void {
+				const original = (parseExpression(code) as { value: string }).value;
+				const reparsed = (
+					parseExpression(unparse(parse(code)).trim()) as {
+						value: string;
+					}
+				).value;
+				expect(reparsed).toBe(original);
+			}
+
+			test("a raw part followed by a non-raw part with a real escape", () => {
+				roundtripValue(String.raw`rb"\s+" b"\t\n"`);
+			});
+
+			test("all-raw parts stay raw", () => {
+				const code = String.raw`rb"\s+" rb"\d+"`;
+				const ast = parseExpression(code) as {
+					quote_style?: string;
+				};
+				expect(ast.quote_style).toMatch(/r/i);
+				roundtripValue(code);
+			});
+
+			test("a non-raw part followed by a raw part", () => {
+				roundtripValue(String.raw`b"\t" rb"\s+"`);
+			});
+
+			test("raw parts with different quote characters (jinja2/lexer.py pattern)", () => {
+				// Verified against the jinja2/lexer.py pattern that surfaced
+				// this: two adjacent raw strings, one double- one
+				// single-quoted, each containing the *other's* quote
+				// character unescaped (safe individually, since raw strings
+				// never need to escape the other quote char). Merging them
+				// as one raw literal in either quote style would let an
+				// embedded quote prematurely close it; falling back to
+				// non-raw output escapes correctly regardless.
+				roundtripValue(`r"a'b" r'c"d'`);
+			});
+
+			test("a raw plain string with the f-string's quote char, concatenated with an f-string", () => {
+				// Verified against the pandas test_to_datetime.py pattern that
+				// surfaced this: a raw plain string containing the *other*
+				// part's quote character (safe on its own — raw strings only
+				// need to escape their own delimiter), concatenated with an
+				// f-string. Merging under the f-string's quote style let the
+				// raw part's embedded quote prematurely close the literal.
+				const code = `r'^time data "True" ' f"at position {n}"`;
+				const original = (
+					parseExpression(code) as {
+						values: { nodeType: string; value?: string }[];
+					}
+				).values;
+				const reparsed = (
+					parseExpression(unparse(parse(code)).trim()) as {
+						values: { nodeType: string; value?: string }[];
+					}
+				).values;
+				const literalValues = (
+					vals: { nodeType: string; value?: string }[],
+				) => vals.filter((v) => v.nodeType === "Constant").map((v) => v.value);
+				expect(literalValues(reparsed)).toEqual(literalValues(original));
+				expect(reparsed.map((v) => v.nodeType)).toEqual(
+					original.map((v) => v.nodeType),
+				);
+			});
 		});
 	});
 
@@ -590,6 +924,45 @@ describe("Unparser", () => {
 			exprStmt.value.value = new PyComplex(3, -4);
 			expect(unparse(tree).trim()).toBe("(3-4j)");
 		});
+
+		describe("triple-quoted string content", () => {
+			// `testRoundtrip` only checks shallow structure (body length,
+			// nodeType), which wouldn't have caught this: a decoded value
+			// written back into a triple-quoted literal without re-escaping
+			// backslashes reads back as a different string.
+			function roundtripValue(code: string): void {
+				const original = (parseExpression(code) as { value: string }).value;
+				const reparsed = (
+					parseExpression(unparse(parse(code)).trim()) as { value: string }
+				).value;
+				expect(reparsed).toBe(original);
+			}
+
+			test("a literal backslash-n (not a newline) survives round-tripping", () => {
+				// Verified against the _pydecimal.py docstring pattern that
+				// surfaced this: source `\\n` (escaped backslash + plain `n`)
+				// decodes to a literal backslash followed by `n`, not `\n`'s
+				// usual newline — the unparser must escape that backslash or
+				// re-parsing reads it as a fresh escape sequence.
+				roundtripValue(String.raw`"""value: \\n literal backslash-n"""`);
+			});
+
+			test("an actual embedded newline still round-trips", () => {
+				roundtripValue('"""line one\nline two"""');
+			});
+
+			test("content containing the closing delimiter round-trips", () => {
+				roundtripValue(String.raw`"""contains \"\"\" inside"""`);
+			});
+
+			test("content ending in the quote character round-trips", () => {
+				roundtripValue(String.raw`"""ends with quote\""""`);
+			});
+
+			test("raw triple-quoted strings still round-trip verbatim", () => {
+				roundtripValue(String.raw`r"""a \raw \backslash"""`);
+			});
+		});
 	});
 
 	describe("Complex Constructs", () => {
@@ -617,7 +990,7 @@ describe("Unparser", () => {
 
 		test("boolean precedence", () => {
 			testUnparse("a and b or c", "a and b or c");
-			testUnparse("not a and b", "(not a) and b"); // Unparser adds parens around 'not'
+			testUnparse("not a and b", "not a and b"); // `not` binds tighter than `and`; no parens needed
 			testRoundtrip("a or b and c");
 		});
 
@@ -625,6 +998,16 @@ describe("Unparser", () => {
 			testUnparse("a < b == c", "a < b == c");
 			testUnparse("a and b < c", "a and b < c");
 			testRoundtrip("x > 0 and x < 10");
+		});
+
+		test("an explicitly-parenthesized nested comparison keeps its parens", () => {
+			// A `Compare` isn't associative the way `+`/`*` are: `a == b != c`
+			// is one chained Compare with two ops, semantically different from
+			// `(a == b) != c` (a Compare of a Compare's boolean result). The
+			// parens must round-trip or the meaning changes.
+			testUnparse("(a == b) != c", "(a == b) != c");
+			testUnparse("(a < b) < c", "(a < b) < c");
+			testRoundtrip("(a == b) != c");
 		});
 	});
 

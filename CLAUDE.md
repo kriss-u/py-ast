@@ -68,7 +68,18 @@ for the grammar it's derived from). Source lives in `src/`; build output goes to
    intermittently is a bug — fix the root cause, don't retry or skip it, don't mark it as
    skipped/todo to make CI green.
 
-9. **Verify parser/unparser behavior against CPython, not intuition.** When implementing or
+9. **Prefer table-driven tests over enumerated `test()`/`it()` blocks.** When several cases
+   exercise the same assertion shape with different inputs (e.g. "N leading dots all set
+   `level` to N", "each of these escape sequences decodes to X"), write one `test.each`
+   table rather than one `test()` per case. A parser/unparser test suite that grows by
+   hand-writing a new block per edge case doesn't scale — it did in this repo, which is why
+   this rule exists. Reserve individual `test()` blocks for cases that genuinely need their
+   own distinct setup, assertions, or narrative (a specific bug repro with its own
+   CPython-verified comment, a multi-step scenario). When adding a case that's just "one more
+   row" of an existing pattern, check whether a nearby table can absorb it before reaching for
+   a new block.
+
+10. **Verify parser/unparser behavior against CPython, not intuition.** When implementing or
    fixing grammar (new syntax, precedence, edge cases), check actual CPython behavior — e.g.
    `python3 -c "import ast; print(ast.dump(ast.parse(...)))"` — rather than guessing. This
    includes precedence subtleties that aren't obvious from a quick reading of the grammar

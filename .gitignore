@@ -136,5 +136,7 @@ jest_*
 # JSR specific (if using JSR registry)
 .jsr/
 
-# Corpus differential testing reports (machine-specific, regenerate via `npm run corpus`)
+# Corpus differential testing reports (machine-specific, regenerate via
+# `npm run corpus` / `npm run corpus:roundtrip`)
 scripts/corpus/report*.json
+scripts/corpus/roundtrip-report*.json

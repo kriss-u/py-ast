@@ -254,6 +254,10 @@ describe("Lexer numbers", () => {
 			TokenType.NUMBER,
 			TokenType.DOT,
 			TokenType.NAME,
+			// The source has no trailing newline; the lexer synthesizes one
+			// (matching CPython) so a statement ending at EOF still gets a
+			// terminating NEWLINE, same as one ending mid-file.
+			TokenType.NEWLINE,
 			TokenType.EOF,
 		]);
 		const numTok = tokens.find((t) => t.type === TokenType.NUMBER);

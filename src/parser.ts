@@ -469,7 +469,7 @@ export class Parser {
 				!this.check(TokenType.SEMI) &&
 				!this.isAtEnd()
 			) {
-				value = this.parseTestList();
+				value = this.parseTestListWithStar();
 			}
 			return {
 				nodeType: "Return",
@@ -618,14 +618,19 @@ export class Parser {
 		// Handle from import statement
 		if (this.match(TokenType.FROM)) {
 			let level = 0;
-			// Handle relative imports (.., ., ..., etc.)
-			while (this.match(TokenType.DOT)) {
-				level++;
-			}
-
-			// Handle ellipsis (...) as three dots
-			if (this.match(TokenType.ELLIPSIS)) {
-				level += 3;
+			// Handle relative imports (.., ., ..., etc.): the lexer tokenizes
+			// any run of 3+ dots as one or more `...` (ELLIPSIS) tokens, so
+			// e.g. 4 dots comes through as ELLIPSIS + DOT, not 4 DOTs — both
+			// token kinds have to be consumed in the same loop, in whatever
+			// order they appear, rather than DOTs-then-one-ELLIPSIS.
+			while (true) {
+				if (this.match(TokenType.DOT)) {
+					level++;
+				} else if (this.match(TokenType.ELLIPSIS)) {
+					level += 3;
+				} else {
+					break;
+				}
 			}
 
 			let module: string | undefined;
@@ -846,7 +851,7 @@ export class Parser {
 			// Regular assignment - handle multiple assignment
 			const targets = [expr];
 			this.validateAssignmentTarget(expr);
-			let value = this.parseTestList();
+			let value = this.parseTestListWithStar();
 
 			// Collect any comments that were gathered during value parsing
 			const expressionComments: Comment[] = [];
@@ -859,7 +864,7 @@ export class Parser {
 			while (this.match(TokenType.EQUAL)) {
 				this.validateAssignmentTarget(value);
 				targets.push(value);
-				value = this.parseTestList();
+				value = this.parseTestListWithStar();
 
 				// Collect any additional comments from chained assignment parsing
 				if (this.includeComments && this.pendingComments.length > 0) {
@@ -924,7 +929,7 @@ export class Parser {
 			let value: ExprNode | undefined;
 
 			if (this.match(TokenType.EQUAL)) {
-				value = this.parseTestList();
+				value = this.parseTestListWithStar();
 			}
 
 			return {
@@ -1130,7 +1135,7 @@ export class Parser {
 	private parseForStmt(start: Token): StmtNode {
 		const target = this.parseExprList();
 		this.consume(TokenType.IN, "Expected 'in' in for statement");
-		const iter = this.parseTestList();
+		const iter = this.parseTestListWithStar();
 		this.consume(TokenType.COLON, "Expected ':' after for clause");
 		const body = this.parseSuite();
 
@@ -1261,6 +1266,29 @@ export class Parser {
 				// Parse base classes and keyword arguments
 				do {
 					if (this.check(TokenType.RPAR)) break;
+
+					if (this.check(TokenType.DOUBLESTAR)) {
+						// `**kwargs`
+						const argStart = this.peek();
+						this.advance();
+						const value = this.parseOrExpr();
+						keywords.push({
+							nodeType: "Keyword",
+							arg: undefined,
+							value,
+							lineno: argStart.lineno,
+							col_offset: argStart.col_offset,
+							end_lineno: this.previous().end_lineno,
+							end_col_offset: this.previous().end_col_offset,
+						});
+						continue;
+					}
+
+					if (this.check(TokenType.STAR)) {
+						// `*bases`
+						bases.push(this.parseTestOrStarred());
+						continue;
+					}
 
 					// Check if this is a keyword argument (name=value)
 					const savedPos = this.current;
@@ -1570,10 +1598,6 @@ export class Parser {
 		const cases: MatchCase[] = [];
 
 		while (!this.check(TokenType.DEDENT) && !this.isAtEnd()) {
-			if (this.match(TokenType.NEWLINE)) {
-				continue;
-			}
-
 			if (this.check(TokenType.NAME) && this.peek().value === "case") {
 				this.advance(); // consume case token
 				const pattern = this.parsePattern();
@@ -2056,45 +2080,6 @@ export class Parser {
 	}
 
 	// ==== Expression parsers ====
-
-	/**
-	 * Parses a `testlist`: a single test expression, or a comma-separated
-	 * sequence of them collapsed into a `Tuple` (trailing comma allowed).
-	 * @returns The single expression, or a `Tuple` node if a comma was found.
-	 * @throws {ParseError} On malformed expression syntax.
-	 */
-	private parseTestList(): ExprNode {
-		const start = this.peek();
-		const expr = this.parseTest();
-
-		if (this.match(TokenType.COMMA)) {
-			const elts = [expr];
-
-			// Handle trailing commas and additional elements
-			while (
-				!this.check(TokenType.NEWLINE) &&
-				!this.isAtEnd() &&
-				!this.check(TokenType.RPAR) &&
-				!this.check(TokenType.RSQB) &&
-				!this.check(TokenType.RBRACE)
-			) {
-				elts.push(this.parseTest());
-				if (!this.match(TokenType.COMMA)) break;
-			}
-
-			return {
-				nodeType: "Tuple",
-				elts,
-				ctx: this.createLoad(),
-				lineno: start.lineno,
-				col_offset: start.col_offset,
-				end_lineno: this.previous().end_lineno,
-				end_col_offset: this.previous().end_col_offset,
-			};
-		}
-
-		return expr;
-	}
 
 	/**
 	 * Parses a `test`: an or-test, optionally followed by a conditional
@@ -2830,7 +2815,7 @@ export class Parser {
 					!this.check(TokenType.COMMA) &&
 					!this.isAtEnd()
 				) {
-					value = this.parseTestList();
+					value = this.parseTestListWithStar();
 				}
 				return {
 					nodeType: "Yield",
@@ -3121,6 +3106,16 @@ export class Parser {
 		} else {
 			// Simple statement on the same line
 			const stmt = this.parseSimpleStmt();
+			// Blank/comment-only lines between a single-line suite and a
+			// following clause (`elif`/`else`/`except`/`finally`) aren't
+			// skipped by `parseSimpleStmt` itself (it only consumes its own
+			// line's `NEWLINE`), unlike the block-body path above, which
+			// already consumes them while scanning for the closing `DEDENT`.
+			// Skip them here too so both paths leave the same token position
+			// behind for the caller's follow-up clause check.
+			while (this.match(TokenType.NEWLINE)) {
+				// Continue skipping blank/comment-only lines.
+			}
 			return stmt ? [stmt] : [];
 		}
 	}
@@ -3419,6 +3414,29 @@ export class Parser {
 	}
 
 	/**
+	 * Parses one `exprlist` element: `expr`, or `'*' expr` (a starred
+	 * target, e.g. the `*data` in `for label, *data in x:`).
+	 * @returns The parsed expression, or a `Starred` node.
+	 * @throws {ParseError} On malformed expression syntax.
+	 */
+	private parseExprOrStarred(): ExprNode {
+		if (this.match(TokenType.STAR)) {
+			const start = this.previous();
+			const value = this.parseExpr();
+			return {
+				nodeType: "Starred",
+				value,
+				ctx: this.createLoad(),
+				lineno: start.lineno,
+				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
+			};
+		}
+		return this.parseExpr();
+	}
+
+	/**
 	 * Parses an `exprlist` (the `for`/comprehension assignment-target form):
 	 * a single expr, or a comma-separated sequence collapsed into a `Tuple`,
 	 * stopping before a trailing `in`. Every `Name`/`Attribute`/`Subscript`/
@@ -3429,17 +3447,17 @@ export class Parser {
 	 */
 	private parseExprList(): ExprNode {
 		const start = this.peek();
-		const expr = this.parseExpr();
+		const expr = this.parseExprOrStarred();
 		let result: ExprNode;
 
 		if (this.match(TokenType.COMMA)) {
 			const elts = [expr];
 
 			if (!this.check(TokenType.IN)) {
-				elts.push(this.parseExpr());
+				elts.push(this.parseExprOrStarred());
 				while (this.match(TokenType.COMMA)) {
 					if (this.check(TokenType.IN)) break;
-					elts.push(this.parseExpr());
+					elts.push(this.parseExprOrStarred());
 				}
 			}
 
@@ -3691,6 +3709,28 @@ export class Parser {
 			};
 		}
 
+		if (this.check(TokenType.STAR)) {
+			// A set starting with a `*expr` unpacking (`{*a, *b}`). Can only
+			// ever be a set — a dict key is never starred — so this skips
+			// straight past the dict-vs-set disambiguation below.
+			const elts = [this.parseTestOrStarred()];
+			while (this.match(TokenType.COMMA)) {
+				if (this.check(TokenType.RBRACE)) break;
+				elts.push(this.parseTestOrStarred());
+			}
+
+			this.consume(TokenType.RBRACE, "Expected '}' after set");
+
+			return {
+				nodeType: "Set",
+				elts,
+				lineno: start.lineno,
+				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
+			};
+		}
+
 		const first = this.parseTest();
 
 		if (this.match(TokenType.COLON)) {
@@ -3763,7 +3803,7 @@ export class Parser {
 			const elts = [first];
 			while (this.match(TokenType.COMMA)) {
 				if (this.check(TokenType.RBRACE)) break;
-				elts.push(this.parseTest());
+				elts.push(this.parseTestOrStarred());
 			}
 
 			this.consume(TokenType.RBRACE, "Expected '}' after set");
@@ -4327,6 +4367,52 @@ export class Parser {
 	 * @returns A `Constant` (all-plain case), `JoinedStr` (any f-string present), or `TemplateStr` (any t-string present) node.
 	 * @throws {Error} If an f-string/t-string expression is malformed, or if f-strings/t-strings/plain strings are mixed in one concatenation.
 	 */
+	/**
+	 * Picks the `quote_style` for a merged (implicitly-concatenated)
+	 * string/bytes/f-string/t-string literal, downgrading `preferred` from
+	 * raw to non-raw when that wouldn't safely represent every part.
+	 *
+	 * Concatenated parts can mix raw (`rb"..."`) and non-raw (`b"..."`)
+	 * literals, or raw parts with different quote characters (`r"...'..."
+	 * r'..."..."'`). A raw part's text is verbatim source (backslashes
+	 * inert, whatever quote char isn't its own delimiter appears
+	 * unescaped); a non-raw part's text is already escape-decoded (e.g. a
+	 * real control character from `\n`). Writing the *merged* text back
+	 * out under one raw quote style is only safe when *every* part was raw
+	 * *and* used the same quote character — otherwise a literal quote char
+	 * from one part (never escaped, since it was raw) could prematurely
+	 * close the merged literal, or a non-raw part's already-decoded content
+	 * would be written back completely unescaped. Falling back to non-raw
+	 * lets normal escaping handle the merged value safely regardless of
+	 * what's inside, since every part's contribution is escaped uniformly
+	 * at unparse time (see `escapeString`/`escapeInterpolatedStringLiteral`).
+	 * @param parts The concatenation's original parts, each carrying its own `quote_style`.
+	 * @param preferred The quote style that would otherwise be used for the merge.
+	 * @returns `preferred`, or the same style with any `r`/`R` stripped.
+	 */
+	private safeConcatenatedQuoteStyle(
+		parts: (Constant | JoinedStr | TemplateStr)[],
+		preferred: string | undefined,
+	): string | undefined {
+		// Every `Constant`/`JoinedStr`/`TemplateStr` built by this parser is
+		// given a `quote_style` unconditionally (see `getStringQuoteStyle`);
+		// the `?? ""`/`undefined` fallbacks here only exist because the
+		// field's declared type is optional (for hand-built ASTs from
+		// outside this parser), not because it's ever actually unset here.
+		/* v8 ignore next */
+		const bareQuote = (preferred ?? "").replace(/^[a-zA-Z]*/, "");
+		const safeToKeepRaw = parts.every((part) => {
+			/* v8 ignore next */
+			const style = part.quote_style ?? "";
+			return /^[a-zA-Z]*r/i.test(style) && style.endsWith(bareQuote);
+		});
+		/* v8 ignore next */
+		if (safeToKeepRaw || preferred === undefined) {
+			return preferred;
+		}
+		return preferred.replace(/[rR]/g, "");
+	}
+
 	private parseConcatenatedStringLiteral(): ExprNode {
 		const start = this.peek();
 		const parts: ExprNode[] = [];
@@ -4374,11 +4460,16 @@ export class Parser {
 
 		if (!anyFString && !anyTemplateStr) {
 			const combined = parts.map((part) => (part as Constant).value).join("");
+			const mergedQuoteStyle = this.safeConcatenatedQuoteStyle(
+				parts as Constant[],
+				(parts[0] as Constant).quote_style,
+			);
+
 			const combinedConstant: Constant = {
 				nodeType: "Constant",
 				value: combined,
 				kind: (parts[0] as Constant).kind,
-				quote_style: (parts[0] as Constant).quote_style,
+				quote_style: mergedQuoteStyle,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
 				end_lineno: this.previous().end_lineno,
@@ -4415,13 +4506,29 @@ export class Parser {
 		}
 
 		const lastPart = parts[parts.length - 1];
-		const firstPartQuoteStyle = (parts[0] as Constant | JoinedStr | TemplateStr)
-			.quote_style;
+		// The merged node's `quote_style` drives how the unparser re-emits
+		// it — in particular, whether it writes an `f`/`t` prefix at all.
+		// Concatenation can mix a plain string first (`"plain " f"{x}"`),
+		// so `parts[0]`'s own style isn't necessarily f/t-prefixed even
+		// though the merged result always is (it has a field in it);
+		// prefer an actual f-string/t-string part's style, which already
+		// carries the right prefix (and raw-ness/quote-char).
+		// `anyFString`/`anyTemplateStr` are only ever set alongside pushing a
+		// part of exactly this nodeType (see the loop above), so `.find`
+		// always succeeds here; the fallback only exists to satisfy the
+		// type checker.
+		/* v8 ignore next */
+		const stylePart =
+			parts.find((part) => part.nodeType === joinedNodeType) ?? parts[0];
+		const mergedQuoteStyle = this.safeConcatenatedQuoteStyle(
+			parts as (Constant | JoinedStr | TemplateStr)[],
+			(stylePart as Constant | JoinedStr | TemplateStr).quote_style,
+		);
 
 		const mergedNode = {
 			nodeType: joinedNodeType,
 			values: merged,
-			quote_style: firstPartQuoteStyle,
+			quote_style: mergedQuoteStyle,
 			lineno: start.lineno,
 			col_offset: start.col_offset,
 			end_lineno: lastPart.end_lineno,
@@ -4560,25 +4667,85 @@ export class Parser {
 		let literalStart = 0;
 		let pos = startPos;
 
+		// CPython merges adjacent literal-text `Constant`s into one (e.g. a
+		// self-documenting `{expr=}` field synthesizes its own literal
+		// `expr=` text right after whatever literal text preceded the
+		// field, and CPython's tokenizer never sees a seam between them).
+		const pushValue = (value: ExprNode) => {
+			const last = values[values.length - 1];
+			if (
+				last?.nodeType === "Constant" &&
+				value.nodeType === "Constant" &&
+				typeof last.value === "string" &&
+				typeof value.value === "string"
+			) {
+				last.value += value.value;
+				last.end_lineno = value.end_lineno;
+				last.end_col_offset = value.end_col_offset;
+				return;
+			}
+			values.push(value);
+		};
+
+		const flushLiteral = (end: number) => {
+			if (end <= literalStart) return;
+			const literalText = content.slice(literalStart, end);
+			const segStart = pos;
+			// Position tracking must advance by the raw source text (escape
+			// sequences and doubled `{{`/`}}` occupy their original
+			// character count); only the stored `value` is decoded/folded.
+			pos = this.advancePosition(pos, literalText);
+			const decoded = isRaw
+				? literalText
+				: this.decodeEscapes(literalText, false);
+			pushValue({
+				nodeType: "Constant",
+				value: this.decodeDoubledBraces(decoded),
+				lineno: segStart.lineno,
+				col_offset: segStart.col_offset,
+				end_lineno: pos.lineno,
+				end_col_offset: pos.col_offset,
+			});
+		};
+
 		while (i < content.length) {
+			// A `\N{...}` named-unicode escape's braces are part of the
+			// escape, not field delimiters — CPython never treats them as
+			// the start of an interpolation, even though this library
+			// doesn't resolve the name itself (see `decodeEscapes`). Skip
+			// straight past it so its `{`/`}` never reach the checks below.
+			// Doesn't apply to raw strings, where `\` isn't an escape.
+			if (
+				!isRaw &&
+				content[i] === "\\" &&
+				content[i + 1] === "N" &&
+				content[i + 2] === "{"
+			) {
+				const nameEnd = content.indexOf("}", i + 3);
+				// The lexer already required the whole f-string/t-string
+				// token's braces to balance before producing it (see
+				// `scanInterpolatedStringLiteral`), so a `\N{` reaching here
+				// always has a `}` somewhere ahead in `content` — this is
+				// only a fallback against `content` being a sub-slice (a
+				// format spec's text) that could in principle exclude it.
+				/* v8 ignore next */
+				i = nameEnd === -1 ? content.length : nameEnd + 1;
+				continue;
+			}
+
+			// `{{`/`}}` are escaped literal braces (folded to a single `{`/
+			// `}` by `decodeDoubledBraces` once the literal run is
+			// flushed), not the start/end of an interpolation.
+			if (
+				(content[i] === "{" && content[i + 1] === "{") ||
+				(content[i] === "}" && content[i + 1] === "}")
+			) {
+				i += 2;
+				continue;
+			}
+
 			if (content[i] === "{") {
-				// Add any literal content before this expression
-				if (i > literalStart) {
-					const literalText = content.slice(literalStart, i);
-					const segStart = pos;
-					// Position tracking must advance by the raw source text
-					// (escape sequences occupy their original character
-					// count); only the stored `value` is decoded.
-					pos = this.advancePosition(pos, literalText);
-					values.push({
-						nodeType: "Constant",
-						value: isRaw ? literalText : this.decodeEscapes(literalText, false),
-						lineno: segStart.lineno,
-						col_offset: segStart.col_offset,
-						end_lineno: pos.lineno,
-						end_col_offset: pos.col_offset,
-					});
-				}
+				flushLiteral(i);
 
 				// Parse the expression recursively
 				const { exprText, nextPos } = this.parseExpressionInInterpolatedString(
@@ -4587,7 +4754,14 @@ export class Parser {
 				);
 				const segStart = pos;
 				const segEnd = this.advancePosition(pos, content.slice(i, nextPos));
-				values.push(...buildField(exprText, token, segStart, segEnd));
+				for (const fieldValue of buildField(
+					exprText,
+					token,
+					segStart,
+					segEnd,
+				)) {
+					pushValue(fieldValue);
+				}
 				pos = segEnd;
 
 				i = nextPos;
@@ -4598,21 +4772,21 @@ export class Parser {
 		}
 
 		// Add any remaining literal content
-		if (literalStart < content.length) {
-			const literalText = content.slice(literalStart);
-			const segStart = pos;
-			pos = this.advancePosition(pos, literalText);
-			values.push({
-				nodeType: "Constant",
-				value: isRaw ? literalText : this.decodeEscapes(literalText, false),
-				lineno: segStart.lineno,
-				col_offset: segStart.col_offset,
-				end_lineno: pos.lineno,
-				end_col_offset: pos.col_offset,
-			});
-		}
+		flushLiteral(content.length);
 
 		return values;
+	}
+
+	/**
+	 * Folds an f-string/t-string literal segment's escaped `{{`/`}}` pairs
+	 * into single `{`/`}` characters, matching CPython's f-string literal
+	 * text semantics (independent of, and applied in addition to, normal
+	 * backslash escape decoding).
+	 * @param text Already backslash-escape-decoded (or raw) literal text.
+	 * @returns The text with every `{{` folded to `{` and every `}}` folded to `}`.
+	 */
+	private decodeDoubledBraces(text: string): string {
+		return text.replace(/\{\{/g, "{").replace(/\}\}/g, "}");
 	}
 
 	/**
@@ -5207,6 +5381,11 @@ export class Parser {
 			);
 		}
 
+		// `exprText` is a bare expression snippet (not a full statement), so
+		// the trailing `NEWLINE` the lexer now always synthesizes before
+		// `EOF` (see `Lexer.tokenize`) is expected here and isn't leftover
+		// content — consume it before checking for anything real left over.
+		tempParser.match(TokenType.NEWLINE);
 		if (!tempParser.isAtEnd()) {
 			throw this.errorAt(
 				token,
@@ -5608,13 +5787,17 @@ export class Parser {
 		if (this.match(TokenType.COMMA)) {
 			const elts = [expr];
 
-			// Handle trailing commas and additional elements
+			// Handle trailing commas and additional elements. `=` also ends
+			// the list: a single-element assignment target can end in a
+			// trailing comma with nothing after it (`x, = y`), making a
+			// single-element `Tuple` target rather than starting a new one.
 			while (
 				!this.check(TokenType.NEWLINE) &&
 				!this.isAtEnd() &&
 				!this.check(TokenType.RPAR) &&
 				!this.check(TokenType.RSQB) &&
-				!this.check(TokenType.RBRACE)
+				!this.check(TokenType.RBRACE) &&
+				!this.check(TokenType.EQUAL)
 			) {
 				elts.push(this.parseTestOrStarred());
 				if (!this.match(TokenType.COMMA)) break;

@@ -317,8 +317,11 @@ describe("Unparser Edge Cases", () => {
 		});
 
 		test("tuple as a binary operator operand", () => {
+			// Matches CPython's ast.unparse: a Tuple always self-delimits with
+			// its own parens (see visit_Tuple), so no extra wrapping pair is
+			// needed on top.
 			const ast = parse("(1, 2) + x");
-			expect(unparse(ast)).toBe("((1, 2)) + x");
+			expect(unparse(ast)).toBe("(1, 2) + x");
 		});
 
 		test("yield expression as a binary operator operand", () => {

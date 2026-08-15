@@ -200,3 +200,100 @@ export function diffTrees(cpy, pyast, PyComplex, path, diffs, maxDiffs) {
 		diffs.push({ path, message: `${JSON.stringify(cpy)} !== ${JSON.stringify(pyast)}` });
 	}
 }
+
+// Position fields are expected to differ after a parse -> unparse -> parse
+// round-trip (the regenerated source's layout isn't the original's), and
+// `quote_style` is a cosmetic round-tripping hint the unparser is free to
+// change (e.g. normalizing quote characters).
+const ROUNDTRIP_IGNORED_FIELDS = new Set([
+	"lineno",
+	"col_offset",
+	"end_lineno",
+	"end_col_offset",
+	"quote_style",
+]);
+
+/**
+ * Recursively diffs two py-ast trees against each other (both already run
+ * through {@link stripExtensions}) — used to check that `unparse(parse(src))`
+ * round-trips to something that reparses to the same AST as the original,
+ * ignoring position/cosmetic fields (see {@link ROUNDTRIP_IGNORED_FIELDS}).
+ * Unlike {@link diffTrees}, both sides use the same (py-ast) `Constant.value`
+ * representation, so no CPython-side type-tag decoding is needed.
+ * @param a First tree (typically the original parse).
+ * @param b Second tree (typically the re-parsed, unparsed output).
+ * @param PyComplex The `PyComplex` class from py-ast, for constant comparison.
+ * @param path Human-readable path to the current node, for reporting.
+ * @param diffs Accumulator array of `{path, message}` mismatches.
+ * @param maxDiffs Stop recursing into new diffs once this many are collected.
+ */
+export function diffRoundtrip(a, b, PyComplex, path, diffs, maxDiffs) {
+	if (diffs.length >= maxDiffs) return;
+
+	if (a && typeof a === "object" && "nodeType" in a) {
+		if (!b || typeof b !== "object" || !("nodeType" in b)) {
+			diffs.push({ path, message: `expected node ${a.nodeType}, got ${JSON.stringify(b)}` });
+			return;
+		}
+		if (a.nodeType !== b.nodeType) {
+			diffs.push({ path, message: `nodeType ${a.nodeType} !== ${b.nodeType}` });
+			return;
+		}
+		for (const key of Object.keys(a)) {
+			if (key === "nodeType" || ROUNDTRIP_IGNORED_FIELDS.has(key)) continue;
+			if (key === "value" && a.nodeType === "Constant") {
+				const reason = compareRoundtripConstant(a.value, b.value, PyComplex);
+				if (reason) diffs.push({ path: `${path}.value`, message: reason });
+				continue;
+			}
+			diffRoundtrip(a[key], b[key], PyComplex, `${path}.${key}`, diffs, maxDiffs);
+			if (diffs.length >= maxDiffs) return;
+		}
+		return;
+	}
+
+	if (Array.isArray(a)) {
+		if (!Array.isArray(b)) {
+			diffs.push({ path, message: `expected array, got ${JSON.stringify(b)}` });
+			return;
+		}
+		if (a.length !== b.length) {
+			diffs.push({ path, message: `array length ${a.length} !== ${b.length}` });
+			return;
+		}
+		for (let i = 0; i < a.length; i++) {
+			diffRoundtrip(a[i], b[i], PyComplex, `${path}[${i}]`, diffs, maxDiffs);
+			if (diffs.length >= maxDiffs) return;
+		}
+		return;
+	}
+
+	const aAbsent = a === null || a === undefined;
+	const bAbsent = b === null || b === undefined;
+	if (aAbsent || bAbsent) {
+		if (aAbsent !== bAbsent) {
+			diffs.push({ path, message: `${JSON.stringify(a)} !== ${JSON.stringify(b)}` });
+		}
+		return;
+	}
+	if (a !== b) {
+		diffs.push({ path, message: `${JSON.stringify(a)} !== ${JSON.stringify(b)}` });
+	}
+}
+
+function compareRoundtripConstant(a, b, PyComplex) {
+	if (a instanceof PyComplex || b instanceof PyComplex) {
+		const ar = a instanceof PyComplex ? a.real : a;
+		const ai = a instanceof PyComplex ? a.imag : 0;
+		const br = b instanceof PyComplex ? b.real : b;
+		const bi = b instanceof PyComplex ? b.imag : 0;
+		return ar === br && ai === bi
+			? null
+			: `complex constant mismatch ${JSON.stringify({ ar, ai })} !== ${JSON.stringify({ br, bi })}`;
+	}
+	if (typeof a === "number" && typeof b === "number") {
+		if (Number.isNaN(a) && Number.isNaN(b)) return null;
+		return a === b ? null : `constant value ${a} !== ${b}`;
+	}
+	return a === b ? null : `constant value ${JSON.stringify(a)} !== ${JSON.stringify(b)}`;
+}

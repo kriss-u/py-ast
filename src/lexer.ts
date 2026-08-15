@@ -266,10 +266,15 @@ export class Lexer {
 	private braceLevel = 0;
 
 	/**
-	 * @param source - The full Python source text to tokenize.
+	 * @param source - The full Python source text to tokenize. Line endings
+	 * are normalized to `\n` first (CPython's universal-newline handling —
+	 * `\r\n` and lone `\r` both become `\n`, including inside string
+	 * literals), so indentation tracking isn't thrown off by `\r` and
+	 * `lineno`/`col_offset` land where CPython puts them regardless of the
+	 * source file's original line-ending style.
 	 */
 	constructor(source: string) {
-		this.source = source;
+		this.source = source.replace(/\r\n?/g, "\n");
 		this.position = { line: 1, column: 0, index: 0 };
 	}
 
@@ -296,6 +301,20 @@ export class Lexer {
 
 		while (this.position.index < this.source.length) {
 			this.scanToken();
+		}
+
+		// CPython's tokenizer treats the last logical line as terminated
+		// even when the source doesn't end with an actual `\n` (`"def
+		// f():\n    return"` — no trailing newline — is valid). Without a
+		// real `\n` character, `scanNewline` never runs, so nothing emits
+		// the `NEWLINE` a small_stmt like `return` normally ends on; the
+		// parser would otherwise see it run straight into `DEDENT`/`EOF`
+		// and, for a statement that can optionally be followed by a value
+		// (`return`, `yield`, ...), misread whatever comes next as that
+		// value. Synthesize the missing token here, mirroring CPython.
+		const lastToken = this.tokens[this.tokens.length - 1];
+		if (lastToken && lastToken.type !== TokenType.NEWLINE) {
+			this.addToken(TokenType.NEWLINE, "\n");
 		}
 
 		// Add final dedents
@@ -645,8 +664,22 @@ export class Lexer {
 				continue;
 			}
 
-			// Track braces to handle nested expressions
+			// Track braces to handle nested expressions. Outside of any
+			// field (`braceLevel === 0`), `{{`/`}}` is an escaped literal
+			// brace — not part of the grammar's rule for the literal text,
+			// so it must NOT open/close a field either, or a literal brace
+			// pair before the closing quote (as in `f'{{"[{x} '`) reads as
+			// unbalanced nesting and the literal looks unterminated. Inside
+			// a field (`braceLevel > 0`), braces are real Python syntax
+			// (e.g. a dict/set display) and always nest normally — the
+			// doubling escape only applies to the outer literal text.
 			if (c === "{") {
+				if (braceLevel === 0 && this.peekNext() === "{") {
+					value += c + this.peekNext();
+					this.advance();
+					this.advance();
+					continue;
+				}
 				braceLevel++;
 				value += c;
 				this.advance();
@@ -654,6 +687,12 @@ export class Lexer {
 			}
 
 			if (c === "}") {
+				if (braceLevel === 0 && this.peekNext() === "}") {
+					value += c + this.peekNext();
+					this.advance();
+					this.advance();
+					continue;
+				}
 				if (braceLevel > 0) {
 					braceLevel--;
 				}
