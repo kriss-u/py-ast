@@ -2128,13 +2128,15 @@ export class Parser {
 
 	/**
 	 * Parses a call argument, recognizing a bare generator expression
-	 * (`f(x for x in y)`, no parens needed for a lone argument).
+	 * (`f(x for x in y)`, no parens needed for a lone argument). CPython
+	 * treats the call's own `(` as this `GeneratorExp`'s opening paren in
+	 * that case (grammar-wise it can only appear as the sole argument), so
+	 * its position starts there rather than at the element expression.
+	 * @param callParen The already-consumed `(` token of the enclosing call.
 	 * @returns The parsed argument expression, or a `GeneratorExp` node.
 	 * @throws {ParseError} On malformed expression syntax.
 	 */
-	private parseArgument(): ExprNode {
-		// Parse an argument that could be a generator expression
-		const start = this.current;
+	private parseArgument(callParen: Token): ExprNode {
 		const expr = this.parseTest();
 
 		// Check if this is a generator expression by looking for 'for' keyword
@@ -2146,8 +2148,8 @@ export class Parser {
 				nodeType: "GeneratorExp",
 				elt: expr,
 				generators,
-				lineno: this.tokens[start].lineno,
-				col_offset: this.tokens[start].col_offset,
+				lineno: callParen.lineno,
+				col_offset: callParen.col_offset,
 				end_lineno: this.previous().end_lineno,
 				end_col_offset: this.previous().end_col_offset,
 			};
@@ -2677,6 +2679,7 @@ export class Parser {
 				baseColOffset = result.col_offset;
 			} else if (this.match(TokenType.LPAR)) {
 				// Function call
+				const callParen = this.previous();
 				const args: ExprNode[] = [];
 				const keywords: Keyword[] = [];
 				let sawKeywordArg = false;
@@ -2747,13 +2750,33 @@ export class Parser {
 									"positional argument follows keyword argument",
 								);
 							}
-							const arg = this.parseArgument();
+							const arg = this.parseArgument(callParen);
 							args.push(arg);
 						}
 					} while (this.match(TokenType.COMMA));
 				}
 
 				this.consume(TokenType.RPAR, "Expected ')' after arguments");
+				const closeParen = this.previous();
+
+				// A bare generator expression's implicit parens are the
+				// call's own — extend it through the just-consumed `)`
+				// (`parseArgument` could only stamp its start; the end
+				// wasn't known until now). Recognized by its start matching
+				// `callParen` exactly, which only happens via that path: an
+				// explicitly-parenthesized generator argument's position
+				// always starts at its own (later) paren instead.
+				const soleArg =
+					args.length === 1 && keywords.length === 0 ? args[0] : null;
+				if (
+					soleArg?.nodeType === "GeneratorExp" &&
+					soleArg.lineno === callParen.lineno &&
+					soleArg.col_offset === callParen.col_offset
+				) {
+					soleArg.end_lineno = closeParen.end_lineno;
+					soleArg.end_col_offset = closeParen.end_col_offset;
+				}
+
 				result = {
 					nodeType: "Call",
 					func: result,
@@ -2761,8 +2784,8 @@ export class Parser {
 					keywords,
 					lineno: baseLineno,
 					col_offset: baseColOffset || 0,
-					end_lineno: this.previous().end_lineno,
-					end_col_offset: this.previous().end_col_offset,
+					end_lineno: closeParen.end_lineno,
+					end_col_offset: closeParen.end_col_offset,
 				};
 				baseLineno = result.lineno;
 				baseColOffset = result.col_offset;

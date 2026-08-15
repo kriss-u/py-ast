@@ -845,9 +845,7 @@ describe("parser edge cases", () => {
 		test("type alias statement with type params still parses", () => {
 			const stmt = parseStatement("type X[T] = list[T]\n");
 			expect(stmt.nodeType).toBe("TypeAlias");
-			expect((stmt as { type_params: unknown[] }).type_params).toHaveLength(
-				1,
-			);
+			expect((stmt as { type_params: unknown[] }).type_params).toHaveLength(1);
 		});
 
 		test("match subject with no colon backtracks and reports invalid syntax", () => {
@@ -988,6 +986,33 @@ describe("parser edge cases", () => {
 			};
 			expect(method.nodeType).toBe("AsyncFunctionDef");
 			expect(method.col_offset).toBe(4);
+		});
+	});
+
+	describe("bare generator expression argument position", () => {
+		// Verified against CPython 3.13: a lone, unparenthesized generator
+		// expression argument (`f(x for x in y)`) uses the call's own parens
+		// as its own — its position starts at `(` and ends at `)`, unlike an
+		// explicitly-parenthesized one (`f((x for x in y))`), which keeps its
+		// own separate, inner parens instead.
+		test("bare generator expression spans the call's parens", () => {
+			const expr = parseExpression("any(x for x in y)") as {
+				args: ExprNode[];
+			};
+			const genexp = expr.args[0];
+			expect(genexp.nodeType).toBe("GeneratorExp");
+			expect(genexp.col_offset).toBe(3);
+			expect(genexp.end_col_offset).toBe(17);
+		});
+
+		test("explicitly-parenthesized generator expression keeps its own parens", () => {
+			const expr = parseExpression("f((x for x in y))") as {
+				args: ExprNode[];
+			};
+			const genexp = expr.args[0];
+			expect(genexp.nodeType).toBe("GeneratorExp");
+			expect(genexp.col_offset).toBe(2);
+			expect(genexp.end_col_offset).toBe(16);
 		});
 	});
 
