@@ -80,9 +80,9 @@ export function Editor({ source, theme, onSourceChange, onCursorMove, highlightR
 				if (!update.docChanged && !update.selectionSet) {
 					return;
 				}
-				const pos = update.state.selection.main.head;
-				const line = update.state.doc.lineAt(pos);
-				onCursorMove({ line: line.number, column: pos - line.from });
+				const { from } = update.state.selection.main;
+				const line = update.state.doc.lineAt(from);
+				onCursorMove({ line: line.number, column: from - line.from });
 			}}
 		/>
 	);
