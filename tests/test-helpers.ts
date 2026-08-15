@@ -147,6 +147,38 @@ export function testUnparse(
 }
 
 /**
+ * Test helper that parses `code`, extracts a value from the resulting
+ * expression via `extractor`, unparses and reparses the code, and asserts
+ * the extracted value survives the round-trip unchanged. Useful for
+ * checking decoded literal content (e.g. escape sequences) that a plain
+ * `testRoundtrip` structural check wouldn't catch.
+ */
+export function testRoundtripValue<T>(
+	code: string,
+	extractor: (expr: ExprNode) => T,
+): void {
+	const original = extractor(parseExpression(code));
+	const reparsed = extractor(parseExpression(unparse(parseCode(code)).trim()));
+	expect(reparsed).toEqual(original);
+}
+
+/**
+ * Extracts and type-asserts the `value` field of the first statement's
+ * expression in a parsed module, for tests that need a typed node deep in
+ * a specific statement shape (e.g. `Assign.value as JoinedStr`).
+ */
+export function firstStmtValue<T>(
+	mod: Module,
+	guard: (stmt: StmtNode) => stmt is StmtNode & { value: T },
+): T {
+	const stmt = mod.body[0];
+	if (!guard(stmt)) {
+		throw new Error(`first statement does not match expected shape`);
+	}
+	return stmt.value;
+}
+
+/**
  * Assert that a node has the expected type
  */
 export function assertNodeType<T extends ASTNodeUnion["nodeType"]>(

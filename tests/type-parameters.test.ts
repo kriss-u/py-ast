@@ -1,6 +1,11 @@
 import { describe, expect, test } from "vitest";
 import { parse } from "../src/index.js";
-import { assertNodeType, testRoundtrip, testUnparse } from "./test-helpers.js";
+import {
+	assertNodeType,
+	parseStatement,
+	testRoundtrip,
+	testUnparse,
+} from "./test-helpers.js";
 
 describe("Type Parameters", () => {
 	describe("TypeVar", () => {
@@ -241,5 +246,47 @@ describe("Type Parameter Integration", () => {
 		expect(classDef.type_params).toHaveLength(1);
 		assertNodeType(classDef.type_params[0], "TypeVar");
 		expect(classDef.type_params[0].name).toBe("T");
+	});
+});
+
+describe("PEP 695 type params and type alias with decorator target", () => {
+	// Complementary to the "Type Parameter Integration" describe above: these
+	// focus on return-type propagation through generic functions/classes and
+	// on decorator-target validation for type-parameterized type aliases,
+	// rather than on type_params field structure.
+	test("generic function", () => {
+		const stmt = parseStatement("def f[T](x: T) -> T:\n    return x\n");
+		assertNodeType(stmt, "FunctionDef");
+		expect(stmt.returns?.nodeType).toBe("Name");
+		expect(stmt.type_params).toHaveLength(1);
+	});
+
+	test("generic class", () => {
+		const stmt = parseStatement("class Box[T]:\n    pass\n");
+		assertNodeType(stmt, "ClassDef");
+		expect(stmt.type_params).toHaveLength(1);
+	});
+
+	test("type alias with type params", () => {
+		const stmt = parseStatement("type Alias[T] = list[T]\n");
+		assertNodeType(stmt, "TypeAlias");
+	});
+
+	test("type alias without type params or a decorator", () => {
+		const stmt = parseStatement("type X = int\n");
+		assertNodeType(stmt, "TypeAlias");
+		expect(stmt.type_params).toHaveLength(0);
+		expect(stmt.value.nodeType).toBe("Name");
+	});
+
+	test("decorated type alias with type parameters", () => {
+		const stmt = parseStatement("@deco\nAlias[T] = list[T]\n");
+		assertNodeType(stmt, "TypeAlias");
+	});
+
+	test("invalid decorator target throws", () => {
+		expect(() => parseStatement("@deco\nx = 1\n")).toThrow(
+			/Invalid decorator target/,
+		);
 	});
 });

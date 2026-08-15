@@ -2,18 +2,22 @@ import { describe, expect, test } from "vitest";
 import { parse } from "../src/parser.js";
 import type {
 	Assign,
+	AsyncFunctionDef,
 	ClassDef,
 	Compare,
 	Expr,
 	For,
 	FormattedValue,
 	FunctionDef,
+	GeneratorExp,
 	If,
 	Import,
 	ImportFrom,
 	JoinedStr,
 	Match,
+	Name,
 	Try,
+	Tuple,
 } from "../src/types.js";
 
 describe("end_lineno / end_col_offset", () => {
@@ -340,5 +344,101 @@ describe("end_lineno / end_col_offset", () => {
 		expect(compare.lineno).toBe(1);
 		expect(compare.col_offset).toBe(4);
 		expect(compare.end_col_offset).toBe(13);
+	});
+
+	describe("parenthesized-base position tracking", () => {
+		// Verified against CPython 3.13: a parenthesized atom keeps its inner
+		// expression's own (paren-excluded) position when used standalone, but
+		// a trailer chain built on top of one starts at the paren.
+		test("attribute access on a parenthesized name starts at the paren", () => {
+			const mod = parse("(x).y\n");
+			const expr = (mod.body[0] as Expr).value;
+			expect(expr.col_offset).toBe(0);
+			expect(expr.end_col_offset).toBe(5);
+		});
+
+		test("call on a parenthesized expression starts at the paren", () => {
+			const mod = parse("(x)()\n");
+			const expr = (mod.body[0] as Expr).value;
+			expect(expr.col_offset).toBe(0);
+		});
+
+		test("subscript on a parenthesized expression starts at the paren", () => {
+			const mod = parse("(x)[0]\n");
+			const expr = (mod.body[0] as Expr).value;
+			expect(expr.col_offset).toBe(0);
+		});
+
+		test("a bare parenthesized name stays transparent (no trailer applied)", () => {
+			const mod = parse("(x)\n");
+			const expr = (mod.body[0] as Expr).value as Name;
+			expect(expr.nodeType).toBe("Name");
+			expect(expr.col_offset).toBe(1);
+		});
+	});
+
+	describe("decorated async function position", () => {
+		test("lineno/col_offset point at 'async', not 'def'", () => {
+			// Verified against CPython 3.13.
+			const mod = parse(
+				"class C:\n    @staticmethod\n    async def f():\n        pass\n",
+			);
+			const cls = mod.body[0] as ClassDef;
+			const method = cls.body[0] as AsyncFunctionDef;
+			expect(method.nodeType).toBe("AsyncFunctionDef");
+			expect(method.col_offset).toBe(4);
+		});
+	});
+
+	describe("bare generator expression argument position", () => {
+		// Verified against CPython 3.13: a lone, unparenthesized generator
+		// expression argument (`f(x for x in y)`) uses the call's own parens as
+		// its own — its position starts at `(` and ends at `)`, unlike an
+		// explicitly-parenthesized one (`f((x for x in y))`), which keeps its
+		// own separate, inner parens instead.
+		test("bare generator expression spans the call's parens", () => {
+			const mod = parse("any(x for x in y)\n");
+			const call = (mod.body[0] as Expr)
+				.value as import("../src/types.js").Call;
+			const genexp = call.args[0] as GeneratorExp;
+			expect(genexp.nodeType).toBe("GeneratorExp");
+			expect(genexp.col_offset).toBe(3);
+			expect(genexp.end_col_offset).toBe(17);
+		});
+
+		test("explicitly-parenthesized generator expression keeps its own parens", () => {
+			const mod = parse("f((x for x in y))\n");
+			const call = (mod.body[0] as Expr)
+				.value as import("../src/types.js").Call;
+			const genexp = call.args[0] as GeneratorExp;
+			expect(genexp.nodeType).toBe("GeneratorExp");
+			expect(genexp.col_offset).toBe(2);
+			expect(genexp.end_col_offset).toBe(16);
+		});
+	});
+
+	describe("single-element tuple target/value with a trailing comma", () => {
+		// Verified against CPython 3.13: a trailing comma may be immediately
+		// followed by `=` (or end the statement), making a single-element
+		// `Tuple` rather than requiring another element after the comma.
+		test("single-element tuple assignment target", () => {
+			const mod = parse("a, = b\n");
+			const assign = mod.body[0] as Assign;
+			expect(assign.targets[0].nodeType).toBe("Tuple");
+			expect((assign.targets[0] as Tuple).elts).toHaveLength(1);
+		});
+
+		test("multi-element tuple assignment target with trailing comma", () => {
+			const mod = parse("a, b, = c\n");
+			const assign = mod.body[0] as Assign;
+			expect((assign.targets[0] as Tuple).elts).toHaveLength(2);
+		});
+
+		test("single-element tuple value in a chained assignment", () => {
+			const mod = parse("x = y, = z\n");
+			const assign = mod.body[0] as Assign;
+			expect(assign.targets[1].nodeType).toBe("Tuple");
+			expect((assign.targets[1] as Tuple).elts).toHaveLength(1);
+		});
 	});
 });

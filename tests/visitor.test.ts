@@ -12,6 +12,22 @@ import type {
 import { NodeTransformer, NodeVisitor, walk } from "../src/visitor.js";
 import { parseCode } from "./test-helpers.js";
 
+/**
+ * Source for a `Global` statement whose `names` field is an array of plain
+ * strings rather than AST nodes, used to verify that both `walk` and
+ * `NodeVisitor` skip non-node items inside array fields instead of choking
+ * on them.
+ */
+const GLOBAL_STMT_SOURCE = "def f():\n    global x, y\n";
+
+function parseGlobalStmt(): Global {
+	const tree = parseCode(GLOBAL_STMT_SOURCE);
+	const fn = tree.body[0] as FunctionDef;
+	const globalStmt = fn.body[0];
+	expect(globalStmt.nodeType).toBe("Global");
+	return globalStmt as Global;
+}
+
 describe("walk", () => {
 	it("yields the root node first", () => {
 		const tree = parseCode("x = 1\n");
@@ -53,10 +69,7 @@ describe("walk", () => {
 	});
 
 	it("skips non-node items inside array fields", () => {
-		const tree = parseCode("def f():\n    global x, y\n");
-		const fn = tree.body[0] as FunctionDef;
-		const globalStmt = fn.body[0];
-		expect(globalStmt.nodeType).toBe("Global");
+		const globalStmt = parseGlobalStmt();
 		const types = Array.from(walk(globalStmt)).map((n) => n.nodeType);
 		expect(types).toEqual(["Global"]);
 	});
@@ -115,10 +128,7 @@ describe("NodeVisitor", () => {
 				super.genericVisit(node);
 			}
 		}
-		const tree = parseCode("def f():\n    global x, y\n");
-		const fn = tree.body[0] as FunctionDef;
-		const globalStmt = fn.body[0];
-		expect(globalStmt.nodeType).toBe("Global");
+		const globalStmt = parseGlobalStmt();
 		const visitor = new CountingVisitor();
 		visitor.visit(globalStmt);
 		expect(visitor.visited).toEqual(["Global"]);
