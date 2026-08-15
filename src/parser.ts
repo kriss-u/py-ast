@@ -976,11 +976,13 @@ export class Parser {
 			return this.parseFunctionDef(start);
 		} else if (this.match(TokenType.CLASS)) {
 			return this.parseClassDef(start);
-		} else if (this.match(TokenType.ASYNC)) {
-			return this.parseAsyncStmt(start);
 		}
 
-		throw this.error("Expected compound statement");
+		// parseSmallStmt only defers here when the current token is one of
+		// the eight it just matched above; by elimination, if none of the
+		// first seven matched, this one must.
+		this.consume(TokenType.ASYNC, "Expected compound statement");
+		return this.parseAsyncStmt(start);
 	}
 
 	/**
@@ -2062,6 +2064,7 @@ export class Parser {
 	 * @throws {ParseError} On malformed expression syntax.
 	 */
 	private parseTestList(): ExprNode {
+		const start = this.peek();
 		const expr = this.parseTest();
 
 		if (this.match(TokenType.COMMA)) {
@@ -2083,8 +2086,8 @@ export class Parser {
 				nodeType: "Tuple",
 				elts,
 				ctx: this.createLoad(),
-				lineno: expr.lineno,
-				col_offset: expr.col_offset || 0,
+				lineno: start.lineno,
+				col_offset: start.col_offset,
 				end_lineno: this.previous().end_lineno,
 				end_col_offset: this.previous().end_col_offset,
 			};
@@ -2100,6 +2103,7 @@ export class Parser {
 	 * @throws {ParseError} On malformed expression syntax.
 	 */
 	private parseTest(): ExprNode {
+		const start = this.peek();
 		const expr = this.parseOrTest();
 
 		if (this.match(TokenType.IF)) {
@@ -2112,8 +2116,8 @@ export class Parser {
 				test,
 				body: expr,
 				orelse,
-				lineno: expr.lineno,
-				col_offset: expr.col_offset || 0,
+				lineno: start.lineno,
+				col_offset: start.col_offset,
 				end_lineno: this.previous().end_lineno,
 				end_col_offset: this.previous().end_col_offset,
 			};
@@ -2194,6 +2198,7 @@ export class Parser {
 			};
 		}
 
+		const start = this.peek();
 		const expr = this.parseAndTest();
 
 		if (this.match(TokenType.OR)) {
@@ -2207,8 +2212,8 @@ export class Parser {
 				nodeType: "BoolOp",
 				op: { nodeType: "Or" },
 				values,
-				lineno: expr.lineno,
-				col_offset: expr.col_offset || 0,
+				lineno: start.lineno,
+				col_offset: start.col_offset,
 				end_lineno: this.previous().end_lineno,
 				end_col_offset: this.previous().end_col_offset,
 			};
@@ -2225,6 +2230,7 @@ export class Parser {
 	 * @throws {ParseError} On malformed expression syntax.
 	 */
 	private parseAndTest(): ExprNode {
+		const start = this.peek();
 		const expr = this.parseNotTest();
 
 		// Check for named expression (walrus operator :=)
@@ -2235,8 +2241,8 @@ export class Parser {
 				nodeType: "NamedExpr",
 				target: expr,
 				value,
-				lineno: expr.lineno,
-				col_offset: expr.col_offset || 0,
+				lineno: start.lineno,
+				col_offset: start.col_offset,
 				end_lineno: this.previous().end_lineno,
 				end_col_offset: this.previous().end_col_offset,
 			};
@@ -2253,8 +2259,8 @@ export class Parser {
 				nodeType: "BoolOp",
 				op: { nodeType: "And" },
 				values,
-				lineno: expr.lineno,
-				col_offset: expr.col_offset || 0,
+				lineno: start.lineno,
+				col_offset: start.col_offset,
 				end_lineno: this.previous().end_lineno,
 				end_col_offset: this.previous().end_col_offset,
 			};
@@ -2296,6 +2302,7 @@ export class Parser {
 	 * @throws {ParseError} On malformed expression syntax.
 	 */
 	private parseComparison(): ExprNode {
+		const start = this.peek();
 		const expr = this.parseExpr();
 
 		if (this.matchComparison()) {
@@ -2312,8 +2319,8 @@ export class Parser {
 				left: expr,
 				ops,
 				comparators,
-				lineno: expr.lineno,
-				col_offset: expr.col_offset || 0,
+				lineno: start.lineno,
+				col_offset: start.col_offset,
 				end_lineno: this.previous().end_lineno,
 				end_col_offset: this.previous().end_col_offset,
 			};
@@ -2337,6 +2344,7 @@ export class Parser {
 	 * @throws {ParseError} On malformed expression syntax.
 	 */
 	private parseOrExpr(): ExprNode {
+		const start = this.peek();
 		let expr = this.parseXorExpr();
 
 		while (this.match(TokenType.VBAR)) {
@@ -2348,8 +2356,8 @@ export class Parser {
 				left: expr,
 				op,
 				right,
-				lineno: expr.lineno,
-				col_offset: expr.col_offset || 0,
+				lineno: start.lineno,
+				col_offset: start.col_offset,
 				end_lineno: this.previous().end_lineno,
 				end_col_offset: this.previous().end_col_offset,
 			};
@@ -2364,6 +2372,7 @@ export class Parser {
 	 * @throws {ParseError} On malformed expression syntax.
 	 */
 	private parseXorExpr(): ExprNode {
+		const start = this.peek();
 		let expr = this.parseAndExpr();
 
 		while (this.match(TokenType.CIRCUMFLEX)) {
@@ -2375,8 +2384,8 @@ export class Parser {
 				left: expr,
 				op,
 				right,
-				lineno: expr.lineno,
-				col_offset: expr.col_offset || 0,
+				lineno: start.lineno,
+				col_offset: start.col_offset,
 				end_lineno: this.previous().end_lineno,
 				end_col_offset: this.previous().end_col_offset,
 			};
@@ -2391,6 +2400,7 @@ export class Parser {
 	 * @throws {ParseError} On malformed expression syntax.
 	 */
 	private parseAndExpr(): ExprNode {
+		const start = this.peek();
 		let expr = this.parseShiftExpr();
 
 		while (this.match(TokenType.AMPER)) {
@@ -2402,8 +2412,8 @@ export class Parser {
 				left: expr,
 				op,
 				right,
-				lineno: expr.lineno,
-				col_offset: expr.col_offset || 0,
+				lineno: start.lineno,
+				col_offset: start.col_offset,
 				end_lineno: this.previous().end_lineno,
 				end_col_offset: this.previous().end_col_offset,
 			};
@@ -2418,6 +2428,7 @@ export class Parser {
 	 * @throws {ParseError} On malformed expression syntax.
 	 */
 	private parseShiftExpr(): ExprNode {
+		const start = this.peek();
 		let expr = this.parseArithExpr();
 
 		while (this.match(TokenType.LEFTSHIFT, TokenType.RIGHTSHIFT)) {
@@ -2433,8 +2444,8 @@ export class Parser {
 				left: expr,
 				op,
 				right,
-				lineno: expr.lineno,
-				col_offset: expr.col_offset || 0,
+				lineno: start.lineno,
+				col_offset: start.col_offset,
 				end_lineno: this.previous().end_lineno,
 				end_col_offset: this.previous().end_col_offset,
 			};
@@ -2449,6 +2460,7 @@ export class Parser {
 	 * @throws {ParseError} On malformed expression syntax.
 	 */
 	private parseArithExpr(): ExprNode {
+		const start = this.peek();
 		let expr = this.parseTerm();
 
 		while (this.match(TokenType.PLUS, TokenType.MINUS)) {
@@ -2464,8 +2476,8 @@ export class Parser {
 				left: expr,
 				op,
 				right,
-				lineno: expr.lineno,
-				col_offset: expr.col_offset || 0,
+				lineno: start.lineno,
+				col_offset: start.col_offset,
 				end_lineno: this.previous().end_lineno,
 				end_col_offset: this.previous().end_col_offset,
 			};
@@ -2481,6 +2493,7 @@ export class Parser {
 	 * @throws {ParseError} On malformed expression syntax.
 	 */
 	private parseTerm(): ExprNode {
+		const start = this.peek();
 		let expr = this.parseFactor();
 
 		while (
@@ -2514,8 +2527,8 @@ export class Parser {
 				left: expr,
 				op,
 				right,
-				lineno: expr.lineno,
-				col_offset: expr.col_offset || 0,
+				lineno: start.lineno,
+				col_offset: start.col_offset,
 				end_lineno: this.previous().end_lineno,
 				end_col_offset: this.previous().end_col_offset,
 			};
@@ -2580,6 +2593,7 @@ export class Parser {
 	 * @throws {ParseError} On malformed expression syntax.
 	 */
 	private parsePower(): ExprNode {
+		const start = this.peek();
 		let expr = this.parseAtomWithTrailers();
 
 		if (this.match(TokenType.DOUBLESTAR)) {
@@ -2591,8 +2605,8 @@ export class Parser {
 				left: expr,
 				op,
 				right,
-				lineno: expr.lineno,
-				col_offset: expr.col_offset || 0,
+				lineno: start.lineno,
+				col_offset: start.col_offset,
 				end_lineno: this.previous().end_lineno,
 				end_col_offset: this.previous().end_col_offset,
 			};
@@ -3391,6 +3405,7 @@ export class Parser {
 	 * @throws {ParseError} On malformed expression syntax.
 	 */
 	private parseExprList(): ExprNode {
+		const start = this.peek();
 		const expr = this.parseExpr();
 		let result: ExprNode;
 
@@ -3409,8 +3424,8 @@ export class Parser {
 				nodeType: "Tuple",
 				elts,
 				ctx: this.createStore(),
-				lineno: expr.lineno,
-				col_offset: expr.col_offset || 0,
+				lineno: start.lineno,
+				col_offset: start.col_offset,
 				end_lineno: this.previous().end_lineno,
 				end_col_offset: this.previous().end_col_offset,
 			};
@@ -3429,6 +3444,7 @@ export class Parser {
 	 * @throws {ParseError} On malformed subscript syntax.
 	 */
 	private parseSubscriptList(): ExprNode {
+		const start = this.peek();
 		const first = this.parseSubscript();
 
 		if (this.match(TokenType.COMMA)) {
@@ -3446,8 +3462,8 @@ export class Parser {
 				nodeType: "Tuple",
 				elts,
 				ctx: this.createLoad(),
-				lineno: first.lineno,
-				col_offset: first.col_offset || 0,
+				lineno: start.lineno,
+				col_offset: start.col_offset,
 				end_lineno: this.previous().end_lineno,
 				end_col_offset: this.previous().end_col_offset,
 			};
@@ -3495,6 +3511,7 @@ export class Parser {
 			};
 		}
 
+		const firstStart = this.peek();
 		const first = this.parseTestOrStarred();
 
 		if (this.match(TokenType.COLON)) {
@@ -3521,8 +3538,8 @@ export class Parser {
 				lower: first,
 				upper,
 				step,
-				lineno: first.lineno,
-				col_offset: first.col_offset || 0,
+				lineno: firstStart.lineno,
+				col_offset: firstStart.col_offset,
 				end_lineno: this.previous().end_lineno,
 				end_col_offset: this.previous().end_col_offset,
 			};
@@ -4165,8 +4182,15 @@ export class Parser {
 			}
 
 			if (next >= "0" && next <= "7") {
-				const octal = /^[0-7]{1,3}/.exec(content.slice(i + 1, i + 4));
-				const digits = octal ? octal[0] : next;
+				// Up to 3 octal digits total, starting with `next` itself.
+				let digits = next;
+				while (
+					digits.length < 3 &&
+					content[i + 1 + digits.length] >= "0" &&
+					content[i + 1 + digits.length] <= "7"
+				) {
+					digits += content[i + 1 + digits.length];
+				}
 				result += String.fromCharCode(parseInt(digits, 8) & 0xff);
 				i += 1 + digits.length;
 				continue;
@@ -5524,6 +5548,7 @@ export class Parser {
 	 * @throws {ParseError} On malformed expression syntax.
 	 */
 	private parseTestListWithStar(): ExprNode {
+		const start = this.peek();
 		const expr = this.parseTestOrStarred();
 
 		if (this.match(TokenType.COMMA)) {
@@ -5545,8 +5570,8 @@ export class Parser {
 				nodeType: "Tuple",
 				elts,
 				ctx: this.createLoad(),
-				lineno: expr.lineno,
-				col_offset: expr.col_offset || 0,
+				lineno: start.lineno,
+				col_offset: start.col_offset,
 				end_lineno: this.previous().end_lineno,
 				end_col_offset: this.previous().end_col_offset,
 			};

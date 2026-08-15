@@ -39,9 +39,10 @@ npm install
 Useful scripts:
 
 ```bash
-npm run dev         # rollup in watch mode
-npm test            # run the Vitest suite
-npm run test:watch  # watch mode
+npm run dev            # rollup in watch mode
+npm test               # run the Vitest suite
+npm run test:watch     # watch mode
+npm run test:coverage  # Vitest with coverage — must be 100%, see below
 npm run lint         # Biome check
 npm run lint:fix     # Biome check with autofix
 npm run format        # Biome format
@@ -63,12 +64,21 @@ npm run build          # type-check + rollup build
    malformed syntax, boundary values). Tests must be deterministic — no
    reliance on timing, execution order, external network access, or
    unseeded randomness.
-5. Do not introduce `any`. This codebase runs under `strict` TypeScript —
+5. **100% test coverage is mandatory, not aspirational.** `npm run test:coverage`
+   enforces statements/branches/functions/lines all at 100% via the
+   `coverage.thresholds` config in `vitest.config.ts`; it exits non-zero
+   below that. Every line and branch your change touches needs a test that
+   exercises it. If some code is genuinely unreachable (a defensive
+   fallback TypeScript requires but that can never actually execute),
+   prefer restructuring to remove the unreachable path; if that's not
+   possible, mark it with `/* v8 ignore next */` and a comment explaining
+   why — don't write a test whose only purpose is to hit a line.
+6. Do not introduce `any`. This codebase runs under `strict` TypeScript —
    use generics, discriminated unions, or `unknown` with narrowing instead.
-6. Do not change public exports, function signatures, or emitted AST shapes
+7. Do not change public exports, function signatures, or emitted AST shapes
    unless the issue/PR explicitly calls for a breaking change. If a change
    is unavoidably breaking, say so clearly in the PR description.
-7. The library must work identically under ESM and CJS consumption, and
+8. The library must work identically under ESM and CJS consumption, and
    across platforms Node supports — avoid OS-specific paths, filesystem
    assumptions, or Node-only built-ins beyond what's already in use.
 
@@ -80,6 +90,7 @@ Make sure all of the following pass locally:
 npm run lint
 npm run type-check
 npm test
+npm run test:coverage  # must report 100% statements/branches/functions/lines
 npm run build   # if your change touches anything Rollup bundles
 ```
 

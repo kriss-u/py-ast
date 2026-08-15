@@ -849,6 +849,18 @@ describe("parser edge cases", () => {
 				1,
 			);
 		});
+
+		test("match subject with no colon backtracks and reports invalid syntax", () => {
+			// Exercises tryParseMatchStmt's "not a match statement" backtrack
+			// when a colon never follows the subject expression.
+			expect(() => parseCode("match x\n")).toThrow(/invalid syntax/);
+		});
+
+		test("type NAME with no '=' backtracks and reports invalid syntax", () => {
+			// Exercises the type-alias attempt's "not a type alias" backtrack
+			// when '=' never follows the name (and optional type params).
+			expect(() => parseCode("type X\n")).toThrow(/invalid syntax/);
+		});
 	});
 
 	describe("string escape sequences", () => {
@@ -896,6 +908,33 @@ describe("parser edge cases", () => {
 		test("raw strings still skip all escape processing", () => {
 			const expr = parseExpression('r"\\x41\\n"') as { value: string };
 			expect(expr.value).toBe("\\x41\\n");
+		});
+
+		test("hex escape with fewer than 2 hex digits is kept literal", () => {
+			const expr = parseExpression('"\\xg1"') as { value: string };
+			expect(expr.value).toBe("\\xg1");
+		});
+
+		test("\\N{...} named escape is kept literal (no name database)", () => {
+			const expr = parseExpression('"\\N{DEGREE SIGN}"') as {
+				value: string;
+			};
+			expect(expr.value).toBe("\\N{DEGREE SIGN}");
+		});
+
+		test("\\u escape with fewer than 4 hex digits is kept literal", () => {
+			const expr = parseExpression('"\\u12"') as { value: string };
+			expect(expr.value).toBe("\\u12");
+		});
+
+		test("\\U escape with fewer than 8 hex digits is kept literal", () => {
+			const expr = parseExpression('"\\U1234"') as { value: string };
+			expect(expr.value).toBe("\\U1234");
+		});
+
+		test("\\N{ with no closing brace is kept literal", () => {
+			const expr = parseExpression('"\\N{ABC"') as { value: string };
+			expect(expr.value).toBe("\\N{ABC");
 		});
 	});
 

@@ -53,12 +53,20 @@ for the grammar it's derived from). Source lives in `src/`; build output goes to
    `exports` in `package.json`). Avoid Node-only built-ins unless the library is meant to run
    only in Node — check existing usage before adding new runtime dependencies.
 
-8. **Tests must be full-coverage and non-flaky.** New or changed behavior needs tests that
-   cover the happy path plus edge cases (empty input, malformed syntax, boundary values) —
-   don't leave branches untested. Tests must be deterministic: no reliance on timing, execution
-   order, external network access, or unseeded randomness. A test that fails intermittently is
-   a bug — fix the root cause, don't retry or skip it, don't mark it as skipped/todo to make CI
-   green.
+8. **100% test coverage is mandatory, and enforced.** `npm run test:coverage` (Vitest + the v8
+   provider) is configured in `vitest.config.ts` with `coverage.thresholds: { 100: true }` —
+   statements, branches, functions, and lines must all read 100%, and the command exits
+   non-zero if any of them don't. This isn't a target to approach; it's a gate. Every new or
+   changed line and branch needs a test that exercises it — don't leave anything uncovered.
+   If a branch is truly unreachable (e.g. a defensive fallback the type checker requires but
+   the calling code provably never triggers), either restructure the code to remove the
+   unreachable path entirely (preferred — see rule 4's aversion to defensive code for
+   scenarios that can't happen) or, if that's not possible, mark it with a `/* v8 ignore
+   next */` comment that explains *why* it's unreachable — never write a test that exists only
+   to hit a line. Tests must also be deterministic and non-flaky: no reliance on timing,
+   execution order, external network access, or unseeded randomness. A test that fails
+   intermittently is a bug — fix the root cause, don't retry or skip it, don't mark it as
+   skipped/todo to make CI green.
 
 9. **Verify parser/unparser behavior against CPython, not intuition.** When implementing or
    fixing grammar (new syntax, precedence, edge cases), check actual CPython behavior — e.g.
@@ -74,6 +82,8 @@ for the grammar it's derived from). Source lives in `src/`; build output goes to
 
 - `npm run lint` passes
 - `npm run type-check` passes
-- `npm test` passes (Vitest), with full coverage of the change and zero flaky tests
+- `npm test` passes (Vitest), with zero flaky tests
+- `npm run test:coverage` passes at 100% statements/branches/functions/lines (enforced by
+  `vitest.config.ts`'s coverage thresholds — not optional)
 - New/changed public API surface has JSDoc
 - `npm run build` succeeds if the change touches anything Rollup bundles
