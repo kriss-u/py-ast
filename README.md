@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.svg" alt="py-ast logo" width="120" height="120">
+</p>
+
 # Python AST Parser for TypeScript
 
 [![npm version](https://img.shields.io/npm/v/py-ast.svg)](https://www.npmjs.com/package/py-ast)
@@ -10,12 +14,13 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A comprehensive TypeScript-based Python source code parser that generates
-Abstract Syntax Trees (AST) following the Python ASDL grammar specification.
-This library provides complete parsing, unparsing, and AST traversal
-infrastructure similar to ESPrima for JavaScript, with bidirectional Python code
-↔ AST conversion.
+Abstract Syntax Trees (AST) mirroring the shape of CPython's own `ast` module,
+as defined by the Python ASDL grammar specification. This library provides
+complete parsing, unparsing, and AST traversal infrastructure, with
+bidirectional Python code ↔ AST conversion.
 
-📖 **[API documentation](https://kriss-u.github.io/py-ast/)**
+📖 **[API documentation](https://kriss-u.github.io/py-ast/)** ·
+🛝 **[Playground](https://pyast.nepcodex.com)**
 
 ## Features
 
@@ -28,8 +33,7 @@ infrastructure similar to ESPrima for JavaScript, with bidirectional Python code
 - �🚶 **AST traversal** - Walk and visit all nodes in the syntax tree
 - 📄 **JSON serialization** - Export ASTs to JSON format for analysis or storage
 - 🔧 **TypeScript types** - Full type definitions for all AST nodes
-- ⚡ **ESPrima-style API** - Familiar interface for JavaScript developers
-- 🐍 **Python-compatible** - Follows Python's official AST structure
+- 🐍 **CPython-compatible** - AST node shapes mirror Python's own `ast` module (field names, node types, `lineno`/`col_offset`/`end_lineno`/`end_col_offset`)
 
 ## Installation
 
@@ -1049,15 +1053,17 @@ that maintains semantic equivalence with the original.
 
 ## Design Principles
 
-This library is designed to be **independent** from Python's built-in `ast`
-module while following the same ASDL grammar specification:
+This library's AST mirrors CPython's own `ast` module — the same node types,
+field names, and position attributes (`lineno`/`col_offset`/`end_lineno`/
+`end_col_offset`) `ast.parse()` produces — while running entirely in
+TypeScript/JavaScript, with no Python runtime involved:
 
 1. **TypeScript-native** - Built for TypeScript/JavaScript environments
 2. **Bidirectional** - Parse Python to AST and unparse AST back to Python
 3. **JSON serializable** - All nodes can be directly serialized to JSON
-4. **ESPrima-style API** - Familiar interface for web developers
-5. **Custom AST format** - Optimized for JavaScript object handling
-6. **No Python runtime required** - Runs entirely in Node.js/browser
+4. **CPython-shaped AST** - Node types and fields match `ast.dump()`'s output,
+   not a JavaScript-tooling-inspired format
+5. **No Python runtime required** - Runs entirely in Node.js/browser
 
 ## Development
 

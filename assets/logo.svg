@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <title>py-ast</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#232323"/>
+      <stop offset="1" stop-color="#161616"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="4" y="4" width="248" height="248" rx="52" fill="url(#bg)"/>
+
+  <g stroke="#7d8590" stroke-width="6" stroke-linecap="round" fill="none">
+    <line x1="128" y1="60" x2="70" y2="122"/>
+    <line x1="128" y1="60" x2="186" y2="122"/>
+    <line x1="70" y1="122" x2="40" y2="188"/>
+    <line x1="70" y1="122" x2="100" y2="188"/>
+    <line x1="186" y1="122" x2="156" y2="188"/>
+    <line x1="186" y1="122" x2="216" y2="188"/>
+  </g>
+
+  <g stroke="#161616" stroke-width="4">
+    <circle cx="128" cy="60" r="20" fill="#FFD43B"/>
+    <circle cx="70" cy="122" r="17" fill="#4B8BBE"/>
+    <circle cx="186" cy="122" r="17" fill="#4B8BBE"/>
+    <circle cx="40" cy="188" r="13" fill="#FFD43B"/>
+    <circle cx="100" cy="188" r="13" fill="#306998"/>
+    <circle cx="156" cy="188" r="13" fill="#306998"/>
+    <circle cx="216" cy="188" r="13" fill="#FFD43B"/>
+  </g>
+</svg>

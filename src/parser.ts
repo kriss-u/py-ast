@@ -37,6 +37,16 @@ import type {
 import { PyComplex } from "./types.js";
 
 /**
+ * A 1-based line / 0-based column source position, used internally while
+ * computing f-string/t-string interpolation positions (see
+ * {@link Parser.advancePosition}/{@link Parser.shiftToSourcePosition}).
+ */
+interface SourcePosition {
+	lineno: number;
+	col_offset: number;
+}
+
+/**
  * Options controlling how {@link parse} lexes and parses Python source.
  */
 export interface ParseOptions {
@@ -374,6 +384,8 @@ export class Parser {
 				nodeType: "Pass",
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -383,6 +395,8 @@ export class Parser {
 				nodeType: "Break",
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -392,6 +406,8 @@ export class Parser {
 				nodeType: "Continue",
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -410,6 +426,8 @@ export class Parser {
 				value,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -429,6 +447,8 @@ export class Parser {
 				targets,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -448,6 +468,8 @@ export class Parser {
 				names,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -467,6 +489,8 @@ export class Parser {
 				names,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -485,9 +509,17 @@ export class Parser {
 
 		// Handle import statement
 		if (this.match(TokenType.IMPORT)) {
-			const names: { name: string; asname?: string }[] = [];
+			const names: {
+				name: string;
+				asname?: string;
+				lineno: number;
+				col_offset: number;
+				end_lineno: number;
+				end_col_offset: number;
+			}[] = [];
 
 			do {
+				const nameStart = this.peek();
 				let name = this.consume(TokenType.NAME, "Expected module name").value;
 				// Handle dotted names like 'os.path'
 				while (this.match(TokenType.DOT)) {
@@ -504,7 +536,14 @@ export class Parser {
 					).value;
 				}
 
-				names.push({ name, asname });
+				names.push({
+					name,
+					asname,
+					lineno: nameStart.lineno,
+					col_offset: nameStart.col_offset,
+					end_lineno: this.previous().end_lineno,
+					end_col_offset: this.previous().end_col_offset,
+				});
 			} while (this.match(TokenType.COMMA));
 
 			return {
@@ -513,12 +552,16 @@ export class Parser {
 					nodeType: "Alias",
 					name: n.name,
 					asname: n.asname,
-					lineno: start.lineno,
-					col_offset: start.col_offset,
+					lineno: n.lineno,
+					col_offset: n.col_offset,
+					end_lineno: n.end_lineno,
+					end_col_offset: n.end_col_offset,
 				})),
 				is_lazy: isLazyImport ? 1 : undefined,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -548,15 +591,30 @@ export class Parser {
 
 			this.consume(TokenType.IMPORT, "Expected 'import' after module name");
 
-			const names: { name: string; asname?: string }[] = [];
+			const names: {
+				name: string;
+				asname?: string;
+				lineno: number;
+				col_offset: number;
+				end_lineno: number;
+				end_col_offset: number;
+			}[] = [];
 
 			// Handle parenthesized import lists
 			const hasParens = this.match(TokenType.LPAR);
 
 			if (this.match(TokenType.STAR)) {
-				names.push({ name: "*" });
+				const starToken = this.previous();
+				names.push({
+					name: "*",
+					lineno: starToken.lineno,
+					col_offset: starToken.col_offset,
+					end_lineno: starToken.end_lineno,
+					end_col_offset: starToken.end_col_offset,
+				});
 			} else {
 				// Parse the first name
+				const firstNameStart = this.peek();
 				const firstName = this.consume(TokenType.NAME, "Expected name").value;
 				let firstAsname: string | undefined;
 				if (this.match(TokenType.AS)) {
@@ -565,7 +623,14 @@ export class Parser {
 						"Expected name after 'as'",
 					).value;
 				}
-				names.push({ name: firstName, asname: firstAsname });
+				names.push({
+					name: firstName,
+					asname: firstAsname,
+					lineno: firstNameStart.lineno,
+					col_offset: firstNameStart.col_offset,
+					end_lineno: this.previous().end_lineno,
+					end_col_offset: this.previous().end_col_offset,
+				});
 
 				// Parse additional names if there are commas
 				while (this.match(TokenType.COMMA)) {
@@ -580,6 +645,7 @@ export class Parser {
 						break;
 					}
 
+					const nameStart = this.peek();
 					const name = this.consume(TokenType.NAME, "Expected name").value;
 					let asname: string | undefined;
 					if (this.match(TokenType.AS)) {
@@ -588,7 +654,14 @@ export class Parser {
 							"Expected name after 'as'",
 						).value;
 					}
-					names.push({ name, asname });
+					names.push({
+						name,
+						asname,
+						lineno: nameStart.lineno,
+						col_offset: nameStart.col_offset,
+						end_lineno: this.previous().end_lineno,
+						end_col_offset: this.previous().end_col_offset,
+					});
 				}
 			}
 
@@ -603,13 +676,17 @@ export class Parser {
 					nodeType: "Alias",
 					name: n.name,
 					asname: n.asname,
-					lineno: start.lineno,
-					col_offset: start.col_offset,
+					lineno: n.lineno,
+					col_offset: n.col_offset,
+					end_lineno: n.end_lineno,
+					end_col_offset: n.end_col_offset,
 				})),
 				level,
 				is_lazy: isLazyImport ? 1 : undefined,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -636,6 +713,8 @@ export class Parser {
 				cause,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -654,6 +733,8 @@ export class Parser {
 				msg,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -665,7 +746,7 @@ export class Parser {
 			const nameToken = this.consume(
 				TokenType.NAME,
 				"Expected type alias name",
-			).value;
+			);
 
 			// Type parameters (optional)
 			const type_params = this.parseTypeParams();
@@ -677,15 +758,19 @@ export class Parser {
 				nodeType: "TypeAlias",
 				name: {
 					nodeType: "Name",
-					id: nameToken,
+					id: nameToken.value,
 					ctx: { nodeType: "Store" },
-					lineno: start.lineno,
-					col_offset: start.col_offset,
+					lineno: nameToken.lineno,
+					col_offset: nameToken.col_offset,
+					end_lineno: nameToken.end_lineno,
+					end_col_offset: nameToken.end_col_offset,
 				},
 				type_params,
 				value,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -729,6 +814,8 @@ export class Parser {
 				value,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 
 			// Attach all collected expression comments
@@ -762,6 +849,8 @@ export class Parser {
 				value,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		} else if (this.match(TokenType.COLON)) {
 			// Annotated assignment
@@ -782,6 +871,8 @@ export class Parser {
 				simple: this.isSimpleTarget(expr) ? 1 : 0,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -791,6 +882,8 @@ export class Parser {
 			value: expr,
 			lineno: start.lineno,
 			col_offset: start.col_offset,
+			end_lineno: this.previous().end_lineno,
+			end_col_offset: this.previous().end_col_offset,
 		};
 	}
 
@@ -867,11 +960,15 @@ export class Parser {
 					ctx: { nodeType: "Store" },
 					lineno: nameToken.lineno,
 					col_offset: nameToken.col_offset,
+					end_lineno: nameToken.end_lineno,
+					end_col_offset: nameToken.end_col_offset,
 				},
 				type_params,
 				value,
 				lineno: nameStart.lineno,
 				col_offset: nameStart.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -926,6 +1023,7 @@ export class Parser {
 			orelse,
 			lineno: start.lineno,
 			col_offset: start.col_offset,
+			...this.lastStmtEnd(body, orelse),
 		};
 	}
 
@@ -953,6 +1051,7 @@ export class Parser {
 			orelse,
 			lineno: start.lineno,
 			col_offset: start.col_offset,
+			...this.lastStmtEnd(body, orelse),
 		};
 	}
 
@@ -983,6 +1082,7 @@ export class Parser {
 			orelse,
 			lineno: start.lineno,
 			col_offset: start.col_offset,
+			...this.lastStmtEnd(body, orelse),
 		};
 	}
 
@@ -1025,6 +1125,7 @@ export class Parser {
 			type_params,
 			lineno: start.lineno,
 			col_offset: start.col_offset,
+			...this.lastStmtEnd(body),
 		};
 	}
 
@@ -1067,6 +1168,7 @@ export class Parser {
 			type_params,
 			lineno: start.lineno,
 			col_offset: start.col_offset,
+			...this.lastStmtEnd(body),
 		};
 	}
 
@@ -1107,6 +1209,8 @@ export class Parser {
 								value,
 								lineno: nameToken.lineno,
 								col_offset: nameToken.col_offset,
+								end_lineno: this.previous().end_lineno,
+								end_col_offset: this.previous().end_col_offset,
 							});
 						} else {
 							// This is a base class, rewind and parse as expression
@@ -1135,6 +1239,7 @@ export class Parser {
 			type_params,
 			lineno: start.lineno,
 			col_offset: start.col_offset,
+			...this.lastStmtEnd(body),
 		};
 	}
 
@@ -1209,6 +1314,7 @@ export class Parser {
 				body: handlerBody,
 				lineno: handlerStart.lineno,
 				col_offset: handlerStart.col_offset,
+				...this.lastStmtEnd(handlerBody),
 			});
 		}
 
@@ -1222,6 +1328,9 @@ export class Parser {
 			finalbody = this.parseSuite();
 		}
 
+		const lastHandlerBody =
+			handlers.length > 0 ? handlers[handlers.length - 1].body : undefined;
+
 		return {
 			nodeType: hasStarHandler ? "TryStar" : "Try",
 			body,
@@ -1230,6 +1339,7 @@ export class Parser {
 			finalbody,
 			lineno: start.lineno,
 			col_offset: start.col_offset,
+			...this.lastStmtEnd(body, lastHandlerBody, orelse, finalbody),
 		} as Try | TryStar;
 	}
 
@@ -1252,6 +1362,7 @@ export class Parser {
 			body,
 			lineno: start.lineno,
 			col_offset: start.col_offset,
+			...this.lastStmtEnd(body),
 		};
 	}
 
@@ -1422,12 +1533,17 @@ export class Parser {
 
 		this.consume(TokenType.DEDENT, "Expected dedent");
 
+		// The lexer only emits INDENT for an actually-indented block, so the
+		// loop above always parses at least one `case` before reaching DEDENT.
+		const lastCaseBody = cases[cases.length - 1].body;
+
 		return {
 			nodeType: "Match",
 			subject,
 			cases,
 			lineno: start.lineno,
 			col_offset: start.col_offset,
+			...this.lastStmtEnd(lastCaseBody),
 		};
 	}
 
@@ -1464,6 +1580,8 @@ export class Parser {
 						patterns,
 						lineno: start.lineno,
 						col_offset: start.col_offset,
+						end_lineno: this.previous().end_lineno,
+						end_col_offset: this.previous().end_col_offset,
 					};
 
 		// `as`-bound pattern (`pattern as name`), e.g. `1 | 2 as y`,
@@ -1483,6 +1601,8 @@ export class Parser {
 				name: nameToken.value,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -1512,6 +1632,8 @@ export class Parser {
 					name: "_",
 					lineno: start.lineno,
 					col_offset: start.col_offset,
+					end_lineno: this.previous().end_lineno,
+					end_col_offset: this.previous().end_col_offset,
 				};
 			}
 
@@ -1528,6 +1650,8 @@ export class Parser {
 					name: nameToken.value,
 					lineno: start.lineno,
 					col_offset: start.col_offset,
+					end_lineno: this.previous().end_lineno,
+					end_col_offset: this.previous().end_col_offset,
 				};
 			}
 
@@ -1548,6 +1672,8 @@ export class Parser {
 				ctx: this.createLoad(),
 				lineno: nameToken.lineno,
 				col_offset: nameToken.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 			while (this.match(TokenType.DOT)) {
 				const attrToken = this.consume(
@@ -1561,6 +1687,8 @@ export class Parser {
 					ctx: this.createLoad(),
 					lineno: cls.lineno,
 					col_offset: cls.col_offset,
+					end_lineno: this.previous().end_lineno,
+					end_col_offset: this.previous().end_col_offset,
 				};
 			}
 
@@ -1571,6 +1699,8 @@ export class Parser {
 					value: cls,
 					lineno: start.lineno,
 					col_offset: start.col_offset,
+					end_lineno: this.previous().end_lineno,
+					end_col_offset: this.previous().end_col_offset,
 				};
 			}
 
@@ -1607,6 +1737,8 @@ export class Parser {
 				kwd_patterns,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -1629,6 +1761,8 @@ export class Parser {
 				patterns,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -1643,6 +1777,8 @@ export class Parser {
 					patterns: [],
 					lineno: start.lineno,
 					col_offset: start.col_offset,
+					end_lineno: this.previous().end_lineno,
+					end_col_offset: this.previous().end_col_offset,
 				};
 			}
 
@@ -1667,6 +1803,8 @@ export class Parser {
 				patterns,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -1708,6 +1846,8 @@ export class Parser {
 				rest,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -1731,6 +1871,8 @@ export class Parser {
 				value: this.parseNumber(numToken.value),
 				lineno: numToken.lineno,
 				col_offset: numToken.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 
 			if (negative) {
@@ -1740,6 +1882,8 @@ export class Parser {
 					operand: value,
 					lineno: start.lineno,
 					col_offset: start.col_offset,
+					end_lineno: this.previous().end_lineno,
+					end_col_offset: this.previous().end_col_offset,
 				};
 			}
 
@@ -1766,9 +1910,13 @@ export class Parser {
 						value: imagValue,
 						lineno: imagToken.lineno,
 						col_offset: imagToken.col_offset,
+						end_lineno: this.previous().end_lineno,
+						end_col_offset: this.previous().end_col_offset,
 					},
 					lineno: start.lineno,
 					col_offset: start.col_offset,
+					end_lineno: this.previous().end_lineno,
+					end_col_offset: this.previous().end_col_offset,
 				};
 			}
 
@@ -1777,6 +1925,8 @@ export class Parser {
 				value,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -1809,9 +1959,13 @@ export class Parser {
 					value,
 					lineno: token.lineno,
 					col_offset: token.col_offset,
+					end_lineno: this.previous().end_lineno,
+					end_col_offset: this.previous().end_col_offset,
 				},
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -1827,6 +1981,8 @@ export class Parser {
 				name,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -1865,6 +2021,8 @@ export class Parser {
 				ctx: this.createLoad(),
 				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -1892,6 +2050,8 @@ export class Parser {
 				orelse,
 				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -1920,6 +2080,8 @@ export class Parser {
 				generators,
 				lineno: this.tokens[start].lineno,
 				col_offset: this.tokens[start].col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -1963,6 +2125,8 @@ export class Parser {
 				body,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -1981,6 +2145,8 @@ export class Parser {
 				values,
 				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -2007,6 +2173,8 @@ export class Parser {
 				value,
 				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -2023,6 +2191,8 @@ export class Parser {
 				values,
 				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -2046,6 +2216,8 @@ export class Parser {
 				operand,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -2078,6 +2250,8 @@ export class Parser {
 				comparators,
 				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -2112,6 +2286,8 @@ export class Parser {
 				right,
 				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -2137,6 +2313,8 @@ export class Parser {
 				right,
 				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -2162,6 +2340,8 @@ export class Parser {
 				right,
 				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -2191,6 +2371,8 @@ export class Parser {
 				right,
 				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -2220,6 +2402,8 @@ export class Parser {
 				right,
 				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -2268,6 +2452,8 @@ export class Parser {
 				right,
 				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -2290,6 +2476,8 @@ export class Parser {
 				value,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -2313,6 +2501,8 @@ export class Parser {
 				operand,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -2339,6 +2529,8 @@ export class Parser {
 				right,
 				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -2368,6 +2560,8 @@ export class Parser {
 					ctx: this.createLoad(),
 					lineno: expr.lineno,
 					col_offset: expr.col_offset || 0,
+					end_lineno: this.previous().end_lineno,
+					end_col_offset: this.previous().end_col_offset,
 				};
 			} else if (this.match(TokenType.LSQB)) {
 				const slice = this.parseSubscriptList();
@@ -2379,6 +2573,8 @@ export class Parser {
 					ctx: this.createLoad(),
 					lineno: expr.lineno,
 					col_offset: expr.col_offset || 0,
+					end_lineno: this.previous().end_lineno,
+					end_col_offset: this.previous().end_col_offset,
 				};
 			} else if (this.match(TokenType.LPAR)) {
 				// Function call
@@ -2393,6 +2589,7 @@ export class Parser {
 
 						// Check for keyword arguments
 						if (this.check(TokenType.NAME) && this.checkNext(TokenType.EQUAL)) {
+							const argStart = this.peek();
 							const argName = this.advance().value;
 							this.advance(); // consume '='
 							const value = this.parseTest();
@@ -2400,35 +2597,45 @@ export class Parser {
 								nodeType: "Keyword",
 								arg: argName,
 								value,
-								lineno: this.previous().lineno,
-								col_offset: this.previous().col_offset,
+								lineno: argStart.lineno,
+								col_offset: argStart.col_offset,
+								end_lineno: this.previous().end_lineno,
+								end_col_offset: this.previous().end_col_offset,
 							});
 							sawKeywordArg = true;
-						} else if (this.match(TokenType.DOUBLESTAR)) {
+						} else if (this.check(TokenType.DOUBLESTAR)) {
 							// **kwargs
+							const argStart = this.peek();
+							this.advance();
 							const value = this.parseTest();
 							keywords.push({
 								nodeType: "Keyword",
 								arg: undefined,
 								value,
-								lineno: this.previous().lineno,
-								col_offset: this.previous().col_offset,
+								lineno: argStart.lineno,
+								col_offset: argStart.col_offset,
+								end_lineno: this.previous().end_lineno,
+								end_col_offset: this.previous().end_col_offset,
 							});
 							sawDoubleStarUnpack = true;
-						} else if (this.match(TokenType.STAR)) {
+						} else if (this.check(TokenType.STAR)) {
 							// *args
 							if (sawDoubleStarUnpack) {
 								throw this.error(
 									"iterable argument unpacking follows keyword argument unpacking",
 								);
 							}
+							const argStart = this.peek();
+							this.advance();
 							const value = this.parseTest();
 							args.push({
 								nodeType: "Starred",
 								value,
 								ctx: this.createLoad(),
-								lineno: this.previous().lineno,
-								col_offset: this.previous().col_offset,
+								lineno: argStart.lineno,
+								col_offset: argStart.col_offset,
+								end_lineno: this.previous().end_lineno,
+								end_col_offset: this.previous().end_col_offset,
 							});
 						} else {
 							if (sawDoubleStarUnpack) {
@@ -2455,6 +2662,8 @@ export class Parser {
 					keywords,
 					lineno: expr.lineno,
 					col_offset: expr.col_offset || 0,
+					end_lineno: this.previous().end_lineno,
+					end_col_offset: this.previous().end_col_offset,
 				};
 			} else {
 				break;
@@ -2484,6 +2693,8 @@ export class Parser {
 					value,
 					lineno: start.lineno,
 					col_offset: start.col_offset,
+					end_lineno: this.previous().end_lineno,
+					end_col_offset: this.previous().end_col_offset,
 				};
 			} else {
 				let value: ExprNode | undefined;
@@ -2502,6 +2713,8 @@ export class Parser {
 					value,
 					lineno: start.lineno,
 					col_offset: start.col_offset,
+					end_lineno: this.previous().end_lineno,
+					end_col_offset: this.previous().end_col_offset,
 				};
 			}
 		}
@@ -2514,6 +2727,8 @@ export class Parser {
 				ctx: this.createLoad(),
 				lineno: token.lineno,
 				col_offset: token.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -2524,6 +2739,8 @@ export class Parser {
 				value: this.parseNumber(token.value),
 				lineno: token.lineno,
 				col_offset: token.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -2538,6 +2755,8 @@ export class Parser {
 				value: true,
 				lineno: token.lineno,
 				col_offset: token.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -2548,6 +2767,8 @@ export class Parser {
 				value: false,
 				lineno: token.lineno,
 				col_offset: token.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -2558,6 +2779,8 @@ export class Parser {
 				value: null,
 				lineno: token.lineno,
 				col_offset: token.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -2568,6 +2791,8 @@ export class Parser {
 				value: "...", // Ellipsis representation
 				lineno: token.lineno,
 				col_offset: token.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -2580,6 +2805,8 @@ export class Parser {
 					ctx: this.createLoad(),
 					lineno: start.lineno,
 					col_offset: start.col_offset,
+					end_lineno: this.previous().end_lineno,
+					end_col_offset: this.previous().end_col_offset,
 				};
 			}
 
@@ -2663,6 +2890,8 @@ export class Parser {
 					generators,
 					lineno: start.lineno,
 					col_offset: start.col_offset,
+					end_lineno: this.previous().end_lineno,
+					end_col_offset: this.previous().end_col_offset,
 				};
 			}
 
@@ -2682,6 +2911,8 @@ export class Parser {
 					ctx: this.createLoad(),
 					lineno: start.lineno,
 					col_offset: start.col_offset,
+					end_lineno: this.previous().end_lineno,
+					end_col_offset: this.previous().end_col_offset,
 				};
 			}
 
@@ -2818,7 +3049,8 @@ export class Parser {
 
 					if (this.check(TokenType.NAME)) {
 						bareStarPending = false;
-						const name = this.advance().value;
+						const nameToken = this.advance();
+						const name = nameToken.value;
 						let annotation: ExprNode | undefined;
 
 						if (this.match(TokenType.COLON)) {
@@ -2829,16 +3061,19 @@ export class Parser {
 							nodeType: "Arg",
 							arg: name,
 							annotation,
-							lineno: this.previous().lineno,
-							col_offset: this.previous().col_offset,
+							lineno: nameToken.lineno,
+							col_offset: nameToken.col_offset,
+							end_lineno: this.previous().end_lineno,
+							end_col_offset: this.previous().end_col_offset,
 						};
 					}
 					// After *, all following params are keyword-only
 				} else if (this.match(TokenType.DOUBLESTAR)) {
-					const name = this.consume(
+					const nameToken = this.consume(
 						TokenType.NAME,
 						"Expected parameter name",
-					).value;
+					);
+					const name = nameToken.value;
 					let annotation: ExprNode | undefined;
 
 					if (this.match(TokenType.COLON)) {
@@ -2849,19 +3084,28 @@ export class Parser {
 						nodeType: "Arg",
 						arg: name,
 						annotation,
-						lineno: this.previous().lineno,
-						col_offset: this.previous().col_offset,
+						lineno: nameToken.lineno,
+						col_offset: nameToken.col_offset,
+						end_lineno: this.previous().end_lineno,
+						end_col_offset: this.previous().end_col_offset,
 					};
 				} else {
-					const name = this.consume(
+					const nameToken = this.consume(
 						TokenType.NAME,
 						"Expected parameter name",
-					).value;
+					);
+					const name = nameToken.value;
 					let annotation: ExprNode | undefined;
 
 					if (this.match(TokenType.COLON)) {
 						annotation = this.parseTestOrStarred();
 					}
+
+					// The arg node's own end excludes any default value
+					// (CPython positions the default separately in
+					// `defaults`/`kw_defaults`), so its end must be captured
+					// here, before the default is parsed.
+					const argEndToken = this.previous();
 
 					let defaultValue: ExprNode | undefined;
 					if (this.match(TokenType.EQUAL)) {
@@ -2872,8 +3116,10 @@ export class Parser {
 						nodeType: "Arg",
 						arg: name,
 						annotation,
-						lineno: this.previous().lineno,
-						col_offset: this.previous().col_offset,
+						lineno: nameToken.lineno,
+						col_offset: nameToken.col_offset,
+						end_lineno: argEndToken.end_lineno,
+						end_col_offset: argEndToken.end_col_offset,
 					};
 
 					if (seenStar) {
@@ -2962,34 +3208,38 @@ export class Parser {
 
 				if (this.check(TokenType.NAME)) {
 					bareStarPending = false;
-					const name = this.advance().value;
+					const nameToken = this.advance();
 					vararg = {
 						nodeType: "Arg",
-						arg: name,
+						arg: nameToken.value,
 						annotation: undefined,
-						lineno: this.previous().lineno,
-						col_offset: this.previous().col_offset,
+						lineno: nameToken.lineno,
+						col_offset: nameToken.col_offset,
+						end_lineno: nameToken.end_lineno,
+						end_col_offset: nameToken.end_col_offset,
 					};
 				}
 				// After *, all following params are keyword-only
 			} else if (this.match(TokenType.DOUBLESTAR)) {
-				const name = this.consume(
+				const nameToken = this.consume(
 					TokenType.NAME,
 					"Expected parameter name",
-				).value;
+				);
 
 				kwarg = {
 					nodeType: "Arg",
-					arg: name,
+					arg: nameToken.value,
 					annotation: undefined,
-					lineno: this.previous().lineno,
-					col_offset: this.previous().col_offset,
+					lineno: nameToken.lineno,
+					col_offset: nameToken.col_offset,
+					end_lineno: nameToken.end_lineno,
+					end_col_offset: nameToken.end_col_offset,
 				};
 			} else {
-				const name = this.consume(
+				const nameToken = this.consume(
 					TokenType.NAME,
 					"Expected parameter name",
-				).value;
+				);
 
 				let defaultValue: ExprNode | undefined;
 				if (this.match(TokenType.EQUAL)) {
@@ -2998,10 +3248,12 @@ export class Parser {
 
 				const arg: Arg = {
 					nodeType: "Arg",
-					arg: name,
+					arg: nameToken.value,
 					annotation: undefined,
-					lineno: this.previous().lineno,
-					col_offset: this.previous().col_offset,
+					lineno: nameToken.lineno,
+					col_offset: nameToken.col_offset,
+					end_lineno: nameToken.end_lineno,
+					end_col_offset: nameToken.end_col_offset,
 				};
 
 				if (seenStar) {
@@ -3072,6 +3324,8 @@ export class Parser {
 				ctx: this.createStore(),
 				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		} else {
 			result = expr;
@@ -3107,6 +3361,8 @@ export class Parser {
 				ctx: this.createLoad(),
 				lineno: first.lineno,
 				col_offset: first.col_offset || 0,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -3146,6 +3402,8 @@ export class Parser {
 				step,
 				lineno: this.previous().lineno,
 				col_offset: this.previous().col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -3177,6 +3435,8 @@ export class Parser {
 				step,
 				lineno: first.lineno,
 				col_offset: first.col_offset || 0,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -3200,6 +3460,8 @@ export class Parser {
 				ctx: this.createLoad(),
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -3219,6 +3481,8 @@ export class Parser {
 				generators,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -3237,6 +3501,8 @@ export class Parser {
 			ctx: this.createLoad(),
 			lineno: start.lineno,
 			col_offset: start.col_offset,
+			end_lineno: this.previous().end_lineno,
+			end_col_offset: this.previous().end_col_offset,
 		};
 	}
 
@@ -3257,6 +3523,8 @@ export class Parser {
 				values: [],
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -3290,6 +3558,8 @@ export class Parser {
 				values,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -3311,6 +3581,8 @@ export class Parser {
 					generators,
 					lineno: start.lineno,
 					col_offset: start.col_offset,
+					end_lineno: this.previous().end_lineno,
+					end_col_offset: this.previous().end_col_offset,
 				};
 			}
 
@@ -3338,6 +3610,8 @@ export class Parser {
 				values,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		} else {
 			// Set
@@ -3352,6 +3626,8 @@ export class Parser {
 					generators,
 					lineno: start.lineno,
 					col_offset: start.col_offset,
+					end_lineno: this.previous().end_lineno,
+					end_col_offset: this.previous().end_col_offset,
 				};
 			}
 
@@ -3369,6 +3645,8 @@ export class Parser {
 				elts,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 	}
@@ -3753,6 +4031,20 @@ export class Parser {
 	}
 
 	/**
+	 * Computes a plain string `Constant`'s real CPython `kind`: `"u"` for a
+	 * `u"..."`/`U"..."` literal, `undefined` for everything else. CPython's
+	 * `ast.Constant.kind` never holds anything else (no `r`/`b`/quote-style
+	 * info) — that richer info is round-tripping-only and lives in the
+	 * node's `quote_style` field instead (a py-ast extension, not part of
+	 * CPython's `ast`).
+	 * @param quoteStyle The token's prefix+quote text, as returned by {@link getStringQuoteStyle}.
+	 * @returns `"u"` or `undefined`.
+	 */
+	private cpythonStringKind(quoteStyle: string): string | undefined {
+		return /^[uU]/.test(quoteStyle) ? "u" : undefined;
+	}
+
+	/**
 	 * Determines whether a string token's prefix marks it as an f-string or
 	 * a t-string (PEP 750 template string), regardless of prefix letter
 	 * order or an accompanying `r` (raw) marker (e.g. `f`, `rf`, `fr`, `t`,
@@ -3799,13 +4091,18 @@ export class Parser {
 				anyTemplateStr = true;
 				parts.push(this.parseTemplateStr(token));
 			} else {
-				parts.push({
+				const quoteStyle = this.getStringQuoteStyle(token.value);
+				const constant: Constant = {
 					nodeType: "Constant",
 					value: this.parseString(token.value),
-					kind: this.getStringQuoteStyle(token.value),
+					kind: this.cpythonStringKind(quoteStyle),
+					quote_style: quoteStyle,
 					lineno: token.lineno,
 					col_offset: token.col_offset,
-				});
+					end_lineno: this.previous().end_lineno,
+					end_col_offset: this.previous().end_col_offset,
+				};
+				parts.push(constant);
 			}
 		}
 
@@ -3824,13 +4121,17 @@ export class Parser {
 
 		if (!anyFString && !anyTemplateStr) {
 			const combined = parts.map((part) => (part as Constant).value).join("");
-			return {
+			const combinedConstant: Constant = {
 				nodeType: "Constant",
 				value: combined,
 				kind: (parts[0] as Constant).kind,
+				quote_style: (parts[0] as Constant).quote_style,
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
+			return combinedConstant;
 		}
 
 		const joinedNodeType = anyTemplateStr ? "TemplateStr" : "JoinedStr";
@@ -3853,17 +4154,27 @@ export class Parser {
 				typeof value.value === "string"
 			) {
 				last.value += value.value;
+				last.end_lineno = value.end_lineno;
+				last.end_col_offset = value.end_col_offset;
 			} else {
 				merged.push(value);
 			}
 		}
 
-		return {
+		const lastPart = parts[parts.length - 1];
+		const firstPartQuoteStyle = (parts[0] as Constant | JoinedStr | TemplateStr)
+			.quote_style;
+
+		const mergedNode = {
 			nodeType: joinedNodeType,
 			values: merged,
+			quote_style: firstPartQuoteStyle,
 			lineno: start.lineno,
 			col_offset: start.col_offset,
+			end_lineno: lastPart.end_lineno,
+			end_col_offset: lastPart.end_col_offset,
 		} as JoinedStr | TemplateStr;
+		return mergedNode;
 	}
 
 	/**
@@ -3877,6 +4188,7 @@ export class Parser {
 	private stripInterpolatedStringToken(token: Token): {
 		content: string;
 		quoteStyle: string;
+		closingLength: number;
 	} {
 		const quoteStyle = this.getStringQuoteStyle(token.value);
 		const isTripleQuote =
@@ -3886,7 +4198,7 @@ export class Parser {
 			quoteStyle.length,
 			token.value.length - closingLength,
 		);
-		return { content, quoteStyle };
+		return { content, quoteStyle, closingLength };
 	}
 
 	/**
@@ -3900,16 +4212,25 @@ export class Parser {
 	 * @throws {Error} If an f-string expression is malformed.
 	 */
 	private parseFString(token: Token): JoinedStr {
-		const { content, quoteStyle } = this.stripInterpolatedStringToken(token);
-		const values = this.scanFStringSegments(content, token, quoteStyle.length);
+		const { content, quoteStyle, closingLength } =
+			this.stripInterpolatedStringToken(token);
+		const startPos: SourcePosition = {
+			lineno: token.lineno,
+			col_offset: token.col_offset + quoteStyle.length,
+		};
+		const values = this.scanFStringSegments(content, token, startPos);
+		const end = this.advancePosition(startPos, content);
 
-		return {
+		const joinedStr: JoinedStr = {
 			nodeType: "JoinedStr",
 			values,
-			kind: quoteStyle,
+			quote_style: quoteStyle,
 			lineno: token.lineno,
 			col_offset: token.col_offset,
+			end_lineno: end.lineno,
+			end_col_offset: end.col_offset + closingLength,
 		};
+		return joinedStr;
 	}
 
 	/**
@@ -3922,61 +4243,76 @@ export class Parser {
 	 * @throws {Error} If a t-string expression is malformed.
 	 */
 	private parseTemplateStr(token: Token): TemplateStr {
-		const { content, quoteStyle } = this.stripInterpolatedStringToken(token);
-		const values = this.scanTemplateStrSegments(
-			content,
-			token,
-			quoteStyle.length,
-		);
+		const { content, quoteStyle, closingLength } =
+			this.stripInterpolatedStringToken(token);
+		const startPos: SourcePosition = {
+			lineno: token.lineno,
+			col_offset: token.col_offset + quoteStyle.length,
+		};
+		const values = this.scanTemplateStrSegments(content, token, startPos);
+		const end = this.advancePosition(startPos, content);
 
-		return {
+		const templateStr: TemplateStr = {
 			nodeType: "TemplateStr",
 			values,
-			kind: quoteStyle,
+			quote_style: quoteStyle,
 			lineno: token.lineno,
 			col_offset: token.col_offset,
+			end_lineno: end.lineno,
+			end_col_offset: end.col_offset + closingLength,
 		};
+		return templateStr;
 	}
 
 	/**
-	 * Scans f-string-style content (an f-string's own body, a `FormattedValue`
+	 * Scans f-string-style content (an f-string's own body, a `FormattedValue`/
 	 * `Interpolation`'s format spec text, or a t-string's own body — they all
 	 * follow the same literal/`{expr}` interleaving rules and can nest further
 	 * `{expr}` segments) into a `JoinedStr`/`TemplateStr`'s `values` array,
-	 * delegating each `{expr}` segment to `buildField`.
+	 * delegating each `{expr}` segment to `buildField`. Positions are tracked
+	 * incrementally from `startPos` (rather than via a fixed offset from the
+	 * f-string token) so embedded newlines in multi-line f-strings/t-strings
+	 * advance `lineno` correctly, matching CPython.
 	 * @param content The unquoted body, or format-spec text, to scan.
-	 * @param token The originating f-string/t-string token, used for node position.
-	 * @param colOffsetBase Offset added to `token.col_offset` for literal
-	 * `Constant` positions; only meaningful when `content` is the literal's
-	 * own body starting at a known offset within the token. Format-spec text
-	 * has no such fixed offset within the source, so callers scanning a spec
-	 * pass `0` and positions fall back to the token's own start.
+	 * @param token The originating f-string/t-string token, used for error position only.
+	 * @param startPos The real source position of `content[0]`.
 	 * @param buildField Builds the `{expr}` segment's node(s) from its raw
-	 * expression text: normally a single `FormattedValue`/`Interpolation`,
-	 * or `[literalConstant, field]` for a self-documenting `{expr=}` segment
-	 * (PEP 501/572), whose literal `expr=` text renders as a `Constant`
-	 * immediately before the field.
+	 * expression text and its real source span: normally a single
+	 * `FormattedValue`/`Interpolation`, or `[literalConstant, field]` for a
+	 * self-documenting `{expr=}` segment (PEP 501/572), whose literal `expr=`
+	 * text renders as a `Constant` immediately before the field.
 	 * @returns The interleaved `Constant`/field nodes.
 	 */
 	private scanInterleavedSegments(
 		content: string,
 		token: Token,
-		colOffsetBase: number,
-		buildField: (exprText: string, token: Token) => ExprNode[],
+		startPos: SourcePosition,
+		buildField: (
+			exprText: string,
+			token: Token,
+			segStart: SourcePosition,
+			segEnd: SourcePosition,
+		) => ExprNode[],
 	): ExprNode[] {
 		const values: ExprNode[] = [];
 		let i = 0;
 		let literalStart = 0;
+		let pos = startPos;
 
 		while (i < content.length) {
 			if (content[i] === "{") {
 				// Add any literal content before this expression
 				if (i > literalStart) {
+					const literalText = content.slice(literalStart, i);
+					const segStart = pos;
+					pos = this.advancePosition(pos, literalText);
 					values.push({
 						nodeType: "Constant",
-						value: content.slice(literalStart, i),
-						lineno: token.lineno,
-						col_offset: token.col_offset + literalStart + colOffsetBase,
+						value: literalText,
+						lineno: segStart.lineno,
+						col_offset: segStart.col_offset,
+						end_lineno: pos.lineno,
+						end_col_offset: pos.col_offset,
 					});
 				}
 
@@ -3985,7 +4321,10 @@ export class Parser {
 					content,
 					i,
 				);
-				values.push(...buildField(exprText, token));
+				const segStart = pos;
+				const segEnd = this.advancePosition(pos, content.slice(i, nextPos));
+				values.push(...buildField(exprText, token, segStart, segEnd));
+				pos = segEnd;
 
 				i = nextPos;
 				literalStart = i;
@@ -3996,11 +4335,16 @@ export class Parser {
 
 		// Add any remaining literal content
 		if (literalStart < content.length) {
+			const literalText = content.slice(literalStart);
+			const segStart = pos;
+			pos = this.advancePosition(pos, literalText);
 			values.push({
 				nodeType: "Constant",
-				value: content.slice(literalStart),
-				lineno: token.lineno,
-				col_offset: token.col_offset + literalStart + colOffsetBase,
+				value: literalText,
+				lineno: segStart.lineno,
+				col_offset: segStart.col_offset,
+				end_lineno: pos.lineno,
+				end_col_offset: pos.col_offset,
 			});
 		}
 
@@ -4014,13 +4358,14 @@ export class Parser {
 	private scanFStringSegments(
 		content: string,
 		token: Token,
-		colOffsetBase: number,
+		startPos: SourcePosition,
 	): ExprNode[] {
 		return this.scanInterleavedSegments(
 			content,
 			token,
-			colOffsetBase,
-			(exprText, tok) => this.buildFormattedValueNodes(exprText, tok),
+			startPos,
+			(exprText, tok, segStart, segEnd) =>
+				this.buildFormattedValueNodes(exprText, tok, segStart, segEnd),
 		);
 	}
 
@@ -4031,13 +4376,14 @@ export class Parser {
 	private scanTemplateStrSegments(
 		content: string,
 		token: Token,
-		colOffsetBase: number,
+		startPos: SourcePosition,
 	): ExprNode[] {
 		return this.scanInterleavedSegments(
 			content,
 			token,
-			colOffsetBase,
-			(exprText, tok) => this.buildInterpolationNodes(exprText, tok),
+			startPos,
+			(exprText, tok, segStart, segEnd) =>
+				this.buildInterpolationNodes(exprText, tok, segStart, segEnd),
 		);
 	}
 
@@ -4299,20 +4645,18 @@ export class Parser {
 	 * {@link buildInterpolationNodes}, which differ only in the node type
 	 * they wrap the value expression in.
 	 * @param exprText The raw text between the segment's braces (as returned by {@link parseExpressionInInterpolatedString}).
-	 * @param token The f-string/t-string token, used for node position.
-	 * @returns The value expression text (conversion/format-spec/`=` marker stripped), the conversion code, the format spec node if present, and the verbatim self-documenting literal text if this is a `{expr=}` segment.
+	 * @returns The value expression text (conversion/format-spec/`=` marker stripped), the conversion code, the raw format-spec text and its `:`'s offset within `exprText` if present, and the verbatim self-documenting literal text if this is a `{expr=}` segment.
 	 */
-	private splitInterpolatedSegment(
-		exprText: string,
-		token: Token,
-	): {
+	private splitInterpolatedSegment(exprText: string): {
 		expression: string;
 		conversion: number;
-		formatSpec?: ExprNode;
+		formatSpecText?: string;
+		formatSpecColonOffset?: number;
 		selfDocText?: string;
 	} {
 		let expression = exprText;
-		let formatSpec: ExprNode | undefined;
+		let formatSpecText: string | undefined;
+		let formatSpecColonOffset: number | undefined;
 		let conversion = -1;
 
 		// Check for conversion specifiers (!r, !s, !a), ignoring any that
@@ -4328,27 +4672,15 @@ export class Parser {
 
 			if (rest.startsWith(":")) {
 				// Has format spec after conversion
-				formatSpec = {
-					nodeType: "JoinedStr",
-					values: this.scanFStringSegments(rest.slice(1), token, 0),
-					lineno: token.lineno,
-					col_offset: token.col_offset,
-				};
+				formatSpecColonOffset = bangIndex + 2;
+				formatSpecText = rest.slice(1);
 			}
 		} else {
 			// Check for format spec without conversion
 			const colonIndex = this.findTopLevelColon(expression);
 			if (colonIndex !== -1) {
-				formatSpec = {
-					nodeType: "JoinedStr",
-					values: this.scanFStringSegments(
-						expression.slice(colonIndex + 1),
-						token,
-						0,
-					),
-					lineno: token.lineno,
-					col_offset: token.col_offset,
-				};
+				formatSpecColonOffset = colonIndex;
+				formatSpecText = expression.slice(colonIndex + 1);
 				expression = expression.slice(0, colonIndex);
 			}
 		}
@@ -4366,13 +4698,37 @@ export class Parser {
 			if (!isComparisonOrWalrus) {
 				selfDocText = expression;
 				expression = expression.slice(0, trimmedEnd.length - 1);
-				if (conversion === -1 && !formatSpec) {
+				if (conversion === -1 && formatSpecText === undefined) {
 					conversion = 114;
 				}
 			}
 		}
 
-		return { expression, conversion, formatSpec, selfDocText };
+		return {
+			expression,
+			conversion,
+			formatSpecText,
+			formatSpecColonOffset,
+			selfDocText,
+		};
+	}
+
+	/**
+	 * Builds the real source position of a `{expr}` segment's value
+	 * expression (the position right after `{` plus any leading whitespace
+	 * within the segment text) and its format spec's `:` (if any), shared by
+	 * {@link buildFormattedValueNodes} and {@link buildInterpolationNodes}.
+	 * @param expression The value expression text (already conversion/format-spec/`=` stripped, not yet trimmed).
+	 * @param segStart The segment's real source position (of its opening `{`).
+	 * @returns The real source position of `expression`'s first non-whitespace character.
+	 */
+	private interpolationExprStart(
+		expression: string,
+		segStart: SourcePosition,
+	): SourcePosition {
+		const exprSegStart = this.advancePosition(segStart, "{");
+		const leadingWs = expression.length - expression.trimStart().length;
+		return this.advancePosition(exprSegStart, expression.slice(0, leadingWs));
 	}
 
 	/**
@@ -4382,32 +4738,73 @@ export class Parser {
 	 * `[literalConstant, FormattedValue]` for a self-documenting `{expr=}`
 	 * segment.
 	 * @param exprText The raw text between the segment's braces (as returned by {@link parseExpressionInInterpolatedString}).
-	 * @param token The f-string token, used for error/node position.
+	 * @param token The f-string token, used for error position.
+	 * @param segStart The segment's real source position (of its opening `{`).
+	 * @param segEnd The real source position just past the segment's closing `}`.
 	 * @returns The segment's node(s), in source order.
 	 */
-	private buildFormattedValueNodes(exprText: string, token: Token): ExprNode[] {
-		const { expression, conversion, formatSpec, selfDocText } =
-			this.splitInterpolatedSegment(exprText, token);
+	private buildFormattedValueNodes(
+		exprText: string,
+		token: Token,
+		segStart: SourcePosition,
+		segEnd: SourcePosition,
+	): ExprNode[] {
+		const {
+			expression,
+			conversion,
+			formatSpecText,
+			formatSpecColonOffset,
+			selfDocText,
+		} = this.splitInterpolatedSegment(exprText);
+		const exprSegStart = this.advancePosition(segStart, "{");
+		const valueStart = this.interpolationExprStart(expression, segStart);
 		const exprAst = this.parseExpressionFromString(expression.trim(), token);
+		this.shiftToSourcePosition(exprAst, valueStart);
+
+		let formatSpec: ExprNode | undefined;
+		if (formatSpecText !== undefined && formatSpecColonOffset !== undefined) {
+			const colonPos = this.advancePosition(
+				exprSegStart,
+				exprText.slice(0, formatSpecColonOffset),
+			);
+			const specContentStart = this.advancePosition(colonPos, ":");
+			formatSpec = {
+				nodeType: "JoinedStr",
+				values: this.scanFStringSegments(
+					formatSpecText,
+					token,
+					specContentStart,
+				),
+				lineno: colonPos.lineno,
+				col_offset: colonPos.col_offset,
+				end_lineno: segEnd.lineno,
+				end_col_offset: segEnd.col_offset - 1,
+			};
+		}
 
 		const formattedValue: FormattedValue = {
 			nodeType: "FormattedValue",
 			value: exprAst,
 			conversion,
 			format_spec: formatSpec,
-			lineno: token.lineno,
-			col_offset: token.col_offset,
+			lineno: segStart.lineno,
+			col_offset: segStart.col_offset,
+			end_lineno: segEnd.lineno,
+			end_col_offset: segEnd.col_offset,
 		};
 
 		if (selfDocText === undefined) {
 			return [formattedValue];
 		}
+		const selfDocEnd = this.advancePosition(exprSegStart, selfDocText);
 		return [
 			{
 				nodeType: "Constant",
 				value: selfDocText,
-				lineno: token.lineno,
-				col_offset: token.col_offset,
+				lineno: exprSegStart.lineno,
+				col_offset: exprSegStart.col_offset,
+				end_lineno: selfDocEnd.lineno,
+				end_col_offset: selfDocEnd.col_offset,
 			},
 			formattedValue,
 		];
@@ -4424,13 +4821,49 @@ export class Parser {
 	 * trailing whitespace to match `string.templatelib.Interpolation.str` /
 	 * CPython's `ast` output.
 	 * @param exprText The raw text between the segment's braces (as returned by {@link parseExpressionInInterpolatedString}).
-	 * @param token The t-string token, used for error/node position.
+	 * @param token The t-string token, used for error position.
+	 * @param segStart The segment's real source position (of its opening `{`).
+	 * @param segEnd The real source position just past the segment's closing `}`.
 	 * @returns The segment's node(s), in source order.
 	 */
-	private buildInterpolationNodes(exprText: string, token: Token): ExprNode[] {
-		const { expression, conversion, formatSpec, selfDocText } =
-			this.splitInterpolatedSegment(exprText, token);
+	private buildInterpolationNodes(
+		exprText: string,
+		token: Token,
+		segStart: SourcePosition,
+		segEnd: SourcePosition,
+	): ExprNode[] {
+		const {
+			expression,
+			conversion,
+			formatSpecText,
+			formatSpecColonOffset,
+			selfDocText,
+		} = this.splitInterpolatedSegment(exprText);
+		const exprSegStart = this.advancePosition(segStart, "{");
+		const valueStart = this.interpolationExprStart(expression, segStart);
 		const exprAst = this.parseExpressionFromString(expression.trim(), token);
+		this.shiftToSourcePosition(exprAst, valueStart);
+
+		let formatSpec: ExprNode | undefined;
+		if (formatSpecText !== undefined && formatSpecColonOffset !== undefined) {
+			const colonPos = this.advancePosition(
+				exprSegStart,
+				exprText.slice(0, formatSpecColonOffset),
+			);
+			const specContentStart = this.advancePosition(colonPos, ":");
+			formatSpec = {
+				nodeType: "JoinedStr",
+				values: this.scanFStringSegments(
+					formatSpecText,
+					token,
+					specContentStart,
+				),
+				lineno: colonPos.lineno,
+				col_offset: colonPos.col_offset,
+				end_lineno: segEnd.lineno,
+				end_col_offset: segEnd.col_offset - 1,
+			};
+		}
 
 		const interpolation: Interpolation = {
 			nodeType: "Interpolation",
@@ -4438,19 +4871,24 @@ export class Parser {
 			str: expression.replace(/\s+$/, ""),
 			conversion,
 			format_spec: formatSpec,
-			lineno: token.lineno,
-			col_offset: token.col_offset,
+			lineno: segStart.lineno,
+			col_offset: segStart.col_offset,
+			end_lineno: segEnd.lineno,
+			end_col_offset: segEnd.col_offset,
 		};
 
 		if (selfDocText === undefined) {
 			return [interpolation];
 		}
+		const selfDocEnd = this.advancePosition(exprSegStart, selfDocText);
 		return [
 			{
 				nodeType: "Constant",
 				value: selfDocText,
-				lineno: token.lineno,
-				col_offset: token.col_offset,
+				lineno: exprSegStart.lineno,
+				col_offset: exprSegStart.col_offset,
+				end_lineno: selfDocEnd.lineno,
+				end_col_offset: selfDocEnd.col_offset,
 			},
 			interpolation,
 		];
@@ -4578,6 +5016,8 @@ export class Parser {
 				inline: commentToken.lineno === this.lastNonCommentTokenLine,
 				lineno: commentToken.lineno,
 				col_offset: commentToken.col_offset,
+				end_lineno: commentToken.end_lineno,
+				end_col_offset: commentToken.end_col_offset,
 			};
 			this.pendingComments.push(comment);
 			// Advance past this comment token
@@ -4625,6 +5065,106 @@ export class Parser {
 	 */
 	private previous(): Token {
 		return this.tokens[this.current - 1];
+	}
+
+	/**
+	 * Computes a compound statement's end position from its clause bodies,
+	 * mirroring CPython: a block's `end_lineno`/`end_col_offset` is that of
+	 * its own last statement, not of the `DEDENT` token that closes it (the
+	 * last token consumed by {@link parseSuite} is the `DEDENT`, whose own
+	 * position is the following line, not useful here). `groups` should be
+	 * passed in ascending priority order (e.g. `body` before `orelse`) —
+	 * the last non-empty group wins, matching which clause CPython considers
+	 * the statement's true tail (an `else`/`finally` clause overrides the
+	 * primary body).
+	 * @param groups Candidate statement lists, lowest priority first.
+	 * @returns The end position of the last statement in the highest-priority non-empty group, or of the last consumed token if every group is empty.
+	 */
+	private lastStmtEnd(...groups: (StmtNode[] | undefined)[]): {
+		end_lineno: number;
+		end_col_offset: number;
+	} {
+		for (let i = groups.length - 1; i >= 0; i--) {
+			const group = groups[i];
+			if (group && group.length > 0) {
+				const last = group[group.length - 1];
+				// Every statement this parser produces always carries its own
+				// end position (set at construction time), so these are never
+				// actually undefined here.
+				return {
+					end_lineno: last.end_lineno as number,
+					end_col_offset: last.end_col_offset as number,
+				};
+			}
+		}
+		const token = this.previous();
+		return {
+			end_lineno: token.end_lineno,
+			end_col_offset: token.end_col_offset,
+		};
+	}
+
+	/**
+	 * Advances a source position past `text`, accounting for any embedded
+	 * newlines (each resets the column to 0), used to compute real source
+	 * positions for pieces of an f-string/t-string's content without
+	 * re-scanning from the token's start each time.
+	 * @param pos The starting position.
+	 * @param text The text being "consumed" from `pos`.
+	 * @returns The position immediately after `text`.
+	 */
+	private advancePosition(pos: SourcePosition, text: string): SourcePosition {
+		let { lineno, col_offset } = pos;
+		for (let i = 0; i < text.length; i++) {
+			if (text[i] === "\n") {
+				lineno++;
+				col_offset = 0;
+			} else {
+				col_offset++;
+			}
+		}
+		return { lineno, col_offset };
+	}
+
+	/**
+	 * Recursively shifts `node` and every descendant's `lineno`/`col_offset`/
+	 * `end_lineno`/`end_col_offset` from the local `(1, 0)`-relative
+	 * coordinates a nested {@link Parser} instance produces (parsing just an
+	 * f-string/t-string interpolation's expression text in isolation) into
+	 * real source coordinates anchored at `base`. Only positions on the
+	 * subtree's first local line have their column shifted — later lines
+	 * already have source-relative columns, since the interpolation's
+	 * expression text is a verbatim slice of the real source (same line
+	 * breaks), only the first line is missing `base`'s column offset.
+	 * @param node The subtree to shift, mutated in place.
+	 * @param base The real source position of the subtree's local `(1, 0)` origin.
+	 */
+	private shiftToSourcePosition(node: unknown, base: SourcePosition): void {
+		if (!node || typeof node !== "object") return;
+		const rec = node as Record<string, unknown>;
+
+		if (typeof rec.lineno === "number") {
+			if (rec.lineno === 1) {
+				rec.col_offset = (rec.col_offset as number) + base.col_offset;
+			}
+			rec.lineno += base.lineno - 1;
+		}
+		if (typeof rec.end_lineno === "number") {
+			if (rec.end_lineno === 1) {
+				rec.end_col_offset = (rec.end_col_offset as number) + base.col_offset;
+			}
+			rec.end_lineno += base.lineno - 1;
+		}
+
+		for (const key of Object.keys(rec)) {
+			if (key === "nodeType") continue;
+			const value = rec[key];
+			if (Array.isArray(value)) {
+				for (const item of value) this.shiftToSourcePosition(item, base);
+			} else if (value && typeof value === "object") {
+				this.shiftToSourcePosition(value, base);
+			}
+		}
 	}
 
 	/**
@@ -4762,6 +5302,8 @@ export class Parser {
 				ctx: this.createLoad(),
 				lineno: start.lineno,
 				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 		return this.parseTest();
@@ -4799,6 +5341,8 @@ export class Parser {
 				ctx: this.createLoad(),
 				lineno: expr.lineno,
 				col_offset: expr.col_offset || 0,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
 			};
 		}
 
@@ -4842,6 +5386,8 @@ export class Parser {
 					default_value,
 					lineno: start.lineno,
 					col_offset: start.col_offset,
+					end_lineno: this.previous().end_lineno,
+					end_col_offset: this.previous().end_col_offset,
 				});
 			} // Check for TypeVarTuple (*Ts)
 			else if (this.match(TokenType.STAR)) {
@@ -4861,6 +5407,8 @@ export class Parser {
 					default_value,
 					lineno: start.lineno,
 					col_offset: start.col_offset,
+					end_lineno: this.previous().end_lineno,
+					end_col_offset: this.previous().end_col_offset,
 				});
 			} // Regular TypeVar (T, T: bound, T = default)
 			else {
@@ -4888,6 +5436,8 @@ export class Parser {
 					default_value,
 					lineno: start.lineno,
 					col_offset: start.col_offset,
+					end_lineno: this.previous().end_lineno,
+					end_col_offset: this.previous().end_col_offset,
 				});
 			}
 		} while (this.match(TokenType.COMMA));

@@ -12,6 +12,7 @@ import {
 } from "../src/parser.js";
 import type { ASTNode, ExprNode, Module, StmtNode } from "../src/types.js";
 import { PyComplex } from "../src/types.js";
+import { unparse } from "../src/unparser.js";
 import { parseCode, parseExpression, parseStatement } from "./test-helpers.js";
 
 describe("parser edge cases", () => {
@@ -1135,10 +1136,17 @@ describe("parser edge cases", () => {
 		});
 
 		test("triple-quoted t-string", () => {
-			const ast = parseCode('t"""multi\nline {x}"""\n');
+			const src = 't"""multi\nline {x}"""\n';
+			const ast = parseCode(src);
 			const expr = (ast.body[0] as Extract<StmtNode, { nodeType: "Expr" }>)
 				.value as Extract<ExprNode, { nodeType: "TemplateStr" }>;
-			expect(expr.kind).toBe('t"""');
+			// `TemplateStr` has no `kind` field (CPython's `ast` doesn't have
+			// one either); the original triple-quote style is instead recorded
+			// on the py-ast-specific `quote_style` field, which the unparser
+			// uses to round-trip it exactly.
+			expect("kind" in expr).toBe(false);
+			expect(expr.quote_style).toBe('t"""');
+			expect(unparse(ast).trim()).toBe(src.trim());
 			expect(expr.values[0]).toMatchObject({
 				nodeType: "Constant",
 				value: "multi\nline ",

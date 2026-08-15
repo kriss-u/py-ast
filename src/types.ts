@@ -516,8 +516,13 @@ export interface FormattedValue extends Located {
 export interface JoinedStr extends Located {
 	nodeType: "JoinedStr";
 	values: ExprNode[];
-	/** Original quote/prefix style of the string, e.g. `f"`, `f'`. */
-	kind?: string;
+	/**
+	 * Original prefix+quote text of the f-string, e.g. `f"`, `f'''`, `rf"`.
+	 * A py-ast extension (CPython's `ast.JoinedStr` has no such field) kept
+	 * so the unparser can round-trip the exact original quote style; not
+	 * set on nodes that weren't produced by this library's parser.
+	 */
+	quote_style?: string;
 }
 
 /**
@@ -544,8 +549,13 @@ export interface Interpolation extends Located {
 export interface TemplateStr extends Located {
 	nodeType: "TemplateStr";
 	values: ExprNode[];
-	/** Original quote/prefix style of the string, e.g. `t"`, `t'`. */
-	kind?: string;
+	/**
+	 * Original prefix+quote text of the t-string, e.g. `t"`, `t'''`, `rt"`.
+	 * A py-ast extension (CPython's `ast` module has no `TemplateStr` type
+	 * at all) kept so the unparser can round-trip the exact original quote
+	 * style; not set on nodes that weren't produced by this library's parser.
+	 */
+	quote_style?: string;
 }
 
 /**
@@ -586,7 +596,16 @@ export interface Constant extends Located {
 	nodeType: "Constant";
 	// biome-ignore lint/suspicious/noExplicitAny: could be any type
 	value: any;
+	/** `"u"` for a `u"..."`/`U"..."` string literal, matching CPython's `ast.Constant.kind`; absent for every other literal (including plain, raw, byte, and f/t-string constants — CPython's `kind` never holds anything but `"u"` or `None`). */
 	kind?: string;
+	/**
+	 * Original prefix+quote text of a string literal, e.g. `"`, `'''`, `rb"`.
+	 * A py-ast extension (not part of CPython's `ast.Constant`) kept so the
+	 * unparser can round-trip the exact original quote style; not set on
+	 * non-string constants or on nodes that weren't produced by this
+	 * library's parser.
+	 */
+	quote_style?: string;
 }
 
 /** Attribute access, e.g. `obj.attr`. */

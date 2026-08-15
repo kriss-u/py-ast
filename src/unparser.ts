@@ -385,12 +385,12 @@ class Unparser extends NodeVisitor {
 	/**
 	 * Determines the opening/closing quote text for an f-string/t-string,
 	 * preserving the original quote style (including prefix casing and
-	 * triple-quotes) captured in `node.kind` when available, so
+	 * triple-quotes) captured on `node.quote_style` when available, so
 	 * round-tripped literals don't silently change from `f'...'` to `f"..."`
 	 * or vice versa.
 	 *
 	 * @param node - The `JoinedStr` (f-string) or `TemplateStr` (t-string) node.
-	 * @param defaultPrefix - The prefix to fall back to when `node.kind` is absent (`f"` or `t"`).
+	 * @param defaultPrefix - The prefix to fall back to when no quote style was recorded (`f"` or `t"`).
 	 * @returns A tuple of `[openingDelimiter, closingQuote]`, e.g. `['f"', '"']`.
 	 */
 	private chooseInterpolatedStringQuotes(
@@ -398,13 +398,14 @@ class Unparser extends NodeVisitor {
 		defaultPrefix: string,
 	): [string, string] {
 		// If we have the original quote style, use it exactly
-		if (node.kind) {
+		const recordedStyle = node.quote_style;
+		if (recordedStyle !== undefined) {
 			// Both capture groups accept an empty match, so this regex always
 			// matches and `prefixMatch` is never null.
 			// biome-ignore lint/style/noNonNullAssertion: regex is provably total, see comment above
-			const prefixMatch = node.kind.match(/^([fFrRbBuUtT]*)(.*)/)!;
+			const prefixMatch = recordedStyle.match(/^([fFrRbBuUtT]*)(.*)/)!;
 			const quote = prefixMatch[2];
-			return [node.kind, quote];
+			return [recordedStyle, quote];
 		}
 
 		// Default to double quotes if no original style info
@@ -1370,27 +1371,27 @@ class Unparser extends NodeVisitor {
 
 	/** Renders a literal constant (`None`/`True`/`False`/number/string/ellipsis). */
 	visit_Constant(node: Extract<ExprNode, { nodeType: "Constant" }>): void {
-		this.write(this.formatConstant(node.value, node.kind));
+		this.write(this.formatConstant(node));
 	}
 
 	/**
 	 * Formats a `Constant` node's raw JS value as Python source text.
-	 * `value` is typed `any` because a `Constant` may hold any JSON-like
-	 * literal produced by the parser (string, number, boolean, `null`, or the
-	 * sentinel `"..."` for `Ellipsis`).
 	 *
-	 * @param value - The constant's runtime value.
-	 * @param kind - Original string-prefix/quote-style hint (see {@link formatString}).
-	 * @returns The Python source representation of `value`.
+	 * @param node - The `Constant` node. Its `value` is typed `any` because it
+	 * may hold any JSON-like literal produced by the parser (string, number,
+	 * boolean, `null`, or the sentinel `"..."` for `Ellipsis`).
+	 * @returns The Python source representation of `node.value`.
 	 */
-	// biome-ignore lint/suspicious/noExplicitAny: Could be of any type
-	private formatConstant(value: any, kind?: string): string {
+	private formatConstant(
+		node: Extract<ExprNode, { nodeType: "Constant" }>,
+	): string {
+		const value = node.value;
 		if (value === null) return "None";
 		if (value === true) return "True";
 		if (value === false) return "False";
 		if (value === "...") return "..."; // Handle ellipsis
 		if (typeof value === "string") {
-			return this.formatString(value, kind);
+			return this.formatString(value, node);
 		}
 		if (typeof value === "number") {
 			return value.toString();
@@ -1402,55 +1403,50 @@ class Unparser extends NodeVisitor {
 	}
 
 	/**
-	 * Formats a string constant with its original quote style preserved where
-	 * known: triple-quoted strings (`"""`/`'''`) are re-emitted as
-	 * triple-quoted regardless of whether they contain newlines, and
-	 * single/double-quoted strings keep their original quote character
-	 * (escaping only that character in the body). Falls back to double quotes
-	 * when no `kind` hint is available.
+	 * Formats a string constant as a quoted Python literal. When `node` still
+	 * carries its originally-recorded `quote_style` (only set on a node this
+	 * library's own parser produced), that exact style — quote character,
+	 * triple-quoting, and `r`/`b`/`u` prefix — is reused so the literal
+	 * round-trips unchanged. Falls back to double quotes (with no prefix)
+	 * when no quote style was recorded, matching this unparser's
+	 * long-standing default.
 	 *
 	 * @param value - The raw (unescaped) string value.
-	 * @param kind - Original prefix+quote text captured by the parser, e.g.
-	 *   `'"'`, `"'''"`, or `"rb\""`.
+	 * @param node - The `Constant` node `value` came from.
 	 * @returns The quoted, escaped Python string literal.
 	 */
-	private formatString(value: string, kind?: string): string {
-		// If we have quote style information, use it
-		if (kind) {
+	private formatString(
+		value: string,
+		node: Extract<ExprNode, { nodeType: "Constant" }>,
+	): string {
+		const recordedStyle = node.quote_style;
+		if (recordedStyle !== undefined) {
 			// Both capture groups accept an empty match, so this regex always
 			// matches and `prefixMatch` is never null.
 			// biome-ignore lint/style/noNonNullAssertion: regex is provably total, see comment above
-			const prefixMatch = kind.match(/^([fFrRbBuU]*)(.*)/)!;
+			const prefixMatch = recordedStyle.match(/^([fFrRbBuU]*)(.*)/)!;
 			const prefix = prefixMatch[1];
 			const quoteStyle = prefixMatch[2];
 			const isRaw = /[rR]/.test(prefix);
 
-			// For multiline strings, preserve triple quotes
-			if (quoteStyle === '"""' || quoteStyle === "'''") {
-				// Check if the string contains newlines
-				if (value.includes("\n")) {
-					return `${prefix}${quoteStyle}${value}${quoteStyle}`;
-				}
-				// If it doesn't have newlines but was originally triple-quoted, preserve that
+			// Triple-quoted and raw strings round-trip verbatim: their body
+			// text is already exactly the original source text (raw strings
+			// never had escape sequences resolved; triple-quoted strings are
+			// re-wrapped in the same triple-quote regardless of newlines).
+			if (quoteStyle === '"""' || quoteStyle === "'''" || isRaw) {
 				return `${prefix}${quoteStyle}${value}${quoteStyle}`;
 			}
 
-			// Raw strings don't process escape sequences, so backslashes in
-			// `value` are already the literal source text - re-escaping them
-			// would double them up and change the string's actual content.
-			if (isRaw) {
-				return `${prefix}${quoteStyle}${value}${quoteStyle}`;
-			}
-
-			// For regular strings, use the original quote style
 			if (quoteStyle === '"') {
 				return `${prefix}"${this.escapeString(value, '"')}"`;
-			} else if (quoteStyle === "'") {
-				return `${prefix}'${this.escapeString(value, "'")}'`;
 			}
+			// A recorded style's quote part is always one of `"""`, `'''`,
+			// `"`, or `'` (see getStringQuoteStyle) — having excluded the
+			// first three above, this is always `'`.
+			return `${prefix}'${this.escapeString(value, "'")}'`;
 		}
 
-		// Default to double quotes if no kind information
+		// Default to double quotes if no quote-style information is available
 		return `"${this.escapeString(value, '"')}"`;
 	}
 
