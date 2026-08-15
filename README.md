@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.svg" alt="py-ast logo" width="120" height="120">
+</p>
+
 # Python AST Parser for TypeScript
 
 [![npm version](https://img.shields.io/npm/v/py-ast.svg)](https://www.npmjs.com/package/py-ast)
@@ -15,7 +19,8 @@ as defined by the Python ASDL grammar specification. This library provides
 complete parsing, unparsing, and AST traversal infrastructure, with
 bidirectional Python code ↔ AST conversion.
 
-📖 **[API documentation](https://kriss-u.github.io/py-ast/)**
+📖 **[API documentation](https://kriss-u.github.io/py-ast/)** ·
+🛝 **[Playground](https://pyast.nepcodex.com)**
 
 ## Features
 

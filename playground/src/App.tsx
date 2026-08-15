@@ -8,6 +8,7 @@ import { TreeView } from "./components/TreeView";
 import { findNodePath, nodeRange } from "./lib/astRange";
 import { collectContainers, collectTopLevelContainers } from "./lib/collectContainers";
 import { useHoverStack } from "./lib/useHoverStack";
+import { useMediaQuery } from "./lib/useMediaQuery";
 import { useTreeState } from "./lib/useTreeState";
 import { tryParse } from "./lib/parsePy";
 import type { SourcePosition } from "./lib/types";
@@ -27,6 +28,14 @@ const COPY_FEEDBACK_MS = 1500;
 const DEFAULT_EDITOR_WIDTH_PERCENT = 50;
 const MIN_EDITOR_WIDTH_PERCENT = 20;
 const MAX_EDITOR_WIDTH_PERCENT = 80;
+
+/**
+ * Below this width the editor/output panes stack vertically instead of
+ * splitting horizontally — dragging a horizontal-width resizer doesn't
+ * translate to a stacked layout, so the resizer is dropped entirely there
+ * and each pane just takes an even flex share of the vertical space.
+ */
+const STACKED_LAYOUT_QUERY = "(max-width: 768px)";
 
 /** Reads the persisted editor/output split, falling back to an even split. */
 function initialEditorWidthPercent(): number {
@@ -65,6 +74,7 @@ export function App() {
 	const [editorWidthPercent, setEditorWidthPercent] = useState<number>(initialEditorWidthPercent);
 	const panesRef = useRef<HTMLDivElement>(null);
 	const [isResizing, setIsResizing] = useState(false);
+	const isStackedLayout = useMediaQuery(STACKED_LAYOUT_QUERY);
 
 	const handleThemeChange = (next: Theme) => {
 		setTheme(next);
@@ -171,8 +181,14 @@ export function App() {
 					</a>
 				</div>
 			</header>
-			<div className={`panes${isResizing ? " panes-resizing" : ""}`} ref={panesRef}>
-				<div className="pane pane-editor" style={{ width: `${editorWidthPercent}%`, flex: "0 0 auto" }}>
+			<div
+				className={`panes${isStackedLayout ? " panes-stacked" : ""}${isResizing ? " panes-resizing" : ""}`}
+				ref={panesRef}
+			>
+				<div
+					className="pane pane-editor"
+					style={isStackedLayout ? undefined : { width: `${editorWidthPercent}%`, flex: "0 0 auto" }}
+				>
 					<Editor
 						source={source}
 						theme={theme}
@@ -181,14 +197,16 @@ export function App() {
 						highlightRange={highlightRange}
 					/>
 				</div>
-				{/* biome-ignore lint/a11y/noStaticElementInteractions: pointer-drag resizer, not a semantic control */}
-				<div
-					className="pane-resizer"
-					onMouseDown={handleResizerMouseDown}
-					role="separator"
-					aria-orientation="vertical"
-					aria-label="Resize editor and output panes"
-				/>
+				{!isStackedLayout && (
+					// biome-ignore lint/a11y/noStaticElementInteractions: pointer-drag resizer, not a semantic control
+					<div
+						className="pane-resizer"
+						onMouseDown={handleResizerMouseDown}
+						role="separator"
+						aria-orientation="vertical"
+						aria-label="Resize editor and output panes"
+					/>
+				)}
 				<div className="pane pane-output">
 					<Tabs
 						activeTab={activeTab}
