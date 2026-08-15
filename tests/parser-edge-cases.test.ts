@@ -1027,6 +1027,39 @@ describe("parser edge cases", () => {
 			expect(ast.body[0].nodeType).toBe("Expr");
 		});
 
+		test("escape sequences in literal text are decoded", () => {
+			// Verified against CPython 3.13: the literal portions of an
+			// f-string go through the same escape decoding as a plain string.
+			const expr = parseExpression('f"\\nvalue={x}"') as {
+				values: { nodeType: string; value?: string }[];
+			};
+			expect(expr.values[0].value).toBe("\nvalue=");
+		});
+
+		test("raw f-string literal text is not escape-decoded", () => {
+			const expr = parseExpression('rf"\\nvalue={x}"') as {
+				values: { nodeType: string; value?: string }[];
+			};
+			expect(expr.values[0].value).toBe("\\nvalue=");
+		});
+
+		test("escape sequences in a format spec are decoded", () => {
+			const expr = parseExpression('f"{x:\\n<5}"') as {
+				values: { format_spec?: { values: { value?: string }[] } }[];
+			};
+			expect(expr.values[0].format_spec?.values[0].value).toBe("\n<5");
+		});
+
+		test("escape sequences in a nested f-string's literal text are decoded", () => {
+			const expr = parseExpression("f\"outer {f'\\ninner {y}'}\"") as {
+				values: {
+					value?: { values: { value?: string }[] };
+				}[];
+			};
+			const inner = expr.values[1].value;
+			expect(inner?.values[0].value).toBe("\ninner ");
+		});
+
 		test("conversion specifier with format spec", () => {
 			const ast = parseCode('f"{x!r:>10}"\n');
 			expect(ast.body[0].nodeType).toBe("Expr");

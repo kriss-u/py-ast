@@ -4471,7 +4471,8 @@ export class Parser {
 			lineno: token.lineno,
 			col_offset: token.col_offset + quoteStyle.length,
 		};
-		const values = this.scanFStringSegments(content, token, startPos);
+		const isRaw = /r/i.test(quoteStyle);
+		const values = this.scanFStringSegments(content, token, startPos, isRaw);
 		const end = this.advancePosition(startPos, content);
 
 		const joinedStr: JoinedStr = {
@@ -4502,7 +4503,13 @@ export class Parser {
 			lineno: token.lineno,
 			col_offset: token.col_offset + quoteStyle.length,
 		};
-		const values = this.scanTemplateStrSegments(content, token, startPos);
+		const isRaw = /r/i.test(quoteStyle);
+		const values = this.scanTemplateStrSegments(
+			content,
+			token,
+			startPos,
+			isRaw,
+		);
 		const end = this.advancePosition(startPos, content);
 
 		const templateStr: TemplateStr = {
@@ -4540,6 +4547,7 @@ export class Parser {
 		content: string,
 		token: Token,
 		startPos: SourcePosition,
+		isRaw: boolean,
 		buildField: (
 			exprText: string,
 			token: Token,
@@ -4558,10 +4566,13 @@ export class Parser {
 				if (i > literalStart) {
 					const literalText = content.slice(literalStart, i);
 					const segStart = pos;
+					// Position tracking must advance by the raw source text
+					// (escape sequences occupy their original character
+					// count); only the stored `value` is decoded.
 					pos = this.advancePosition(pos, literalText);
 					values.push({
 						nodeType: "Constant",
-						value: literalText,
+						value: isRaw ? literalText : this.decodeEscapes(literalText, false),
 						lineno: segStart.lineno,
 						col_offset: segStart.col_offset,
 						end_lineno: pos.lineno,
@@ -4593,7 +4604,7 @@ export class Parser {
 			pos = this.advancePosition(pos, literalText);
 			values.push({
 				nodeType: "Constant",
-				value: literalText,
+				value: isRaw ? literalText : this.decodeEscapes(literalText, false),
 				lineno: segStart.lineno,
 				col_offset: segStart.col_offset,
 				end_lineno: pos.lineno,
@@ -4612,13 +4623,15 @@ export class Parser {
 		content: string,
 		token: Token,
 		startPos: SourcePosition,
+		isRaw: boolean,
 	): ExprNode[] {
 		return this.scanInterleavedSegments(
 			content,
 			token,
 			startPos,
+			isRaw,
 			(exprText, tok, segStart, segEnd) =>
-				this.buildFormattedValueNodes(exprText, tok, segStart, segEnd),
+				this.buildFormattedValueNodes(exprText, tok, segStart, segEnd, isRaw),
 		);
 	}
 
@@ -4630,13 +4643,15 @@ export class Parser {
 		content: string,
 		token: Token,
 		startPos: SourcePosition,
+		isRaw: boolean,
 	): ExprNode[] {
 		return this.scanInterleavedSegments(
 			content,
 			token,
 			startPos,
+			isRaw,
 			(exprText, tok, segStart, segEnd) =>
-				this.buildInterpolationNodes(exprText, tok, segStart, segEnd),
+				this.buildInterpolationNodes(exprText, tok, segStart, segEnd, isRaw),
 		);
 	}
 
@@ -5001,6 +5016,7 @@ export class Parser {
 		token: Token,
 		segStart: SourcePosition,
 		segEnd: SourcePosition,
+		isRaw: boolean,
 	): ExprNode[] {
 		const {
 			expression,
@@ -5027,6 +5043,7 @@ export class Parser {
 					formatSpecText,
 					token,
 					specContentStart,
+					isRaw,
 				),
 				lineno: colonPos.lineno,
 				col_offset: colonPos.col_offset,
@@ -5084,6 +5101,7 @@ export class Parser {
 		token: Token,
 		segStart: SourcePosition,
 		segEnd: SourcePosition,
+		isRaw: boolean,
 	): ExprNode[] {
 		const {
 			expression,
@@ -5110,6 +5128,7 @@ export class Parser {
 					formatSpecText,
 					token,
 					specContentStart,
+					isRaw,
 				),
 				lineno: colonPos.lineno,
 				col_offset: colonPos.col_offset,
