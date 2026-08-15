@@ -63,7 +63,7 @@ export function Editor({ source, theme, onSourceChange, onCursorMove, highlightR
 		view.dispatch({ effects: setHighlight.of(highlightRange) });
 		if (highlightRange) {
 			const from = positionToOffset(view.state.doc, highlightRange.startLine, highlightRange.startColumn);
-			view.dispatch({ effects: EditorView.scrollIntoView(from, { y: "nearest" }) });
+			view.dispatch({ effects: EditorView.scrollIntoView(from, { y: "center" }) });
 		}
 	}, [highlightRange]);
 

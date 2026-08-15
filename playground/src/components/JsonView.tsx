@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { BaseNodeViewProps } from "./TreeView";
 import { JsonCodeView } from "./JsonCodeView";
 
@@ -7,15 +8,26 @@ import { JsonCodeView } from "./JsonCodeView";
  * highlight the editor on hover/click — only the tree view drives code
  * highlighting.
  */
-export function JsonView({ tree, activePath, activeNode, expanded, toggle, registerRef }: BaseNodeViewProps) {
+function JsonViewImpl({
+	tree,
+	activeNode,
+	activeContainerPath,
+	expanded,
+	expandedChangePath,
+	toggle,
+	registerRef,
+}: BaseNodeViewProps) {
 	return (
 		<JsonCodeView
 			tree={tree}
-			activePath={activePath}
 			activeNode={activeNode}
+			activeContainerPath={activeContainerPath}
 			expanded={expanded}
+			expandedChangePath={expandedChangePath}
 			toggle={toggle}
 			registerRef={registerRef}
 		/>
 	);
 }
+
+export const JsonView = memo(JsonViewImpl);

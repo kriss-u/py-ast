@@ -1,5 +1,6 @@
 import type { ASTNodeUnion } from "py-ast";
 import { isASTNode } from "py-ast";
+import { memo } from "react";
 
 /** A single labeled child of a container, ready to render recursively. */
 interface Entry {
@@ -13,8 +14,12 @@ export interface NodeRendererProps {
 	value: unknown;
 	depth: number;
 	expanded: Set<unknown>;
+	/** See {@link BaseNodeViewProps.expandedChangePath} in TreeView.tsx. */
+	expandedChangePath: readonly unknown[] | null;
 	onToggle: (key: unknown) => void;
 	activeNode: ASTNodeUnion | null;
+	/** See {@link BaseNodeViewProps.activeContainerPath} in TreeView.tsx. */
+	activeContainerPath: readonly unknown[];
 	onHoverEnter?: (node: ASTNodeUnion) => void;
 	onHoverLeave?: (node: ASTNodeUnion) => void;
 	registerRef: (key: unknown, el: HTMLDivElement | null) => void;
@@ -22,6 +27,57 @@ export interface NodeRendererProps {
 
 /** No-op ref registration, used to keep record-keeping-only subtrees out of the scroll-target map. */
 function noopRegisterRef() {}
+
+/** Stable shared reference so record-keeping-only subtrees (never active) short-circuit the memo comparator below. */
+const EMPTY_PATH: readonly unknown[] = [];
+
+/**
+ * True if `path` (an old-or-new snapshot of an active/change path) proves
+ * `value`'s row can't be affected — i.e. `value` isn't on it. `null` means
+ * "can't narrow" (a bulk change with no single path), which never proves
+ * anything.
+ */
+function pathClearsValue(path: readonly unknown[] | null, value: unknown): boolean {
+	return path !== null && !path.includes(value);
+}
+
+/**
+ * Custom equality for {@link NodeRenderer}'s `memo` wrapper. The naive shallow
+ * comparison would treat every row as changed whenever `activeNode`/
+ * `activeContainerPath` (cursor moves) or `expanded`/`expandedChangePath`
+ * (folding) changes reference — which happens on every cursor move *and*
+ * every single fold toggle — forcing the *entire* expanded tree to
+ * re-render just to update the handful of rows actually affected. Instead,
+ * a row only needs to re-render for one of those changes if it was on the
+ * old path, is on the new path, or the change couldn't be narrowed to a
+ * path at all (a bulk expand-all/collapse-all/reparse) — anything else's
+ * `node === activeNode` or `expanded.has(value)` result is unchanged
+ * (`false`/`true` before and after, respectively), so its render output
+ * can't have changed.
+ */
+function nodeRendererPropsEqual(prev: NodeRendererProps, next: NodeRendererProps): boolean {
+	if (
+		prev.value !== next.value ||
+		prev.label !== next.label ||
+		prev.depth !== next.depth ||
+		prev.onToggle !== next.onToggle ||
+		prev.onHoverEnter !== next.onHoverEnter ||
+		prev.onHoverLeave !== next.onHoverLeave ||
+		prev.registerRef !== next.registerRef
+	) {
+		return false;
+	}
+	if (
+		prev.expanded !== next.expanded &&
+		!(pathClearsValue(prev.expandedChangePath, prev.value) && pathClearsValue(next.expandedChangePath, next.value))
+	) {
+		return false;
+	}
+	if (prev.activeContainerPath === next.activeContainerPath) {
+		return true;
+	}
+	return !prev.activeContainerPath.includes(prev.value) && !next.activeContainerPath.includes(next.value);
+}
 
 /**
  * `Module.comments` duplicates the same `Comment` node objects that already
@@ -62,9 +118,12 @@ function DisclosureSpacer() {
 }
 
 /**
- * `ast.dump`-style collapsible tree renderer.
+ * `ast.dump`-style collapsible tree renderer. Memoized with a custom
+ * comparator (see {@link nodeRendererPropsEqual}) since this recurses across
+ * the whole tree — a large expanded tree must not fully re-render on every
+ * cursor move or hover.
  */
-export function NodeRenderer(props: NodeRendererProps) {
+function NodeRendererImpl(props: NodeRendererProps) {
 	const { label, value, depth } = props;
 
 	if (Array.isArray(value)) {
@@ -128,6 +187,8 @@ export function NodeRenderer(props: NodeRendererProps) {
 	);
 }
 
+export const NodeRenderer = memo(NodeRendererImpl, nodeRendererPropsEqual);
+
 interface ContainerProps extends NodeRendererProps {
 	headerText: string | null;
 	typeName?: string;
@@ -150,8 +211,10 @@ function Container(props: ContainerProps) {
 		node,
 		depth,
 		expanded,
+		expandedChangePath,
 		onToggle,
 		activeNode,
+		activeContainerPath,
 		onHoverEnter,
 		onHoverLeave,
 		registerRef,
@@ -201,8 +264,10 @@ function Container(props: ContainerProps) {
 								value={entry.value}
 								depth={depth + 1}
 								expanded={expanded}
+								expandedChangePath={expandedChangePath}
 								onToggle={onToggle}
 								activeNode={isRecordKeepingOnly ? null : activeNode}
+								activeContainerPath={isRecordKeepingOnly ? EMPTY_PATH : activeContainerPath}
 								onHoverEnter={isRecordKeepingOnly ? undefined : onHoverEnter}
 								onHoverLeave={isRecordKeepingOnly ? undefined : onHoverLeave}
 								registerRef={isRecordKeepingOnly ? noopRegisterRef : registerRef}
