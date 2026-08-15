@@ -1,3 +1,21 @@
+# [1.15.0](https://github.com/kriss-u/py-ast/compare/v1.14.0...v1.15.0) (2026-08-15)
+
+
+### Bug Fixes
+
+* add more roundtrip fixes ([b5e7204](https://github.com/kriss-u/py-ast/commit/b5e7204979247a3b03edb78b858c797a20c1be7d))
+* fix escaping on strings ([ef6109d](https://github.com/kriss-u/py-ast/commit/ef6109df5f8345ef069700e140be4c82b41a9194))
+* fix few value mismatch issue ([a56866e](https://github.com/kriss-u/py-ast/commit/a56866e7be213a8d0027b26a311ee41b83d4bf53))
+* fix unicode length issue ([467b4e7](https://github.com/kriss-u/py-ast/commit/467b4e7cdd632d82628cf0c79af7de01f1d87f31))
+* remove lib from gitignore [skip ci] ([e78a24a](https://github.com/kriss-u/py-ast/commit/e78a24a4ede02843d54475b9c23143ea03050c05))
+* support more edge cases expressions ([072c3b3](https://github.com/kriss-u/py-ast/commit/072c3b3b8a9c79c2302c7ee2bd3b46cffd3b4f0c))
+
+
+### Features
+
+* add corpus test against stdlib ([a3c257f](https://github.com/kriss-u/py-ast/commit/a3c257f4027d076625d05f17584521e0aa38e929))
+* add support for bare generator expression ([18aff47](https://github.com/kriss-u/py-ast/commit/18aff4741a1a45e4e9138e7cf108a6d88e5b9b3b))
+
 # [1.14.0](https://github.com/kriss-u/py-ast/compare/v1.13.0...v1.14.0) (2026-08-15)
 
 
