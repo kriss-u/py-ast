@@ -653,11 +653,22 @@ export class Lexer {
 		while (this.position.index < this.source.length) {
 			const c = this.peek();
 
-			// Handle escape sequences
+			// Handle escape sequences. `\{`/`\}` are not a recognized Python
+			// escape (CPython leaves the backslash literal, with just a
+			// deprecation warning) and, critically, does NOT stop the brace
+			// from opening/closing a field — e.g. `f'\{x}'` still
+			// interpolates `x`. So a backslash must not swallow a following
+			// brace; only consume the pair for any other character, where
+			// pairing prevents that character (e.g. the closing quote) from
+			// being separately recognized.
 			if (c === "\\") {
 				value += c;
 				this.advance();
-				if (this.position.index < this.source.length) {
+				if (
+					this.position.index < this.source.length &&
+					this.peek() !== "{" &&
+					this.peek() !== "}"
+				) {
 					value += this.peek();
 					this.advance();
 				}
@@ -975,7 +986,13 @@ export class Lexer {
 			if (c === "\\") {
 				value += c;
 				this.advance();
-				if (this.position.index < this.source.length) {
+				// See scanInterpolatedStringLiteral's comment: `\{`/`\}`
+				// isn't a recognized escape, so the brace must still be
+				// free to open/close a field when tracksBraces is set.
+				if (
+					this.position.index < this.source.length &&
+					(!tracksBraces || (this.peek() !== "{" && this.peek() !== "}"))
+				) {
 					value += this.peek();
 					this.advance();
 				}
@@ -983,13 +1000,32 @@ export class Lexer {
 			}
 
 			if (tracksBraces) {
+				// Mirrors scanInterpolatedStringLiteral's `{{`/`}}` escape
+				// handling: outside a field, a doubled brace is a literal
+				// brace and must not affect nesting, or a literal brace pair
+				// before the closing quote misreads as unbalanced nesting
+				// and the string is never seen as closed (see
+				// scanInterpolatedStringLiteral's comment for the failure
+				// mode this avoids).
 				if (c === "{") {
+					if (braceLevel === 0 && this.peekNext() === "{") {
+						value += c + this.peekNext();
+						this.advance();
+						this.advance();
+						continue;
+					}
 					braceLevel++;
 					value += c;
 					this.advance();
 					continue;
 				}
 				if (c === "}") {
+					if (braceLevel === 0 && this.peekNext() === "}") {
+						value += c + this.peekNext();
+						this.advance();
+						this.advance();
+						continue;
+					}
 					if (braceLevel > 0) {
 						braceLevel--;
 					}
@@ -1382,17 +1418,24 @@ export class Lexer {
 
 	/**
 	 * Returns `true` if `c` is a letter usable as the start of a Python
-	 * identifier. Uses the Unicode `\p{L}` property class (rather than an
-	 * ASCII-only check) because Python identifiers may contain Unicode
-	 * letters (PEP 3131).
+	 * identifier. Uses the Unicode `\p{ID_Start}` property class (rather
+	 * than an ASCII-only or plain-letter check) because Python identifiers
+	 * may start with any `XID_Start` character (PEP 3131), which
+	 * `ID_Start` closely approximates.
 	 */
 	private isAlpha(c: string): boolean {
-		// Support Unicode letters using regex
-		return /^[\p{L}]$/u.test(c);
+		return /^\p{ID_Start}$/u.test(c);
 	}
 
-	/** Returns `true` if `c` is a letter or digit valid inside a Python identifier. */
+	/**
+	 * Returns `true` if `c` is valid inside (not necessarily starting) a
+	 * Python identifier. Uses `\p{ID_Continue}` rather than
+	 * letter-or-digit, since Python's `XID_Continue` (PEP 3131) also
+	 * admits combining marks (e.g. Hebrew niqqud) and connector
+	 * punctuation — `ID_Continue` closely approximates it and already
+	 * includes decimal digits.
+	 */
 	private isAlphaNumeric(c: string): boolean {
-		return this.isAlpha(c) || this.isDigit(c);
+		return /^\p{ID_Continue}$/u.test(c);
 	}
 }

@@ -168,9 +168,11 @@ export function getSourceSegment(
 type ContextType = "Load" | "Store" | "Del";
 
 /**
- * The set of literal value types a `Constant` node may hold.
+ * The set of literal value types a `Constant` node may hold. `bigint` covers
+ * integer literals too large for a safe `number` (see {@link
+ * Parser.parseNumber} in `parser.ts`).
  */
-type ConstantValue = string | number | boolean | null;
+type ConstantValue = string | number | bigint | boolean | null;
 
 /**
  * Shape of the {@link ast} factory object, exposing one builder method per

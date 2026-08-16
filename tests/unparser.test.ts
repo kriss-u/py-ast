@@ -733,6 +733,15 @@ describe("Unparser", () => {
 			testRoundtrip('(3571).to_bytes(2, "little")');
 		});
 
+		test("a bare bigint literal base (too large for a safe number) also gets a space before the dot", () => {
+			const bigLiteral = `1${"0".repeat(50)}`;
+			testUnparse(
+				`(${bigLiteral}).bit_length()`,
+				`${bigLiteral} .bit_length()`,
+			);
+			testRoundtrip(`(${bigLiteral}).bit_length()`);
+		});
+
 		test("a hex literal base is rendered in decimal, so it still needs the space", () => {
 			// The unparser always renders integers in decimal (numeric base
 			// isn't preserved), so a hex literal base is just as ambiguous
@@ -1253,6 +1262,25 @@ describe("Unparser", () => {
 		test("a negative-infinity UnaryOp round-trips through -1e309", () => {
 			testUnparse("x = -1e1000", "x = -1e309");
 			testRoundtrip("x = -1e1000");
+		});
+
+		test("a whole-number float beyond the safe-integer range gets a trailing .0, not bare digits", () => {
+			// A prior bug (surfaced once integer literals beyond the safe
+			// range started parsing as bigint): JS's `Number.prototype
+			// .toString` renders a value like `1e20` as the bare digit
+			// string "100000000000000000000" (unlike CPython's `repr`,
+			// which switches to `1e+20` scientific notation much earlier).
+			// Left bare, that text reparses as an *integer* literal
+			// (bigint), silently turning the float into an int.
+			testUnparse("x = 1e20", "x = 100000000000000000000.0");
+			testRoundtrip("x = 1e20");
+
+			// A safe-range whole-number float (e.g. `5.0`) is unaffected —
+			// it already can't be distinguished from the int `5` once
+			// parsed (a separate, accepted gap; see corpus/README.md), so
+			// it's left as bare digits rather than gaining a `.0` this
+			// fix didn't previously add.
+			testUnparse("x = 5.0", "x = 5");
 		});
 
 		describe("triple-quoted string content", () => {
