@@ -165,22 +165,25 @@ export function App() {
 		return containerPathTo(parseResult.tree, activeNode) ?? [];
 	}, [parseResult, activeNode]);
 
-	// Fold state is independent per view, but both now start collapsed to
-	// just their top-level outline — each instance persists its own toggles
-	// across tab switches (switching tabs never resets what's expanded in
-	// either one). A global expand-all/collapse-all action drives whichever
-	// view is currently visible.
+	// Fold state is independent per view — each instance persists its own
+	// toggles across tab switches (switching tabs never resets what's
+	// expanded in either one) — but the two default differently: the tree
+	// view starts collapsed to just its top-level outline, while the JSON
+	// view starts fully expanded. A global expand-all/collapse-all action
+	// drives whichever view is currently visible.
 	//
-	// The JSON view used to default to fully expanded, which meant every
-	// tree change (a fresh parse on every keystroke, or the first mount)
-	// synchronously built JSX/DOM for every row in the file at once — on a
-	// large file, that's the actual source of the "slow"/"frozen" JSON view,
-	// not the (cheap, DOM-free) line-number bookkeeping in
-	// `computeLineNumbers`. Matching TreeView's collapsed-by-default start
-	// (which was never a problem) fixes it at the source instead of trying
-	// to schedule around it.
+	// Fully expanding the JSON view by default used to mean every tree
+	// change (a fresh parse on every keystroke, or the first mount)
+	// synchronously rebuilt JSX/DOM for every row in the file at once — on a
+	// large file, that was the actual source of the "slow"/"frozen" JSON
+	// view. That's no longer the failure mode it once was: `useTreeState` now
+	// migrates fold state across a reparse (by structural route) instead of
+	// resetting it, so a keystroke only touches however many rows are
+	// currently open, not the whole tree — the original cost only recurs
+	// once, at first mount or a `root` swap so drastic that nothing survives
+	// migration (essentially: a different tree from scratch).
 	const treeState = useTreeState(parseResult.ok ? parseResult.tree : null, expandPath, "top-level");
-	const jsonState = useTreeState(parseResult.ok ? parseResult.tree : null, expandPath, "top-level");
+	const jsonState = useTreeState(parseResult.ok ? parseResult.tree : null, expandPath, "all");
 	const activeState = activeTab === "tree" ? treeState : jsonState;
 
 	// Expand-all/collapse-all is a deliberate, manual override of fold state —

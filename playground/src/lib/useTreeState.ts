@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { containerPathTo } from "./astRange";
+import { buildContainerRouteMap, containerPathTo, resolveContainerRoute } from "./astRange";
 import { collectContainers, collectTopLevelContainers } from "./collectContainers";
 
 /** Initial/reset fold state for a view: every container open, or just the root's top-level outline. */
@@ -27,12 +27,14 @@ const BULK_FOLD_CHANGE = Symbol("bulk-fold-change");
  * across tab switches). Resets to `defaultMode`'s fold state whenever `root`
  * changes identity (i.e. on every successful parse).
  *
- * `activePath` (the currently code-cursor-highlighted node's ancestor chain)
- * is never written into the persisted `expanded` state — it's overlaid onto
- * it purely for rendering (see `effectiveExpanded` below), so moving the
- * cursor to a different node reverts whatever was on the *previous*
- * `activePath` back to its own last manually-toggled state, rather than
- * leaving every node the cursor ever visited stuck open.
+ * `activePath` (the currently code-cursor-highlighted node's ancestor chain,
+ * active node included) auto-opens in the persisted `expanded` state the
+ * moment the active node changes — see the effect below — but is otherwise
+ * left alone: once open, any node on it (the active node included) can be
+ * manually collapsed again (via `toggle`) and it stays collapsed, even while
+ * the cursor remains on that node. Moving the cursor away and back (or any
+ * change that produces a new active node) reruns the auto-expand, so
+ * returning to that line in the editor reopens it.
  */
 export function useTreeState(root: unknown, activePath: unknown[], defaultMode: DefaultFoldMode) {
 	const [expanded, setExpandedRaw] = useState<Set<unknown>>(() => defaultExpandedFor(root, defaultMode));
@@ -80,13 +82,49 @@ export function useTreeState(root: unknown, activePath: unknown[], defaultMode: 
 		}
 	}, []);
 
+	// Re-parsing produces an entirely new object graph — none of `root`'s
+	// nodes are `===` to the previous parse's, even for a single-character
+	// edit — so fold state can't just carry over as-is. Instead of resetting
+	// to `defaultMode` on every keystroke (which used to collapse the whole
+	// tree back down every time the user typed), this migrates each
+	// currently-open container to its counterpart in the new tree by
+	// structural route (which field/index path reaches it — see
+	// `buildContainerRouteMap`/`resolveContainerRoute`), so open/closed state
+	// survives edits that don't restructure the parts the user had folded.
+	// `prevRootRef` holds the last *valid* tree to migrate from — a
+	// transient syntax error mid-edit (`root === null`) is skipped entirely
+	// rather than treated as "reset the reference tree", so fold state
+	// doesn't get lost to a momentarily-unparseable in-between keystroke.
+	const prevRootRef = useRef<unknown>(undefined);
+
 	// `defaultMode` never changes for a given view instance, so it's read
-	// fresh each run without needing to be a dependency here — re-running
-	// this on `root` alone (a fresh parse) is exactly the desired reset
-	// trigger.
+	// fresh each run without needing to be a dependency here.
 	useEffect(() => {
+		if (root === null) {
+			return;
+		}
+		const prevRoot = prevRootRef.current;
+		if (prevRoot === undefined) {
+			setExpandedRaw(defaultExpandedFor(root, defaultMode));
+		} else {
+			setExpandedRaw((prevExpanded) => {
+				const routes = buildContainerRouteMap(prevRoot);
+				const migrated = new Set<unknown>();
+				for (const node of prevExpanded) {
+					const route = routes.get(node);
+					if (route === undefined) {
+						continue;
+					}
+					const resolved = resolveContainerRoute(root, route);
+					if (resolved !== null && typeof resolved === "object") {
+						migrated.add(resolved);
+					}
+				}
+				return migrated;
+			});
+		}
+		prevRootRef.current = root;
 		setToggledKey(BULK_FOLD_CHANGE);
-		setExpandedRaw(defaultExpandedFor(root, defaultMode));
 	}, [root]);
 
 	// The container path (root..toggled key, inclusive) that the most recent
@@ -100,63 +138,74 @@ export function useTreeState(root: unknown, activePath: unknown[], defaultMode: 
 		return containerPathTo(root, toggledKey);
 	}, [root, toggledKey]);
 
-	// The rendered fold state always shows every *ancestor* of `activePath`'s
-	// last node as open, even if the user had manually folded one of them
-	// earlier — otherwise the active node wouldn't be rendered at all (a
-	// collapsed container never renders its children), and its block
-	// highlight would have nothing to show. This is a view-only overlay: it
-	// doesn't touch `expanded` itself, so a fold the user applied to an
-	// ancestor while a node was active reasserts itself the moment that node
-	// leaves `activePath`, and an ancestor that was never manually folded
-	// simply reverts to whatever `defaultMode` says once it's no longer
-	// active.
-	//
-	// The active node *itself* (the last entry) is deliberately excluded —
-	// unlike its ancestors, folding it doesn't hide it (its header row still
-	// renders, and still gets the active highlight, even collapsed — see
-	// NodeRenderer's `Container`), so there's no reason to fight the user's
-	// own toggle on it. Forcing it open too used to mean clicking to fold the
-	// currently-active node was a no-op: `toggle` would remove it from
-	// `expanded`, but this overlay just added it straight back on the next
-	// render.
-	const ancestorPath = activePath.length > 1 ? activePath.slice(0, -1) : [];
+	// Set whenever `activePath` changes to a non-empty path, and cleared once
+	// the scroll effect below has actually performed the scroll — since
+	// opening an ancestor here only takes effect on the *next* render (a
+	// state update, not a render-time overlay), the leaf's row may not exist
+	// in `refs` yet on this same commit. The flag lets the scroll effect
+	// retry once `expanded` picks up that update, without re-scrolling (and
+	// jarringly re-centering) on every unrelated fold change afterwards.
+	const pendingScrollRef = useRef(false);
 
-	const effectiveExpanded = useMemo(() => {
-		if (ancestorPath.length === 0) {
-			return expanded;
-		}
-		let missing = false;
-		for (const node of ancestorPath) {
-			if (!expanded.has(node)) {
-				missing = true;
-				break;
-			}
-		}
-		if (!missing) {
-			return expanded;
-		}
-		const next = new Set(expanded);
-		for (const node of ancestorPath) {
-			next.add(node);
-		}
-		return next;
-		// biome-ignore lint/correctness/useExhaustiveDependencies: `ancestorPath` is a fresh array derived from `activePath` every render; its own identity is never stable, so it's intentionally omitted and `activePath` (the actual reactive input) is depended on instead.
-	}, [expanded, activePath]);
-
-	// `effectiveExpanded` already opens the active path's rows synchronously
-	// within the same render as `activePath` changing, so by the time this
-	// effect runs after commit, their refs are already registered — no need
-	// to wait on a separate `expanded`-keyed effect.
+	// Every node on `activePath` — the active node itself as well as its
+	// ancestors — is opened in the real `expanded` state the moment the
+	// active node changes. Ancestors need this or the active node wouldn't be
+	// rendered at all (a collapsed container never renders its children); the
+	// active node itself needs it so landing the cursor on it actually shows
+	// its fields, not just a highlighted `{…}` row. Unlike a per-render
+	// overlay, this only fires on an actual `activePath` identity change
+	// (App.tsx memoizes that on the active AST node, so it's stable while the
+	// cursor stays within the same node), so a manual `toggle` on any of
+	// these — including collapsing the active node back down — afterwards
+	// sticks instead of being reasserted on the next unrelated render. Moving
+	// the cursor to a different node and back (or any edit that changes the
+	// active node) produces a new `activePath`, which reruns this and
+	// reopens it.
 	useEffect(() => {
 		if (activePath.length === 0) {
+			return;
+		}
+		pendingScrollRef.current = true;
+		// Whether the functional update below actually opened anything —
+		// read synchronously right after `setExpandedRaw`, since its updater
+		// runs inline during the call. Deliberately *not* keyed off the
+		// `expanded` state itself: doing so would rerun this effect (and
+		// reopen the node) on every unrelated fold change, including the
+		// user manually collapsing one of these same nodes.
+		let changed = false;
+		setExpandedRaw((prev) => {
+			changed = false;
+			let next: Set<unknown> | null = null;
+			for (const node of activePath) {
+				if (!prev.has(node)) {
+					next ??= new Set(prev);
+					next.add(node);
+					changed = true;
+				}
+			}
+			return next ?? prev;
+		});
+		if (changed) {
+			setToggledKey(BULK_FOLD_CHANGE);
+		}
+	}, [activePath]);
+
+	// Re-runs on `expanded` changes too (in addition to `activePath`) so that
+	// when the effect above just opened an ancestor, this retries once that
+	// update lands and the leaf's row actually mounts — `pendingScrollRef`
+	// keeps that retry from turning into a scroll on every unrelated fold
+	// toggle elsewhere in the tree.
+	useEffect(() => {
+		if (!pendingScrollRef.current || activePath.length === 0) {
 			return;
 		}
 		const leaf = activePath[activePath.length - 1];
 		const el = refs.current.get(leaf);
 		if (el) {
 			el.scrollIntoView({ block: "center" });
+			pendingScrollRef.current = false;
 		}
-	}, [activePath]);
+	}, [activePath, expanded]);
 
-	return { expanded: effectiveExpanded, setExpanded, toggle, registerRef, expandedChangePath };
+	return { expanded, setExpanded, toggle, registerRef, expandedChangePath };
 }

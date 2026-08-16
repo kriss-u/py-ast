@@ -169,10 +169,21 @@ function orderedChildren(
 /**
  * Finds the path of AST nodes (root to innermost) that most specifically
  * contains `position`: at each level, descends into whichever child's own
- * `[start, end)` range actually contains `position`, so hovering in a gap
+ * `[start, end]` range actually contains `position`, so hovering in a gap
  * between two children (e.g. trailing whitespace, a comment) stops at the
  * enclosing node instead of incorrectly snapping to whichever child merely
  * starts earliest.
+ *
+ * The `end` bound is inclusive rather than the more usual exclusive
+ * `[start, end)`: the cursor sitting immediately *after* the last character
+ * of a token — its most common position right after typing it, or after
+ * clicking at the end of a line — has `position === end`, and should still
+ * resolve to that token rather than bouncing back out to its parent (or, for
+ * a trailing token with nothing after it, all the way out to a distant
+ * ancestor). Two adjacent children that touch exactly at that boundary both
+ * technically qualify; the loop below keeps overwriting `chosen` as it scans
+ * children in source order, so the later (right-hand) one wins, matching how
+ * a caret at a touching boundary conventionally "belongs" to what comes next.
  * @param root The tree to search.
  * @param position The source position to locate.
  * @returns The path from `root` to the innermost matching node.
@@ -186,7 +197,7 @@ export function findNodePath(root: ASTNodeUnion, position: SourcePosition): ASTN
 			if (comparePositions(start, position) > 0) {
 				break;
 			}
-			if (end === null || comparePositions(position, end) < 0) {
+			if (end === null || comparePositions(position, end) <= 0) {
 				chosen = node;
 			}
 		}
@@ -248,6 +259,65 @@ export function containerPathTo(root: unknown, target: unknown): unknown[] | nul
 		}
 	}
 	return null;
+}
+
+/** A container's location within a tree, as a sequence of field names/array indices from the root. */
+type ContainerRoute = readonly (string | number)[];
+
+/**
+ * Maps every container (array, object, or AST node) reachable from `root` to
+ * its {@link ContainerRoute}, in a single traversal. Used to translate a fold
+ * state (a `Set` of container references) from one parse of a source file to
+ * the next: re-parsing produces an entirely new object graph, so old
+ * references can never match new ones by identity, but the *shape* of the
+ * tree — which field/index leads to which container — is usually unchanged
+ * by a small edit, so routes computed against the old tree still resolve
+ * against the new one via {@link resolveContainerRoute}.
+ *
+ * `Module.comments` duplicates the same `Comment` objects that already
+ * appear in `body`/`inlineComment` (see {@link EXCLUDED_FIELDS}) — since
+ * both routes lead to the literal same object, whichever is visited first
+ * simply wins here; it makes no difference which route is kept, because a
+ * fold toggle on either row already means the same `Set` entry.
+ * @param root The tree to map.
+ * @returns A map from every container in `root` to the route that reaches it.
+ */
+export function buildContainerRouteMap(root: unknown): Map<unknown, ContainerRoute> {
+	const routes = new Map<unknown, ContainerRoute>();
+	const visit = (value: unknown, route: ContainerRoute): void => {
+		if (value === null || typeof value !== "object" || routes.has(value)) {
+			return;
+		}
+		routes.set(value, route);
+		if (Array.isArray(value)) {
+			value.forEach((item, index) => visit(item, [...route, index]));
+		} else {
+			for (const [key, fieldValue] of Object.entries(value)) {
+				visit(fieldValue, [...route, key]);
+			}
+		}
+	};
+	visit(root, []);
+	return routes;
+}
+
+/**
+ * Resolves a {@link ContainerRoute} (captured against a previous parse, see
+ * {@link buildContainerRouteMap}) against `root`, or `undefined` if the edit
+ * that produced `root` removed or restructured whatever used to live there.
+ * @param root The tree to resolve the route against.
+ * @param route The route to follow.
+ * @returns The container at `route`, or `undefined` if it no longer exists.
+ */
+export function resolveContainerRoute(root: unknown, route: ContainerRoute): unknown {
+	let current: unknown = root;
+	for (const key of route) {
+		if (current === null || typeof current !== "object") {
+			return undefined;
+		}
+		current = (current as Record<string | number, unknown>)[key];
+	}
+	return current;
 }
 
 /**
