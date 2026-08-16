@@ -86,9 +86,10 @@ const SVG_NS = "http://www.w3.org/2000/svg";
  * count" than an inline `complexity: N` string competing with the name.
  *
  * Runs as a DOM patch after Mermaid's own render: appended directly onto
- * each `.node` group, positioned from that shape's own `getBBox()` (stable
- * regardless of the pan/zoom transform applied further up the tree, since
- * `getBBox()` reports the shape's local coordinate space).
+ * each `.node` group. Badges are created at a placeholder position and
+ * immediately positioned via {@link positionComplexityBadges} — see that
+ * function's doc comment for why the position can't just be computed once
+ * here.
  */
 function addComplexityBadges(
 	container: HTMLElement,
@@ -100,18 +101,12 @@ function addComplexityBadges(
 	for (const nodeEl of container.querySelectorAll<SVGGElement>(".node")) {
 		const nodeId = nodeEl.id ? callGraphNodeIdFromElementId(nodeEl.id, diagramId) : null;
 		const node = nodeId ? nodeById.get(nodeId) : undefined;
-		const shape = nodeEl.querySelector<SVGGraphicsElement>("rect, polygon, path");
-		if (!node || !shape) {
+		if (!node) {
 			continue;
 		}
-		const bbox = shape.getBBox();
 		const band = colors[complexityBand(node.complexity.total)];
-		const cx = bbox.x + bbox.width;
-		const cy = bbox.y;
 
 		const circle = document.createElementNS(SVG_NS, "circle");
-		circle.setAttribute("cx", String(cx));
-		circle.setAttribute("cy", String(cy));
 		circle.setAttribute("r", String(BADGE_RADIUS));
 		circle.setAttribute("fill", band.stroke);
 		circle.setAttribute("stroke", colors.ringColor);
@@ -119,8 +114,6 @@ function addComplexityBadges(
 		circle.setAttribute("class", "flow-node-badge");
 
 		const text = document.createElementNS(SVG_NS, "text");
-		text.setAttribute("x", String(cx));
-		text.setAttribute("y", String(cy));
 		text.setAttribute("text-anchor", "middle");
 		text.setAttribute("dominant-baseline", "central");
 		text.setAttribute("class", "flow-node-badge-text");
@@ -128,6 +121,41 @@ function addComplexityBadges(
 		text.textContent = String(node.complexity.total);
 
 		nodeEl.append(circle, text);
+	}
+	positionComplexityBadges(container);
+}
+
+/**
+ * Positions every already-created badge (see {@link addComplexityBadges}) at
+ * its node shape's top-right corner, from that shape's own `getBBox()`
+ * (stable regardless of the pan/zoom transform applied further up the tree,
+ * since `getBBox()` reports the shape's local coordinate space).
+ *
+ * Split out from badge creation because `getBBox()` returns an all-zero rect
+ * for elements under a `display: none` ancestor — which is exactly the state
+ * the Flow tab's diagram renders in the first time: `FlowView` is mounted in
+ * the background (see `App`'s `flowViewPrimed`) while the tab is still
+ * hidden, so the initial badge placement always lands on the zero rect and
+ * every badge ends up at each node's local origin — its center — instead of
+ * its corner. The `ResizeObserver` in the render effect below calls this
+ * again once the container actually gains real layout size (i.e. the tab
+ * becomes visible), which corrects it.
+ */
+function positionComplexityBadges(container: HTMLElement): void {
+	for (const nodeEl of container.querySelectorAll<SVGGElement>(".node")) {
+		const shape = nodeEl.querySelector<SVGGraphicsElement>("rect, polygon, path");
+		const badge = nodeEl.querySelector<SVGCircleElement>(".flow-node-badge");
+		const badgeText = nodeEl.querySelector<SVGTextElement>(".flow-node-badge-text");
+		if (!shape || !badge || !badgeText) {
+			continue;
+		}
+		const bbox = shape.getBBox();
+		const cx = String(bbox.x + bbox.width);
+		const cy = String(bbox.y);
+		badge.setAttribute("cx", cx);
+		badge.setAttribute("cy", cy);
+		badgeText.setAttribute("x", cx);
+		badgeText.setAttribute("y", cy);
 	}
 }
 
@@ -220,6 +248,34 @@ export function MermaidCallGraphDiagram({ graph, theme, layout, onHighlightRange
 			cancelled = true;
 		};
 	}, [definition]);
+
+	// The initial render above can happen while this pane is still `display:
+	// none` (the Flow tab primes itself in the background before the user
+	// switches to it — see `App`'s `flowViewPrimed`), which leaves badges
+	// mispositioned at each node's center (see `positionComplexityBadges`'s
+	// doc comment). A `ResizeObserver` catches the moment the container
+	// actually gains real layout size — i.e. becomes visible — and redoes the
+	// badge placement and view-fit then.
+	const wasVisibleRef = useRef(false);
+	useEffect(() => {
+		const container = containerRef.current;
+		if (!container) {
+			return;
+		}
+		wasVisibleRef.current = container.getBoundingClientRect().width > 0;
+		const observer = new ResizeObserver(([entry]) => {
+			const isVisible = (entry?.contentRect.width ?? 0) > 0;
+			if (isVisible && !wasVisibleRef.current) {
+				positionComplexityBadges(container);
+				fitToViewport();
+			}
+			wasVisibleRef.current = isVisible;
+		});
+		observer.observe(container);
+		return () => {
+			observer.disconnect();
+		};
+	}, []);
 
 	useEffect(() => {
 		const container = containerRef.current;
