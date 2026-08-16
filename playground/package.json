@@ -13,6 +13,8 @@
 		"@codemirror/state": "^6.5.0",
 		"@codemirror/view": "^6.36.1",
 		"@uiw/react-codemirror": "^4.23.7",
+		"idb": "^8.0.3",
+		"lucide-react": "^1.31.0",
 		"mermaid": "^11.16.1",
 		"react": "^19.2.8",
 		"react-dom": "^19.2.8",

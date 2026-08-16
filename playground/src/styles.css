@@ -83,6 +83,29 @@ body {
 	height: 100%;
 }
 
+.app-loading {
+	align-items: center;
+	justify-content: center;
+	gap: 0.75rem;
+	color: var(--text-dim);
+	font-size: 0.9rem;
+}
+
+.app-loading-spinner {
+	width: 1.75rem;
+	height: 1.75rem;
+	border-radius: 50%;
+	border: 3px solid var(--border);
+	border-top-color: var(--accent);
+	animation: app-loading-spin 0.8s linear infinite;
+}
+
+@keyframes app-loading-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
 .app-header {
 	display: flex;
 	align-items: center;
@@ -90,6 +113,17 @@ body {
 	padding: 0.5rem 1rem;
 	background: var(--bg-header);
 	border-bottom: 1px solid var(--border);
+	flex-shrink: 0;
+}
+
+.app-header-brand {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+.app-logo {
+	border-radius: 6px;
 	flex-shrink: 0;
 }
 
@@ -131,6 +165,91 @@ body {
 
 .theme-toggle:hover {
 	background: var(--hover-bg);
+}
+
+.reset-preferences-button {
+	background: transparent;
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	padding: 0.3rem 0.6rem;
+	color: var(--text-dim);
+	cursor: pointer;
+	font-size: 0.85rem;
+	line-height: 1;
+}
+
+.reset-preferences-button:hover {
+	background: var(--hover-bg);
+	color: var(--accent);
+}
+
+.confirm-dialog-backdrop {
+	position: fixed;
+	inset: 0;
+	background: rgba(0, 0, 0, 0.5);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 1rem;
+	z-index: 100;
+}
+
+.confirm-dialog {
+	background: var(--bg-panel);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	box-shadow: var(--shadow-md);
+	padding: 1.25rem;
+	width: 100%;
+	max-width: 22rem;
+}
+
+.confirm-dialog-title {
+	margin: 0 0 0.5rem;
+	font-size: 1rem;
+	font-weight: 600;
+	color: var(--text);
+}
+
+.confirm-dialog-description {
+	margin: 0 0 1.25rem;
+	font-size: 0.85rem;
+	line-height: 1.4;
+	color: var(--text-dim);
+}
+
+.confirm-dialog-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 0.5rem;
+}
+
+.confirm-dialog-button {
+	border-radius: 4px;
+	padding: 0.4rem 0.85rem;
+	font-size: 0.85rem;
+	cursor: pointer;
+	line-height: 1;
+}
+
+.confirm-dialog-cancel {
+	background: transparent;
+	border: 1px solid var(--border);
+	color: var(--text);
+}
+
+.confirm-dialog-cancel:hover {
+	background: var(--hover-bg);
+}
+
+.confirm-dialog-confirm {
+	background: var(--error-border);
+	border: 1px solid var(--error-border);
+	color: #ffffff;
+}
+
+.confirm-dialog-confirm:hover {
+	opacity: 0.9;
 }
 
 .panes {

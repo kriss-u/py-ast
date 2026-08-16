@@ -1,5 +1,6 @@
 import type { ASTNodeUnion } from "py-ast";
 import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { ConfirmDialog } from "./components/ConfirmDialog";
 import { Editor } from "./components/Editor";
 import { FlowView } from "./components/FlowView";
 import { JsonView } from "./components/JsonView";
@@ -8,89 +9,16 @@ import { type Theme, ThemeToggle } from "./components/ThemeToggle";
 import { TreeView } from "./components/TreeView";
 import { containerPathTo, findNodePath, nodeRange } from "./lib/astRange";
 import { collectContainers, collectTopLevelContainers } from "./lib/collectContainers";
+import { defaultPreferences, loadPreferences, resetPreferences, savePreference } from "./lib/preferencesStore";
 import { useHoverStack } from "./lib/useHoverStack";
 import { useMediaQuery } from "./lib/useMediaQuery";
 import { useTreeState } from "./lib/useTreeState";
 import { tryParse } from "./lib/parsePy";
 import type { SourcePosition, SourceRange } from "./lib/types";
 
-const SAMPLE_SOURCE = `# Edit this Python source to explore its AST.
-from dataclasses import dataclass
-
-
-@dataclass
-class Item:
-    name: str
-    price: float
-    quantity: int
-
-
-def calculate_subtotal(items: list[Item]) -> float:
-    total = 0.0
-    for item in items:
-        if item.quantity < 0:
-            raise ValueError(f"Negative quantity for {item.name}")
-        total += item.price * item.quantity
-    return total
-
-
-def apply_discount(subtotal: float, is_member: bool, coupon: str | None = None) -> float:
-    discount = 0.0
-    if is_member:
-        discount += 0.1
-    if coupon == "SAVE10":
-        discount += 0.1
-    elif coupon == "SAVE20":
-        discount += 0.2
-    return subtotal * (1 - min(discount, 0.5))
-
-
-def calculate_tax(amount: float, region: str) -> float:
-    rates = {"US": 0.07, "EU": 0.20, "UK": 0.20}
-    return amount * rates.get(region, 0.0)
-
-
-class Order:
-    """A customer order, ready for checkout."""
-
-    def __init__(self, items: list[Item], region: str = "US"):
-        self.items = items
-        self.region = region
-        self.is_member = False
-        self.coupon = None
-
-    def total(self) -> float:
-        subtotal = calculate_subtotal(self.items)
-        discounted = apply_discount(subtotal, self.is_member, self.coupon)
-        tax = calculate_tax(discounted, self.region)
-        return discounted + tax
-
-    def summary(self) -> str:
-        try:
-            total = self.total()
-        except ValueError as exc:
-            return f"Order invalid: {exc}"
-        else:
-            return f"Total: {total:.2f} ({len(self.items)} items)"
-
-
-def checkout(order: Order) -> str:
-    for attempt in range(3):
-        try:
-            return order.summary()
-        except Exception:
-            continue
-    return "Checkout failed"
-
-
-order = Order([Item("Widget", 9.99, 3), Item("Gadget", 19.99, 1)])
-print(checkout(order))
-`;
-
-const THEME_STORAGE_KEY = "py-ast-playground-theme";
-const EDITOR_WIDTH_STORAGE_KEY = "py-ast-playground-editor-width";
 const COPY_FEEDBACK_MS = 1500;
-const DEFAULT_EDITOR_WIDTH_PERCENT = 50;
+/** Debounce for persisting the source to IndexedDB — long enough to not write on every keystroke. */
+const SOURCE_SAVE_DEBOUNCE_MS = 400;
 const MIN_EDITOR_WIDTH_PERCENT = 20;
 const MAX_EDITOR_WIDTH_PERCENT = 80;
 
@@ -102,24 +30,6 @@ const MAX_EDITOR_WIDTH_PERCENT = 80;
  */
 const STACKED_LAYOUT_QUERY = "(max-width: 768px)";
 
-/** Reads the persisted editor/output split, falling back to an even split. */
-function initialEditorWidthPercent(): number {
-	const stored = Number(localStorage.getItem(EDITOR_WIDTH_STORAGE_KEY));
-	if (Number.isFinite(stored) && stored >= MIN_EDITOR_WIDTH_PERCENT && stored <= MAX_EDITOR_WIDTH_PERCENT) {
-		return stored;
-	}
-	return DEFAULT_EDITOR_WIDTH_PERCENT;
-}
-
-/** Reads the persisted theme, falling back to the OS preference. */
-function initialTheme(): Theme {
-	const stored = localStorage.getItem(THEME_STORAGE_KEY);
-	if (stored === "light" || stored === "dark") {
-		return stored;
-	}
-	return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
-}
-
 /** Computes the end position (last line/column) of a source document. */
 function documentEnd(source: string): SourcePosition {
 	const lines = source.split("\n");
@@ -128,18 +38,77 @@ function documentEnd(source: string): SourcePosition {
 
 /** Root component: wires the editor, parser, and tree/JSON views together. */
 export function App() {
-	const [source, setSource] = useState(SAMPLE_SOURCE);
-	const [excludeComments, setExcludeComments] = useState(false);
+	const [source, setSource] = useState(() => defaultPreferences().source);
+	const [excludeComments, setExcludeComments] = useState(() => defaultPreferences().excludeComments);
 	const [activeTab, setActiveTab] = useState<TabId>("tree");
 	const [cursorPosition, setCursorPosition] = useState<SourcePosition | null>(null);
 	const { hovered: hoveredTreeNode, onEnter: handleTreeHoverEnter, onLeave: handleTreeHoverLeave } =
 		useHoverStack<ASTNodeUnion>();
-	const [theme, setTheme] = useState<Theme>(initialTheme);
+	const [theme, setTheme] = useState<Theme>(() => defaultPreferences().theme);
 	const [copied, setCopied] = useState(false);
-	const [editorWidthPercent, setEditorWidthPercent] = useState<number>(initialEditorWidthPercent);
+	const [editorWidthPercent, setEditorWidthPercent] = useState<number>(() => defaultPreferences().editorWidthPercent);
 	const panesRef = useRef<HTMLDivElement>(null);
 	const [isResizing, setIsResizing] = useState(false);
 	const isStackedLayout = useMediaQuery(STACKED_LAYOUT_QUERY);
+
+	// Preferences load from IndexedDB asynchronously, so the app renders with
+	// in-memory defaults first and swaps in the persisted values once they
+	// arrive. `prefsLoaded` gates the save effects below so a save never fires
+	// with a stale default before the load has had a chance to land.
+	const [prefsLoaded, setPrefsLoaded] = useState(false);
+	useEffect(() => {
+		let cancelled = false;
+		loadPreferences().then((prefs) => {
+			if (cancelled) {
+				return;
+			}
+			setSource(prefs.source);
+			setExcludeComments(prefs.excludeComments);
+			setTheme(prefs.theme);
+			setEditorWidthPercent(prefs.editorWidthPercent);
+			setPrefsLoaded(true);
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, []);
+
+	useEffect(() => {
+		if (!prefsLoaded) {
+			return;
+		}
+		void savePreference("excludeComments", excludeComments);
+	}, [prefsLoaded, excludeComments]);
+
+	useEffect(() => {
+		if (!prefsLoaded) {
+			return;
+		}
+		void savePreference("theme", theme);
+	}, [prefsLoaded, theme]);
+
+	useEffect(() => {
+		if (!prefsLoaded) {
+			return;
+		}
+		const timeout = setTimeout(() => {
+			void savePreference("source", source);
+		}, SOURCE_SAVE_DEBOUNCE_MS);
+		return () => clearTimeout(timeout);
+	}, [prefsLoaded, source]);
+
+	const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+
+	/** Clears persisted preferences and resets all in-memory state to the defaults. */
+	const handleResetPreferences = async () => {
+		setResetConfirmOpen(false);
+		await resetPreferences();
+		const defaults = defaultPreferences();
+		setSource(defaults.source);
+		setExcludeComments(defaults.excludeComments);
+		setTheme(defaults.theme);
+		setEditorWidthPercent(defaults.editorWidthPercent);
+	};
 
 	// Mount the JSON view once in the background, as a low-priority
 	// transition, instead of only on first tab click — that way the switch
@@ -168,11 +137,6 @@ export function App() {
 	const handleFlowHighlightRange = useCallback((range: SourceRange | null) => {
 		setFlowHighlightRange(range);
 	}, []);
-
-	const handleThemeChange = (next: Theme) => {
-		setTheme(next);
-		localStorage.setItem(THEME_STORAGE_KEY, next);
-	};
 
 	useEffect(() => {
 		document.documentElement.dataset.theme = theme;
@@ -208,10 +172,11 @@ export function App() {
 	}, [isResizing]);
 
 	useEffect(() => {
-		if (!isResizing) {
-			localStorage.setItem(EDITOR_WIDTH_STORAGE_KEY, String(editorWidthPercent));
+		if (!prefsLoaded || isResizing) {
+			return;
 		}
-	}, [isResizing, editorWidthPercent]);
+		void savePreference("editorWidthPercent", editorWidthPercent);
+	}, [prefsLoaded, isResizing, editorWidthPercent]);
 
 	// Parsing (and, downstream, re-rendering the whole tree/JSON view) is
 	// deferred to a lower React priority than the keystroke itself — on a
@@ -303,12 +268,36 @@ export function App() {
 		setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);
 	};
 
+	// Render nothing but a loading screen until the persisted preferences have
+	// been read back from IndexedDB — otherwise the app would briefly flash
+	// the in-memory defaults (sample source, default theme) before swapping
+	// in the user's actual saved state.
+	if (!prefsLoaded) {
+		return (
+			<div className="app app-loading">
+				<div className="app-loading-spinner" aria-hidden="true" />
+				<p>Loading playground…</p>
+			</div>
+		);
+	}
+
 	return (
 		<div className="app">
 			<header className="app-header">
-				<h1>PyAST Playground</h1>
+				<div className="app-header-brand">
+					<img src="/favicon.svg" alt="" className="app-logo" width={24} height={24} />
+					<h1>PyAST Playground</h1>
+				</div>
 				<div className="app-header-actions">
-					<ThemeToggle theme={theme} onChange={handleThemeChange} />
+					<button
+						type="button"
+						className="reset-preferences-button"
+						onClick={() => setResetConfirmOpen(true)}
+						title="Reset the playground to its default state"
+					>
+						Reset
+					</button>
+					<ThemeToggle theme={theme} onChange={setTheme} />
 					<a href="https://github.com/kriss-u/py-ast" target="_blank" rel="noreferrer">
 						GitHub
 					</a>
@@ -403,6 +392,15 @@ export function App() {
 					)}
 				</div>
 			</div>
+			<ConfirmDialog
+				open={resetConfirmOpen}
+				title="Reset playground?"
+				description="This clears your saved source and settings, and restores the default sample."
+				confirmLabel="Reset"
+				cancelLabel="Cancel"
+				onConfirm={handleResetPreferences}
+				onCancel={() => setResetConfirmOpen(false)}
+			/>
 		</div>
 	);
 }

@@ -1,3 +1,5 @@
+import { Moon, Sun } from "lucide-react";
+
 export type Theme = "light" | "dark";
 
 export interface ThemeToggleProps {
@@ -16,7 +18,7 @@ export function ThemeToggle({ theme, onChange }: ThemeToggleProps) {
 			aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
 			title={isDark ? "Switch to light mode" : "Switch to dark mode"}
 		>
-			{isDark ? "☀️" : "🌙"}
+			{isDark ? <Sun size={16} /> : <Moon size={16} />}
 		</button>
 	);
 }
