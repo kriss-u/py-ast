@@ -61,3 +61,9 @@ jobs:
       - name: Publish to JSR
         if: success()
         run: npx jsr publish --allow-dirty
+
+      - name: Push JSR version sync
+        if: success()
+        run: |
+          git pull --rebase origin ${{ github.ref_name }}
+          git push origin HEAD:${{ github.ref_name }}
