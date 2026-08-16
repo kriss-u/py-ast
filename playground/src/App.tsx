@@ -1,6 +1,7 @@
 import type { ASTNodeUnion } from "py-ast";
-import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { Editor } from "./components/Editor";
+import { FlowView } from "./components/FlowView";
 import { JsonView } from "./components/JsonView";
 import { type TabId, Tabs } from "./components/Tabs";
 import { type Theme, ThemeToggle } from "./components/ThemeToggle";
@@ -11,15 +12,79 @@ import { useHoverStack } from "./lib/useHoverStack";
 import { useMediaQuery } from "./lib/useMediaQuery";
 import { useTreeState } from "./lib/useTreeState";
 import { tryParse } from "./lib/parsePy";
-import type { SourcePosition } from "./lib/types";
+import type { SourcePosition, SourceRange } from "./lib/types";
 
 const SAMPLE_SOURCE = `# Edit this Python source to explore its AST.
-def greet(name: str) -> str:
-    """Say hello."""
-    return f"Hello, {name}!"
+from dataclasses import dataclass
 
 
-greet("world")
+@dataclass
+class Item:
+    name: str
+    price: float
+    quantity: int
+
+
+def calculate_subtotal(items: list[Item]) -> float:
+    total = 0.0
+    for item in items:
+        if item.quantity < 0:
+            raise ValueError(f"Negative quantity for {item.name}")
+        total += item.price * item.quantity
+    return total
+
+
+def apply_discount(subtotal: float, is_member: bool, coupon: str | None = None) -> float:
+    discount = 0.0
+    if is_member:
+        discount += 0.1
+    if coupon == "SAVE10":
+        discount += 0.1
+    elif coupon == "SAVE20":
+        discount += 0.2
+    return subtotal * (1 - min(discount, 0.5))
+
+
+def calculate_tax(amount: float, region: str) -> float:
+    rates = {"US": 0.07, "EU": 0.20, "UK": 0.20}
+    return amount * rates.get(region, 0.0)
+
+
+class Order:
+    """A customer order, ready for checkout."""
+
+    def __init__(self, items: list[Item], region: str = "US"):
+        self.items = items
+        self.region = region
+        self.is_member = False
+        self.coupon = None
+
+    def total(self) -> float:
+        subtotal = calculate_subtotal(self.items)
+        discounted = apply_discount(subtotal, self.is_member, self.coupon)
+        tax = calculate_tax(discounted, self.region)
+        return discounted + tax
+
+    def summary(self) -> str:
+        try:
+            total = self.total()
+        except ValueError as exc:
+            return f"Order invalid: {exc}"
+        else:
+            return f"Total: {total:.2f} ({len(self.items)} items)"
+
+
+def checkout(order: Order) -> str:
+    for attempt in range(3):
+        try:
+            return order.summary()
+        except Exception:
+            continue
+    return "Checkout failed"
+
+
+order = Order([Item("Widget", 9.99, 3), Item("Gadget", 19.99, 1)])
+print(checkout(order))
 `;
 
 const THEME_STORAGE_KEY = "py-ast-playground-theme";
@@ -87,8 +152,21 @@ export function App() {
 	// mounts the JSON view directly, matching the old (synchronous) behavior
 	// rather than showing nothing.
 	const [jsonViewPrimed, setJsonViewPrimed] = useState(false);
+	const [flowViewPrimed, setFlowViewPrimed] = useState(false);
 	useEffect(() => {
-		startTransition(() => setJsonViewPrimed(true));
+		startTransition(() => {
+			setJsonViewPrimed(true);
+			setFlowViewPrimed(true);
+		});
+	}, []);
+
+	// Flow-tab node hover drives its own editor highlight, independent of the
+	// tree/JSON one below — the two are mutually exclusive in practice (only
+	// one tab's content is visible/interactive at a time), so `Editor` is fed
+	// whichever one corresponds to `activeTab`.
+	const [flowHighlightRange, setFlowHighlightRange] = useState<SourceRange | null>(null);
+	const handleFlowHighlightRange = useCallback((range: SourceRange | null) => {
+		setFlowHighlightRange(range);
 	}, []);
 
 	const handleThemeChange = (next: Theme) => {
@@ -207,12 +285,14 @@ export function App() {
 	// Tree->code highlighting is transient: it only reflects whichever tree
 	// node the mouse is currently over, and disappears when the mouse leaves
 	// (unlike code->tree highlighting, which persists at the cursor).
-	const highlightRange = useMemo(() => {
+	const treeHighlightRange = useMemo(() => {
 		if (!parseResult.ok || !hoveredTreeNode) {
 			return null;
 		}
 		return nodeRange(parseResult.tree, hoveredTreeNode, documentEnd(source));
 	}, [parseResult, hoveredTreeNode, source]);
+
+	const highlightRange = activeTab === "flow" ? flowHighlightRange : treeHighlightRange;
 
 	const handleCopyJson = async () => {
 		if (!parseResult.ok) {
@@ -296,6 +376,15 @@ export function App() {
 										expandedChangePath={jsonState.expandedChangePath}
 										toggle={jsonState.toggle}
 										registerRef={jsonState.registerRef}
+									/>
+								</div>
+							)}
+							{(flowViewPrimed || activeTab === "flow") && (
+								<div className="node-view-slot" hidden={activeTab !== "flow"}>
+									<FlowView
+										tree={parseResult.tree}
+										theme={theme}
+										onHighlightRange={handleFlowHighlightRange}
 									/>
 								</div>
 							)}
