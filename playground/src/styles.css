@@ -19,6 +19,14 @@
 	--error-bg: #5a1d1d;
 	--error-border: #f14c4c;
 	--hover-bg: rgba(255, 255, 255, 0.06);
+	--complexity-low: #4ec9b0;
+	--complexity-moderate: #dcdcaa;
+	--complexity-high: #e2a33e;
+	--complexity-very-high: #f14c4c;
+	--radius: 8px;
+	--radius-sm: 5px;
+	--shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
+	--shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
 }
 
 :root[data-theme="light"] {
@@ -41,6 +49,14 @@
 	--error-bg: #fdecea;
 	--error-border: #d32f2f;
 	--hover-bg: rgba(0, 0, 0, 0.05);
+	--complexity-low: #267f7f;
+	--complexity-moderate: #9a7d0a;
+	--complexity-high: #b5690a;
+	--complexity-very-high: #d32f2f;
+	--radius: 8px;
+	--radius-sm: 5px;
+	--shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.1);
+	--shadow-md: 0 4px 16px rgba(0, 0, 0, 0.14);
 }
 
 * {
@@ -510,4 +526,295 @@ button.json-fold-arrow:hover {
 	outline: 1px solid var(--highlight-outline);
 	outline-offset: -1px;
 	border-radius: 2px;
+}
+
+.flow-view {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	flex: 1;
+}
+
+.flow-toolbar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.75rem;
+	padding: 0.65rem 0.85rem;
+	border-bottom: 1px solid var(--border);
+	flex-shrink: 0;
+	flex-wrap: wrap;
+	row-gap: 0.5rem;
+}
+
+.flow-summary {
+	font-size: 0.8rem;
+	color: var(--text-dim);
+	white-space: nowrap;
+}
+
+.flow-filters {
+	display: flex;
+	gap: 0.35rem;
+	flex-wrap: wrap;
+}
+
+.flow-filter-chip {
+	appearance: none;
+	background: transparent;
+	border: 1px solid currentColor;
+	color: var(--text-dim);
+	font-size: 0.75rem;
+	font-weight: 600;
+	font-family: inherit;
+	padding: 0.25rem 0.7rem;
+	border-radius: 999px;
+	cursor: pointer;
+	transition:
+		background-color 0.15s ease,
+		transform 0.1s ease;
+}
+
+.flow-filter-chip:hover {
+	transform: translateY(-1px);
+}
+
+.flow-filter-chip-all {
+	color: var(--accent);
+}
+
+.flow-filter-chip-active {
+	background: color-mix(in srgb, currentColor 20%, transparent);
+}
+
+.flow-layout-control {
+	display: flex;
+	align-items: center;
+	gap: 0.4rem;
+	font-size: 0.8rem;
+	color: var(--text-dim);
+}
+
+.flow-layout-control select {
+	background: var(--bg-panel);
+	color: var(--text);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	padding: 0.2rem 0.5rem;
+	font-size: 0.8rem;
+	font-family: inherit;
+	cursor: pointer;
+	transition: border-color 0.15s ease;
+}
+
+.flow-layout-control select:hover,
+.flow-layout-control select:focus-visible {
+	border-color: var(--accent);
+	outline: none;
+}
+
+.complexity-badge {
+	font-size: 0.8rem;
+	font-weight: 600;
+	padding: 0.2rem 0.65rem;
+	border-radius: 999px;
+	border: 1px solid currentColor;
+	background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.complexity-low {
+	color: var(--complexity-low);
+}
+
+.complexity-moderate {
+	color: var(--complexity-moderate);
+}
+
+.complexity-high {
+	color: var(--complexity-high);
+}
+
+.complexity-very-high {
+	color: var(--complexity-very-high);
+}
+
+.flow-diagram-wrapper {
+	flex: 1;
+	min-height: 0;
+	position: relative;
+	background: var(--bg);
+	background-image: radial-gradient(circle, var(--border) 1px, transparent 1px);
+	background-size: 22px 22px;
+}
+
+.flow-diagram {
+	/* react-zoom-pan-pinch owns panning/zooming via a CSS transform on its
+	   content div, rather than the browser scrolling a bigger-than-container
+	   element. */
+	width: 100%;
+	height: 100%;
+	overflow: hidden;
+}
+
+.flow-diagram svg {
+	display: block;
+}
+
+.flow-diagram .node {
+	cursor: pointer;
+}
+
+/* The diagram's monospace font (matching the rest of the app) is set via
+   Mermaid's own `fontFamily` config (see mermaidCallGraph.ts) rather than a
+   CSS override here — Mermaid measures node text to size its box using
+   whatever font it's configured with, so setting the font any other way
+   after the fact leaves boxes sized for the wrong font and clips text. */
+
+/* Complexity badges (MermaidCallGraphDiagram's addComplexityBadges) are
+   plain SVG <circle>/<text> appended after render, not part of Mermaid's own
+   output — colors are set inline per-node (they vary by complexity band),
+   only typography/interactivity live here. */
+.flow-diagram .flow-node-badge {
+	pointer-events: none;
+}
+
+.flow-diagram .flow-node-badge-text {
+	font-family: var(--font-mono);
+	font-size: 11px;
+	font-weight: 700;
+	pointer-events: none;
+	user-select: none;
+}
+
+.flow-diagram-controls {
+	position: absolute;
+	top: 0.7rem;
+	right: 0.7rem;
+	z-index: 1;
+	display: flex;
+	flex-direction: column;
+	gap: 0.3rem;
+	background: var(--bg-panel);
+	padding: 0.3rem;
+	border-radius: var(--radius);
+	border: 1px solid var(--border);
+	box-shadow: var(--shadow-md);
+}
+
+.flow-diagram-controls button {
+	width: 1.8rem;
+	height: 1.8rem;
+	background: transparent;
+	color: var(--text-dim);
+	border: none;
+	border-radius: var(--radius-sm);
+	cursor: pointer;
+	font-size: 1rem;
+	line-height: 1;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	transition:
+		background-color 0.15s ease,
+		color 0.15s ease;
+}
+
+.flow-diagram-controls button:hover {
+	color: var(--text);
+	background: var(--hover-bg);
+}
+
+.flow-diagram-controls button:active {
+	color: var(--accent);
+}
+
+/*
+ * Mermaid's own theme engine (`themeVariables`) can't accept `var(--x)`
+ * color references (it runs them through a color-manipulation library that
+ * expects real hex/rgb), so edges/arrowheads/edge-label boxes are themed
+ * here instead via plain CSS overriding Mermaid's own rendered classes.
+ * Node fill/stroke is handled separately, via the `classDef`s
+ * callGraphToMermaid emits directly into the diagram source.
+ */
+.flow-diagram .edgePath .path {
+	stroke: var(--text-dim) !important;
+	stroke-width: 1.5px !important;
+}
+
+.flow-diagram .edgeLabel {
+	background-color: var(--bg) !important;
+	color: var(--text) !important;
+}
+
+.flow-diagram .edgeLabel p {
+	background-color: var(--bg) !important;
+	color: var(--text) !important;
+	border-radius: var(--radius-sm);
+	padding: 0.1rem 0.35rem;
+}
+
+.flow-diagram marker path {
+	fill: var(--text-dim) !important;
+	stroke: var(--text-dim) !important;
+}
+
+.flow-diagram .node rect,
+.flow-diagram .node polygon,
+.flow-diagram .node path {
+	filter: drop-shadow(var(--shadow-sm));
+	transition: filter 0.15s ease;
+}
+
+.flow-diagram .node:hover rect,
+.flow-diagram .node:hover polygon,
+.flow-diagram .node:hover path {
+	filter: drop-shadow(var(--shadow-md));
+}
+
+.flow-details {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 0.5rem 0.9rem;
+	padding: 0.6rem 0.85rem;
+	border-top: 1px solid var(--border);
+	background: var(--bg-header);
+	flex-shrink: 0;
+	min-height: 2.4rem;
+}
+
+.flow-details-name {
+	font-family: var(--font-mono);
+	font-weight: 600;
+	color: var(--text);
+}
+
+.flow-details-entry {
+	font-size: 0.8rem;
+	color: var(--text-dim);
+	background: var(--bg-panel);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	padding: 0.1rem 0.45rem;
+}
+
+.flow-details-hint {
+	font-size: 0.8rem;
+	color: var(--text-dim);
+	font-style: italic;
+}
+
+.flow-empty,
+.flow-error {
+	margin: 0.75rem;
+	padding: 0.6rem 0.75rem;
+	color: var(--text-dim);
+	font-size: 0.85rem;
+}
+
+.flow-error {
+	background: var(--error-bg);
+	border: 1px solid var(--error-border);
+	border-radius: 4px;
+	color: var(--text);
 }

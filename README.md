@@ -20,7 +20,8 @@ complete parsing, unparsing, and AST traversal infrastructure, with
 bidirectional Python code ↔ AST conversion.
 
 📖 **[API documentation](https://kriss-u.github.io/py-ast/)** ·
-🛝 **[Playground](https://pyast.nepcodex.com)**
+🛝 **[Playground](https://pyast.nepcodex.com)** (Tree/JSON views of the AST, plus a Flow tab
+with a function-level cyclomatic-complexity call-graph heatmap)
 
 ## Features
 
