@@ -1,3 +1,12 @@
+## [1.15.1](https://github.com/kriss-u/py-ast/compare/v1.15.0...v1.15.1) (2026-08-16)
+
+
+### Bug Fixes
+
+* fix f-string brace-tracking and other bugs ([468c5ac](https://github.com/kriss-u/py-ast/commit/468c5acda3065503443018402661812b7f74bbaf))
+* make tree and json view consistent [skip ci] ([ea4188c](https://github.com/kriss-u/py-ast/commit/ea4188cc8583f327fd631984751ee79b95869578))
+* use start for highlighting [skip ci] ([68b0fde](https://github.com/kriss-u/py-ast/commit/68b0fde5082e8bdd70f67ab8994a41a6585bc9e3))
+
 # [1.15.0](https://github.com/kriss-u/py-ast/compare/v1.14.0...v1.15.0) (2026-08-15)
 
 
