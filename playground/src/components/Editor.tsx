@@ -2,7 +2,7 @@ import { python } from "@codemirror/lang-python";
 import { StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 import type { Theme } from "../components/ThemeToggle";
 import type { SourcePosition, SourceRange } from "../lib/types";
 
@@ -51,9 +51,20 @@ export interface EditorProps {
 /**
  * Python source editor (CodeMirror). Reports cursor movement upward and
  * renders a highlight decoration for `highlightRange` set by the tree/JSON views.
+ *
+ * Memoized so that state changes elsewhere in the app (tree/JSON fold
+ * toggles, tab switches, Flow layout tweaks) don't re-render — and thus
+ * don't touch — this pane at all.
  */
-export function Editor({ source, theme, onSourceChange, onCursorMove, highlightRange }: EditorProps) {
+function EditorImpl({ source, theme, onSourceChange, onCursorMove, highlightRange }: EditorProps) {
 	const editorRef = useRef<ReactCodeMirrorRef>(null);
+
+	// `extensions` must be a stable array: react-codemirror reconfigures the
+	// whole CodeMirror view whenever this reference changes, which — if it
+	// were recreated on every render, as happens on every keystroke — causes
+	// visible jitter (scroll/cursor resets) instead of a normal incremental
+	// update.
+	const extensions = useMemo(() => [python(), highlightField], []);
 
 	useEffect(() => {
 		const view = editorRef.current?.view;
@@ -74,7 +85,7 @@ export function Editor({ source, theme, onSourceChange, onCursorMove, highlightR
 			theme={theme}
 			height="100%"
 			style={{ height: "100%" }}
-			extensions={[python(), highlightField]}
+			extensions={extensions}
 			onChange={onSourceChange}
 			onUpdate={(update) => {
 				if (!update.docChanged && !update.selectionSet) {
@@ -87,3 +98,5 @@ export function Editor({ source, theme, onSourceChange, onCursorMove, highlightR
 		/>
 	);
 }
+
+export const Editor = memo(EditorImpl);
