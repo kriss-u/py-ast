@@ -101,6 +101,27 @@ describe("Lexer f-strings", () => {
 			expect(strTok?.value).toBe(`${prefix}"{d['key']}"`);
 		},
 	);
+
+	test.each(["rf", "fr"])(
+		"treats a doubled brace outside any field as a literal brace in a raw %s-prefixed string, not real nesting",
+		(prefix) => {
+			const tokens = new Lexer(`${prefix}"a{{b}}c"`).tokenize();
+			const strTok = tokens.find((t) => t.type === TokenType.STRING);
+			expect(strTok?.value).toBe(`${prefix}"a{{b}}c"`);
+		},
+	);
+
+	test.each(["rf", "fr"])(
+		"doesn't let a backslash suppress a following brace's field-opening role in a raw %s-prefixed string",
+		(prefix) => {
+			// `\{` isn't a recognized escape (CPython leaves the backslash
+			// literal and still opens the field), so the string must close
+			// right after the field, not run on past it.
+			const tokens = new Lexer(`${prefix}"a\\{b}c"`).tokenize();
+			const strTok = tokens.find((t) => t.type === TokenType.STRING);
+			expect(strTok?.value).toBe(`${prefix}"a\\{b}c"`);
+		},
+	);
 });
 
 describe("Lexer t-strings", () => {

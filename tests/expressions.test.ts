@@ -88,6 +88,26 @@ describe("Basic Python Literals", () => {
 		assertNodeType(binExpr, "Constant");
 		expect(binExpr.value).toBe(5);
 	});
+
+	test("a hex literal whose digits include 'e'/'E' isn't mistaken for a float exponent", () => {
+		// `0x008e`'s hex digits happen to contain 'e', which must not be
+		// read as a decimal-float exponent marker (e.g. as if it were
+		// `0x008 * 10**?`) the way a plain-decimal literal's 'e' would be.
+		const lower = parseExpression("0x008e");
+		assertNodeType(lower, "Constant");
+		expect(lower.value).toBe(0x008e);
+
+		const upper = parseExpression("0X00E8");
+		assertNodeType(upper, "Constant");
+		expect(upper.value).toBe(0x00e8);
+	});
+
+	test("a hex literal too large for a safe number parses as a bigint", () => {
+		const expr = parseExpression(`0x${"F".repeat(20)}`);
+		assertNodeType(expr, "Constant");
+		expect(typeof expr.value).toBe("bigint");
+		expect(expr.value).toBe(BigInt(`0x${"F".repeat(20)}`));
+	});
 });
 
 describe("Implicit string literal concatenation", () => {

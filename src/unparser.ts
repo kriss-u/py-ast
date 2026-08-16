@@ -1565,7 +1565,27 @@ class Unparser extends NodeVisitor {
 			if (Number.isNaN(value)) return "(1e309-1e309)";
 			if (value === Infinity) return "1e309";
 			if (value === -Infinity) return "-1e309";
-			return value.toString();
+			const text = value.toString();
+			// A whole-number float beyond the safe-integer range (e.g.
+			// `1e20`) still renders via `toString()` as bare digits with no
+			// `.`/`e` marker (JS only switches to exponential notation past
+			// 1e21, unlike CPython's `repr`) - reparsing that text would
+			// then hit the integer branch in `Parser.parseNumber`, which
+			// (correctly, for an *actual* huge int literal) yields a
+			// `bigint`, silently turning this float into an int. Appending
+			// `.0` keeps it recognizable as a float on reparse; ints in the
+			// safe range are unaffected since `number` already can't
+			// distinguish `5` from `5.0` (a separate, accepted gap - see
+			// corpus/README.md).
+			if (
+				!Number.isSafeInteger(value) &&
+				!text.includes(".") &&
+				!text.includes("e") &&
+				!text.includes("E")
+			) {
+				return `${text}.0`;
+			}
+			return text;
 		}
 		if (value instanceof PyComplex) {
 			return value.toString();
@@ -1706,7 +1726,7 @@ class Unparser extends NodeVisitor {
 	private isBareIntegerLiteral(node: ExprNode): boolean {
 		return (
 			node.nodeType === "Constant" &&
-			typeof node.value === "number" &&
+			(typeof node.value === "number" || typeof node.value === "bigint") &&
 			/^\d+$/.test(node.value.toString())
 		);
 	}

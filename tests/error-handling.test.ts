@@ -343,11 +343,19 @@ describe("Unicode and Special Characters", () => {
 });
 
 describe("Number Edge Cases", () => {
-	test("a very large integer literal parses as a Constant", () => {
+	test("a very large integer literal parses as a bigint Constant, preserving its exact value", () => {
 		const largeNum = `1${"0".repeat(100)}`;
 		const expr = parseExpression(largeNum);
 		assertNodeType(expr, "Constant");
+		expect(typeof expr.value).toBe("bigint");
+		expect(expr.value).toBe(BigInt(largeNum));
+	});
+
+	test("an integer literal within the safe-number range parses as a plain number", () => {
+		const expr = parseExpression(String(Number.MAX_SAFE_INTEGER));
+		assertNodeType(expr, "Constant");
 		expect(typeof expr.value).toBe("number");
+		expect(expr.value).toBe(Number.MAX_SAFE_INTEGER);
 	});
 
 	test("scientific notation parses as a numeric Constant", () => {
@@ -727,6 +735,30 @@ describe("Parser Utilities", () => {
 	test("literalEval evaluates binary add/sub of numbers", () => {
 		expect(literalEval("1 + 2")).toBe(3);
 		expect(literalEval("5 - 2")).toBe(3);
+	});
+
+	test("literalEval evaluates unary plus/minus on a bigint", () => {
+		const big = `1${"0".repeat(50)}`;
+		expect(literalEval(big)).toBe(BigInt(big));
+		expect(literalEval(`+${big}`)).toBe(BigInt(big));
+		expect(literalEval(`-${big}`)).toBe(-BigInt(big));
+	});
+
+	test("literalEval evaluates binary add/sub of two bigints precisely", () => {
+		const big = `1${"0".repeat(50)}`;
+		expect(literalEval(`${big} + ${big}`)).toBe(BigInt(big) + BigInt(big));
+		expect(literalEval(`${big} - ${big}`)).toBe(0n);
+	});
+
+	test("literalEval evaluates binary add/sub mixing a bigint and a float as a float", () => {
+		const big = `1${"0".repeat(50)}`;
+		expect(literalEval(`${big} + 1.5`)).toBe(Number(BigInt(big)) + 1.5);
+		expect(literalEval(`${big} - 1.5`)).toBe(Number(BigInt(big)) - 1.5);
+	});
+
+	test("literalEval throws on an unsupported binary operator between two bigints", () => {
+		const big = `1${"0".repeat(50)}`;
+		expect(() => literalEval(`${big} * ${big}`)).toThrow(/Cannot evaluate/);
 	});
 
 	test("literalEval evaluates imaginary literals", () => {

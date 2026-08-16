@@ -91,6 +91,13 @@ export function encodePyAstConstant(constNode, PyComplex, inJoinedStrLiteral = f
 		// comparator special-cases numeric fields to compare loosely.
 		return { $type: "number", $value: value };
 	}
+	if (typeof value === "bigint") {
+		// An integer literal too large for a safe `number` (see
+		// `Parser.parseNumber` in `parser.ts`) - compared against CPython's
+		// int exactly, via its own `str(value)` encoding, rather than
+		// through the lossy `number` path.
+		return { $type: "bigint", $value: value.toString() };
+	}
 	if (typeof value === "string") {
 		if (value === "..." && kind === undefined && quoteStyle === undefined && !inJoinedStrLiteral) {
 			return { $type: "ellipsis", $value: null };
@@ -104,15 +111,47 @@ export function encodePyAstConstant(constNode, PyComplex, inJoinedStrLiteral = f
 }
 
 /**
+ * Converts a numeric `$value` (a JS number, or the "inf"/"-inf"/"nan"
+ * string encoding used for non-finite floats by both {@link
+ * encodePyAstConstant} and `dump_ast.py`) to a JS number suitable for
+ * `compareConstants`'s equality check. Plain `Number("inf")` is `NaN`, not
+ * `Infinity`, so the string forms need converting explicitly.
+ */
+function toComparableNumber(value) {
+	if (value === "inf") return Infinity;
+	if (value === "-inf") return -Infinity;
+	if (value === "nan") return NaN;
+	return Number(value);
+}
+
+/**
  * Deep-compares a CPython constant encoding against a py-ast constant
  * encoding, returning a human-readable mismatch reason or `null` if they're
  * considered equivalent.
  */
 function compareConstants(cpy, pyast) {
+	// A `bigint`-encoded py-ast value is always an exact `int`, so it's
+	// compared against CPython's `int` precisely (as strings/BigInts)
+	// rather than through the lossy `number` path below.
+	if (cpy.$type === "int" && pyast.$type === "bigint") {
+		if (BigInt(cpy.$value) !== BigInt(pyast.$value)) {
+			return `constant value ${cpy.$value} !== ${pyast.$value}`;
+		}
+		return null;
+	}
+	if (pyast.$type === "bigint") {
+		return `constant type ${cpy.$type} !== ${pyast.$type}`;
+	}
+
 	const numericTypes = new Set(["int", "float", "number"]);
 	if (numericTypes.has(cpy.$type) && numericTypes.has(pyast.$type)) {
-		const cpyNum = cpy.$type === "int" ? Number(cpy.$value) : Number(cpy.$value);
-		if (cpyNum !== pyast.$value && !(Number.isNaN(cpyNum) && Number.isNaN(pyast.$value))) {
+		// Both sides may encode a non-finite float as the string "inf"/
+		// "-inf"/"nan" (see encodePyAstConstant and dump_ast.py) rather
+		// than a JS number - `Number("inf")` is `NaN`, not `Infinity`, so
+		// those need converting explicitly before comparing.
+		const cpyNum = toComparableNumber(cpy.$value);
+		const pyastNum = toComparableNumber(pyast.$value);
+		if (cpyNum !== pyastNum && !(Number.isNaN(cpyNum) && Number.isNaN(pyastNum))) {
 			return `constant value ${cpy.$value} !== ${pyast.$value}`;
 		}
 		return null;
@@ -320,6 +359,12 @@ function compareRoundtripConstant(a, b, PyComplex) {
 	}
 	if (typeof a === "number" && typeof b === "number") {
 		if (Number.isNaN(a) && Number.isNaN(b)) return null;
+		return a === b ? null : `constant value ${a} !== ${b}`;
+	}
+	// `JSON.stringify` throws on a bigint (an integer literal too large for
+	// a safe number, see `Parser.parseNumber` in `parser.ts`), so it can't
+	// be used for either operand once one might be a bigint.
+	if (typeof a === "bigint" || typeof b === "bigint") {
 		return a === b ? null : `constant value ${a} !== ${b}`;
 	}
 	return a === b ? null : `constant value ${JSON.stringify(a)} !== ${JSON.stringify(b)}`;

@@ -47,6 +47,10 @@ interface SourcePosition {
 	col_offset: number;
 }
 
+/** Bounds within which an integer literal's value fits a JS `number` losslessly; see {@link Parser.parseNumber}. */
+const MIN_SAFE_BIGINT = BigInt(Number.MIN_SAFE_INTEGER);
+const MAX_SAFE_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
+
 /**
  * Options controlling how {@link parse} lexes and parses Python source.
  */
@@ -946,7 +950,7 @@ export class Parser {
 			this.validateAugAssignTarget(expr);
 			this.setContext(expr, this.createStore());
 			const op = this.parseAugAssignOp();
-			const value = this.parseTest();
+			const value = this.parseTestListWithStar();
 			return {
 				nodeType: "AugAssign",
 				target: expr,
@@ -4184,31 +4188,44 @@ export class Parser {
 	 * hex (`0x`), octal (`0o`), binary (`0b`), float, and decimal-int forms.
 	 * A trailing `j`/`J` (imaginary literal, e.g. `4j`, `1.5e3j`) instead
 	 * yields a {@link PyComplex} with that magnitude as its imaginary part,
-	 * matching CPython's `complex` literal semantics.
+	 * matching CPython's `complex` literal semantics. Integer literals
+	 * (any base) that don't fit in a safe JS number — Python `int`s are
+	 * arbitrary-precision — yield a `bigint` instead of silently
+	 * overflowing to `Infinity`.
 	 * @param value The raw token text of the numeric literal.
-	 * @returns The parsed numeric value, or a {@link PyComplex} for imaginary literals.
+	 * @returns The parsed numeric value, a `bigint` for an integer literal
+	 *   too large for a safe `number`, or a {@link PyComplex} for imaginary
+	 *   literals.
 	 */
-	private parseNumber(value: string): number | PyComplex {
+	private parseNumber(value: string): number | bigint | PyComplex {
 		if (value.endsWith("j") || value.endsWith("J")) {
 			return new PyComplex(0, parseFloat(value.slice(0, -1)));
 		}
 
-		// Handle different number formats
-		if (value.startsWith("0x") || value.startsWith("0X")) {
-			return parseInt(value, 16);
-		} else if (value.startsWith("0o") || value.startsWith("0O")) {
-			return parseInt(value.slice(2), 8);
-		} else if (value.startsWith("0b") || value.startsWith("0B")) {
-			return parseInt(value.slice(2), 2);
-		} else if (
-			value.includes(".") ||
-			value.includes("e") ||
-			value.includes("E")
+		// Hex/octal/binary literals must be checked before the float
+		// heuristic below: a hex literal's digits can themselves contain
+		// `e` (e.g. `0x008e`), which isn't a float exponent there.
+		if (
+			value.startsWith("0x") ||
+			value.startsWith("0X") ||
+			value.startsWith("0o") ||
+			value.startsWith("0O") ||
+			value.startsWith("0b") ||
+			value.startsWith("0B")
 		) {
-			return parseFloat(value);
-		} else {
-			return parseInt(value, 10);
+			const big = BigInt(value);
+			return big >= MIN_SAFE_BIGINT && big <= MAX_SAFE_BIGINT
+				? Number(big)
+				: big;
 		}
+
+		if (value.includes(".") || value.includes("e") || value.includes("E")) {
+			return parseFloat(value);
+		}
+
+		// Decimal integer literal.
+		const big = BigInt(value);
+		return big >= MIN_SAFE_BIGINT && big <= MAX_SAFE_BIGINT ? Number(big) : big;
 	}
 
 	/**
@@ -6121,7 +6138,12 @@ function evaluateLiteral(node: ExprNode): any {
 		case "UnaryOp": {
 			const operand = evaluateLiteral(node.operand);
 			if (node.op.nodeType === "UAdd") {
-				return operand instanceof PyComplex ? operand : +operand;
+				// `+bigint` throws in JS (unlike `-bigint`, which works), so
+				// bigint operands must bypass the unary-plus coercion.
+				if (operand instanceof PyComplex || typeof operand === "bigint") {
+					return operand;
+				}
+				return +operand;
 			} else if (node.op.nodeType === "USub") {
 				return operand instanceof PyComplex
 					? new PyComplex(-operand.real, -operand.imag)
@@ -6140,10 +6162,19 @@ function evaluateLiteral(node: ExprNode): any {
 				} else if (node.op.nodeType === "Sub") {
 					return new PyComplex(l.real - r.real, l.imag - r.imag);
 				}
-			} else if (node.op.nodeType === "Add") {
-				return left + right;
-			} else if (node.op.nodeType === "Sub") {
-				return left - right;
+			}
+			// JS's `+`/`-` throw when mixing a `bigint` with a plain
+			// `number` (e.g. a huge-int literal combined with a float);
+			// only keep bigint+bigint precise, since Python itself
+			// promotes an int-float mix to float.
+			if (typeof left === "bigint" && typeof right === "bigint") {
+				if (node.op.nodeType === "Add") return left + right;
+				if (node.op.nodeType === "Sub") return left - right;
+			} else {
+				const l = Number(left);
+				const r = Number(right);
+				if (node.op.nodeType === "Add") return l + r;
+				if (node.op.nodeType === "Sub") return l - r;
 			}
 			break;
 		}
