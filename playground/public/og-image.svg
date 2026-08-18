@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#161616"/>
+      <stop offset="100%" stop-color="#1e1e1e"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="78%" cy="38%" r="55%">
+      <stop offset="0%" stop-color="#306998" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#306998" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect width="1200" height="630" fill="url(#glow)"/>
+
+  <text x="90" y="230" font-family="'Fira Code', 'SFMono-Regular', Consolas, monospace" font-size="26" fill="#4B8BBE" font-weight="500">py-ast</text>
+  <text x="90" y="320" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="80" fill="#f4f4f5" font-weight="700">PyAST Playground</text>
+  <text x="90" y="378" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="30" fill="#9aa4b2" font-weight="400">Explore Python ASTs, right in your browser</text>
+
+  <g font-family="'Fira Code', 'SFMono-Regular', Consolas, monospace" font-size="22" fill="#6b7280">
+    <text x="90" y="440">Tree &#183; JSON &#183; Call-graph complexity &#183; Client-side</text>
+  </g>
+
+  <g transform="translate(940,150)" stroke="#9aa4b2" stroke-width="7" stroke-linecap="round" fill="none">
+    <line x1="0" y1="0" x2="-70" y2="115"/>
+    <line x1="0" y1="0" x2="70" y2="115"/>
+  </g>
+  <g transform="translate(940,150)" stroke="#161616" stroke-width="4">
+    <circle cx="0" cy="0" r="34" fill="#FFD43B"/>
+    <circle cx="-70" cy="115" r="28" fill="#4B8BBE"/>
+    <circle cx="70" cy="115" r="28" fill="#306998"/>
+  </g>
+
+  <rect x="0" y="620" width="1200" height="10" fill="#FFD43B"/>
+</svg>

@@ -1,0 +1,21 @@
+{
+	"name": "PyAST Playground",
+	"short_name": "PyAST",
+	"description": "An astexplorer.net-style playground for py-ast: edit Python source and see its AST as a foldable tree or JSON, with a cyclomatic-complexity call-graph view.",
+	"start_url": "/",
+	"display": "standalone",
+	"background_color": "#161616",
+	"theme_color": "#161616",
+	"icons": [
+		{
+			"src": "/favicon.svg",
+			"sizes": "any",
+			"type": "image/svg+xml"
+		},
+		{
+			"src": "/favicon.ico",
+			"sizes": "48x48",
+			"type": "image/x-icon"
+		}
+	]
+}
