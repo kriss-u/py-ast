@@ -1,6 +1,6 @@
 {
 	"name": "@kriss-u/py-ast",
-	"version": "1.15.1",
+	"version": "1.16.0",
 	"exports": "./src/index.ts",
 	"license": "MIT",
 	"publish": {
