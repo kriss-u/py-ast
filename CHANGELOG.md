@@ -1,3 +1,19 @@
+# [1.16.0](https://github.com/kriss-u/py-ast/compare/v1.15.1...v1.16.0) (2026-08-18)
+
+
+### Bug Fixes
+
+* expand the tree block automatically on typing [skip ci] ([27f6884](https://github.com/kriss-u/py-ast/commit/27f688489c5c855bf397b13d0ee323a520dc5692))
+* move badge to the border corner [skip ci] ([a7bb012](https://github.com/kriss-u/py-ast/commit/a7bb012b058ec4d9e44f529c5d388e6c9a9bcb17))
+* remove the jitter when typing on code editor [skip ci] ([da29a56](https://github.com/kriss-u/py-ast/commit/da29a5627b2d8e630e6413b0e6587fc49551c89f))
+* update jsr json file on publish [skip ci] ([0a48f57](https://github.com/kriss-u/py-ast/commit/0a48f575052ce7b8745d6aeab939508f75261805))
+
+
+### Features
+
+* add cyclomatic complexity flow analysis on playground [skip ci] ([bf80f8c](https://github.com/kriss-u/py-ast/commit/bf80f8ce9892090b63f21b9f1bf526624c9725db))
+* **playground:** add persistence using indexeddb [skip ci] ([0aa1ebb](https://github.com/kriss-u/py-ast/commit/0aa1ebbd54e15aedc74b9a349fc24d3b4a212bec))
+
 ## [1.15.1](https://github.com/kriss-u/py-ast/compare/v1.15.0...v1.15.1) (2026-08-16)
 
 
