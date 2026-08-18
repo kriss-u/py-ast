@@ -19,9 +19,9 @@ as defined by the Python ASDL grammar specification. This library provides
 complete parsing, unparsing, and AST traversal infrastructure, with
 bidirectional Python code ↔ AST conversion.
 
-📖 **[API documentation](https://kriss-u.github.io/py-ast/)** ·
-🛝 **[Playground](https://pyast.nepcodex.com)** (Tree/JSON views of the AST, plus a Flow tab
-with a function-level cyclomatic-complexity call-graph heatmap)
+📖 **[API documentation](https://kriss-u.github.io/py-ast/)** · 🛝
+**[Playground](https://pyast.nepcodex.com)** (Tree/JSON views of the AST, plus a
+Flow tab with a function-level cyclomatic-complexity call-graph heatmap)
 
 ## Features
 
@@ -34,7 +34,8 @@ with a function-level cyclomatic-complexity call-graph heatmap)
 - �🚶 **AST traversal** - Walk and visit all nodes in the syntax tree
 - 📄 **JSON serialization** - Export ASTs to JSON format for analysis or storage
 - 🔧 **TypeScript types** - Full type definitions for all AST nodes
-- 🐍 **CPython-compatible** - AST node shapes mirror Python's own `ast` module (field names, node types, `lineno`/`col_offset`/`end_lineno`/`end_col_offset`)
+- 🐍 **CPython-compatible** - AST node shapes mirror Python's own `ast` module
+  (field names, node types, `lineno`/`col_offset`/`end_lineno`/`end_col_offset`)
 
 ## Installation
 
@@ -1121,4 +1122,6 @@ MIT License
 
 ## AI Usage
 
-Most part of this project is built using Claude Code.
+This project is developed with the help of Claude Code, under my continuous
+involvement — design decisions, review, and direction throughout are mine, and
+development is ongoing.
