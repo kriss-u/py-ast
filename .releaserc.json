@@ -7,7 +7,12 @@
 		}
 	],
 	"plugins": [
-		"@semantic-release/commit-analyzer",
+		[
+			"@semantic-release/commit-analyzer",
+			{
+				"releaseRules": [{ "scope": "playground", "release": false }]
+			}
+		],
 		"@semantic-release/release-notes-generator",
 		[
 			"@semantic-release/changelog",
