@@ -55,7 +55,7 @@ const SPACING_BY_DENSITY: Record<LayoutDensity, { nodeSpacing: number; rankSpaci
 	spacious: { nodeSpacing: 80, rankSpacing: 90 },
 };
 
-export const DEFAULT_LAYOUT_OPTIONS: LayoutOptions = { direction: "TD", density: "compact" };
+export const DEFAULT_LAYOUT_OPTIONS: LayoutOptions = { direction: "TD", density: "comfortable" };
 
 /**
  * Renders a {@link CallGraph} as Mermaid `flowchart` source: one box per
