@@ -23,6 +23,34 @@ npm run corpus            # or: node scripts/corpus/run.mjs [options] [dir ...]
 npm run corpus:roundtrip  # or: node scripts/corpus/roundtrip.mjs [options] [dir ...]
 ```
 
+### Pinned repository corpus
+
+`repos.json` pins ~35 heavily used Python projects (CPython's own `Lib/`
+and `Lib/test/`, django, numpy, pandas, scipy, pytorch, transformers,
+home-assistant, airflow, ruff/black test fixtures, ...) to release tags.
+Unlike the installed-packages default, this includes test suites (which
+`pip install` usually omits and which carry most of the syntax edge cases)
+and the same files on every machine.
+
+```sh
+npm run corpus:fetch                                  # sparse *.py-only clones into scripts/corpus/.cache/
+npm run corpus -- --repos --python python3.15         # all fetched repos
+npm run corpus:roundtrip -- --repos django,cpython    # a subset
+```
+
+`fetch.mjs` options: `--only a,b` (subset), `--head` (default-branch tip
+instead of the pinned tag), `--bump` (rewrite every `ref` in `repos.json`
+to the newest remote tag matching its `tagPattern` — run this, then
+`corpus:fetch`, to refresh the corpus to current releases), `--jobs N`.
+Re-running `corpus:fetch` only re-clones repos whose pinned ref changed.
+The full set is ~60k files / ~900 MB on disk.
+
+Pass `--python` the newest interpreter you have: these repos already use
+3.14/3.15 syntax (`except A, B:`, t-strings, `[*x for x in y]`), and any file
+the oracle interpreter rejects is skipped as a "CPython syntax error" rather
+than checked. The large node heap the full set needs may also call for
+`node --max-old-space-size=8192 scripts/corpus/run.mjs ...`.
+
 Options (both tools):
 
 - `--limit N` — only process the first N files found.
@@ -31,6 +59,10 @@ Options (both tools):
   `scripts/corpus/report.json` / `roundtrip-report.json`).
 - `--stdlib-only` — skip third-party packages, use only the CPython stdlib.
 - `--quiet` — print only the summary, not per-file diffs.
+- `--repos [a,b]` — use the repos fetched by `corpus:fetch` (all, or the
+  named subset), in addition to any directories given.
+- `--python PATH` — interpreter used as the CPython oracle and for package
+  discovery (default `python3`; also settable via `$CORPUS_PYTHON`).
 
 With no directories given, the corpus is the local CPython stdlib
 (`sysconfig.get_path('stdlib')`) plus whichever of a curated list of popular
@@ -55,7 +87,9 @@ path/to/some/repo`.
   `dist/index.esm.js`).
 - `roundtrip.mjs` collects the same files, and for each one calls
   `parse` → `unparse` → `parse` in-process, comparing the first and third
-  results.
+  results. Since `Ellipsis` and the string `"..."` share a JS value, as do
+  bytes and str literals, constants are also compared by kind (via
+  `quote_style`), so a literal can't silently change type on the way.
 - `compare.mjs` has the normalization and structural-diff logic for both
   tools (`diffTrees` for run.mjs's CPython-vs-py-ast comparison,
   `diffRoundtrip` for roundtrip.mjs's py-ast-vs-py-ast comparison). See the
@@ -84,6 +118,13 @@ repeatedly in reports until addressed:
   (`compare.mjs`) explicitly excludes any string containing an unresolved
   `\N{...}` from being reported as a value mismatch, rather than flagging it
   every run.
+- **`is_lazy`** (CPython 3.15+) is `0` on every eager import in CPython but
+  absent in py-ast, which only sets it (to `1`) on a `lazy` import. The
+  differ drops CPython's `is_lazy: 0`, so only lazy imports are compared.
+- **Source decoding**: py-ast takes an already-decoded `string`, so a
+  leading BOM or a PEP 263 coding declaration is the caller's job.
+  `dump_ast.py` hands back the text CPython decoded for such files, and
+  `run.mjs` parses that, so they're compared like any other file.
 - **`type_ignores`** has no py-ast field at all (there's no `# type:
   ignore` comment tracking), stripped from the CPython side before
   `run.mjs` diffs.

@@ -140,3 +140,5 @@ jest_*
 # `npm run corpus` / `npm run corpus:roundtrip`)
 scripts/corpus/report*.json
 scripts/corpus/roundtrip-report*.json
+# Sparse clones of the repos in scripts/corpus/repos.json (`npm run corpus:fetch`)
+scripts/corpus/.cache/

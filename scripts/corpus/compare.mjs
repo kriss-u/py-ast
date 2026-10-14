@@ -34,13 +34,19 @@ const NON_STRUCTURAL_FIELDS = new Set(["inlineComment", "comments"]);
 // no field for it at all) on every single Module node in the corpus.
 const CPYTHON_ONLY_NOISE_FIELDS = new Set(["type_ignores"]);
 
-/** Strips CPython fields that are always-empty noise given how `dump_ast.py` invokes `ast.parse`. */
+/**
+ * Strips CPython fields that are always-empty noise given how `dump_ast.py`
+ * invokes `ast.parse`. Also drops `is_lazy: 0`: CPython 3.15+ sets it on
+ * every eager `Import`/`ImportFrom`, whereas py-ast only sets it (to `1`)
+ * on a `lazy` import, so only a lazy import's flag is worth comparing.
+ */
 export function stripCpythonNoise(node) {
 	if (Array.isArray(node)) return node.map(stripCpythonNoise);
 	if (node && typeof node === "object" && "nodeType" in node) {
 		const out = {};
 		for (const [key, value] of Object.entries(node)) {
 			if (CPYTHON_ONLY_NOISE_FIELDS.has(key)) continue;
+			if (key === "is_lazy" && value === 0) continue;
 			out[key] = stripCpythonNoise(value);
 		}
 		return out;
@@ -168,7 +174,12 @@ function compareConstants(cpy, pyast) {
 		return null;
 	}
 	if (cpy.$type === "complex") {
-		if (cpy.$value.real !== pyast.$value.real || cpy.$value.imag !== pyast.$value.imag) {
+		const sameNumber = (a, b) => {
+			const x = toComparableNumber(a);
+			const y = toComparableNumber(b);
+			return x === y || (Number.isNaN(x) && Number.isNaN(y));
+		};
+		if (!sameNumber(cpy.$value.real, pyast.$value.real) || !sameNumber(cpy.$value.imag, pyast.$value.imag)) {
 			return `complex constant mismatch ${JSON.stringify(cpy.$value)} !== ${JSON.stringify(pyast.$value)}`;
 		}
 		return null;
@@ -308,7 +319,8 @@ export function diffRoundtrip(a, b, PyComplex, path, diffs, maxDiffs) {
 		for (const key of Object.keys(a)) {
 			if (key === "nodeType" || ROUNDTRIP_IGNORED_FIELDS.has(key)) continue;
 			if (key === "value" && a.nodeType === "Constant") {
-				const reason = compareRoundtripConstant(a.value, b.value, PyComplex);
+				const reason =
+					compareConstantKind(a, b) ?? compareRoundtripConstant(a.value, b.value, PyComplex);
 				if (reason) diffs.push({ path: `${path}.value`, message: reason });
 				continue;
 			}
@@ -345,6 +357,21 @@ export function diffRoundtrip(a, b, PyComplex, path, diffs, maxDiffs) {
 	if (a !== b) {
 		diffs.push({ path, message: `${JSON.stringify(a)} !== ${JSON.stringify(b)}` });
 	}
+}
+
+/**
+ * Reports a round trip that turned one kind of literal into another while
+ * leaving the JS value alone: `Ellipsis` and the string `"..."` share the
+ * value `"..."`, and bytes and str literals are both JS strings, so only the
+ * recorded `quote_style` tells them apart.
+ */
+function compareConstantKind(a, b) {
+	const describe = (node) => {
+		if (node.value === "..." && node.quote_style === undefined) return "ellipsis";
+		return typeof node.quote_style === "string" && /^[a-z]*b/i.test(node.quote_style) ? "bytes" : "other";
+	};
+	const [ka, kb] = [describe(a), describe(b)];
+	return ka === kb ? null : `constant kind ${ka} !== ${kb}`;
 }
 
 function compareRoundtripConstant(a, b, PyComplex) {

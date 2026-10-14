@@ -25,34 +25,13 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { diffRoundtrip, stripExtensions } from "./compare.mjs";
-import { collectPyFiles, defaultCorpusDirs } from "./discover.mjs";
+import { collectPyFiles, parseCorpusArgs, resolveCorpusDirs } from "./discover.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
 
-function parseArgs(argv) {
-	const opts = {
-		limit: Infinity,
-		maxDiffs: 5,
-		report: path.join(__dirname, "roundtrip-report.json"),
-		stdlibOnly: false,
-		quiet: false,
-		dirs: [],
-	};
-	for (let i = 0; i < argv.length; i++) {
-		const arg = argv[i];
-		if (arg === "--limit") opts.limit = Number(argv[++i]);
-		else if (arg === "--max-diffs") opts.maxDiffs = Number(argv[++i]);
-		else if (arg === "--report") opts.report = path.resolve(argv[++i]);
-		else if (arg === "--stdlib-only") opts.stdlibOnly = true;
-		else if (arg === "--quiet") opts.quiet = true;
-		else opts.dirs.push(path.resolve(argv[i]));
-	}
-	return opts;
-}
-
 async function main() {
-	const opts = parseArgs(process.argv.slice(2));
+	const opts = parseCorpusArgs(process.argv.slice(2), path.join(__dirname, "roundtrip-report.json"));
 
 	const distPath = path.join(REPO_ROOT, "dist", "index.esm.js");
 	if (!existsSync(distPath)) {
@@ -61,7 +40,7 @@ async function main() {
 	}
 	const { parse, unparse, PyComplex } = await import(distPath);
 
-	const corpusDirs = opts.dirs.length > 0 ? opts.dirs : await defaultCorpusDirs(opts.stdlibOnly);
+	const corpusDirs = await resolveCorpusDirs(opts);
 	console.log("Corpus directories:");
 	for (const d of corpusDirs) console.log(`  ${d}`);
 
@@ -84,7 +63,7 @@ async function main() {
 		let source;
 		let original;
 		try {
-			source = await readFile(file, "utf8");
+			source = (await readFile(file, "utf8")).replace(/^\uFEFF/, "");
 			original = parse(source, { filename: file });
 		} catch (err) {
 			// Not py-ast's fault for this tool's purposes if it can't even
