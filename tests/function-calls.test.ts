@@ -103,7 +103,7 @@ describe("Comprehensions", () => {
 		const expr = parseExpression("{k: v for k, v in items.items()}");
 		assertNodeType(expr, "DictComp");
 		expect(expr.key.nodeType).toBe("Name");
-		expect(expr.value.nodeType).toBe("Name");
+		expect(expr.value?.nodeType).toBe("Name");
 		expect(expr.generators).toHaveLength(1);
 	});
 

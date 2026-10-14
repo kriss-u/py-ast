@@ -3,6 +3,8 @@
  * Converts Python source code into a stream of tokens
  */
 
+import { quoteContextAt, scanInterpolatedBody } from "./interpolation.js";
+
 /**
  * The kind of a lexical token produced by {@link Lexer}.
  *
@@ -264,6 +266,8 @@ export class Lexer {
 	private bracketLevel = 0;
 	/** Nesting depth of `{`/`}`; while > 0, newlines and indentation are not significant (implicit line joining). */
 	private braceLevel = 0;
+	/** Whether the whole source behaves as if inside brackets (see the constructor's `options`). */
+	private implicitLineJoining: boolean;
 
 	/**
 	 * @param source - The full Python source text to tokenize. Line endings
@@ -272,10 +276,25 @@ export class Lexer {
 	 * literals), so indentation tracking isn't thrown off by `\r` and
 	 * `lineno`/`col_offset` land where CPython puts them regardless of the
 	 * source file's original line-ending style.
+	 * @param options - `implicitLineJoining` makes the whole source behave as
+	 * if it were inside brackets, so newlines and indentation are never
+	 * significant. This is how CPython treats the expression in an
+	 * f-string/t-string replacement field, which can span lines freely.
 	 */
-	constructor(source: string) {
+	constructor(source: string, options: { implicitLineJoining?: boolean } = {}) {
 		this.source = source.replace(/\r\n?/g, "\n");
 		this.position = { line: 1, column: 0, index: 0 };
+		this.implicitLineJoining = options.implicitLineJoining ?? false;
+	}
+
+	/** Whether newlines and indentation are currently insignificant (implicit line joining). */
+	private insideBrackets(): boolean {
+		return (
+			this.implicitLineJoining ||
+			this.parenLevel > 0 ||
+			this.bracketLevel > 0 ||
+			this.braceLevel > 0
+		);
 	}
 
 	/**
@@ -355,7 +374,7 @@ export class Lexer {
 		}
 
 		// Skip whitespace (except newlines)
-		if (c === " " || c === "\t" || c === "\r") {
+		if (c === " " || c === "\t" || c === "\r" || c === "\f") {
 			this.advance();
 			return;
 		}
@@ -385,7 +404,7 @@ export class Lexer {
 		}
 
 		// Identifiers and keywords - check for f-strings/t-strings first
-		if (this.isAlpha(c) || c === "_") {
+		if (this.isAlpha(this.peekCodePoint()) || c === "_") {
 			// Check for a bare `f"..."` or `t"..."` (single-letter prefix
 			// immediately followed by a quote); multi-character prefix
 			// combos (`rf`, `tr`, etc.) fall through to scanIdentifier.
@@ -435,12 +454,7 @@ export class Lexer {
 		const start = { ...this.position }; // Create a copy
 		this.advance(); // consume '\n'
 
-		// Only emit NEWLINE if we're not inside parentheses/brackets/braces
-		if (
-			this.parenLevel === 0 &&
-			this.bracketLevel === 0 &&
-			this.braceLevel === 0
-		) {
+		if (!this.insideBrackets()) {
 			this.addTokenAt(TokenType.NEWLINE, "\n", start);
 		}
 
@@ -461,6 +475,11 @@ export class Lexer {
 	 */
 	private scanIndentation(): void {
 		let indent = 0;
+		// Mirrors CPython's tokenizer: indentation can't be split across
+		// physical lines, so the column of the first line-start `\`
+		// continuation decides the level — unless that column is 0, in which
+		// case counting carries on into the continued line.
+		let continuationIndent = 0;
 		while (this.position.index < this.source.length) {
 			const c = this.peek();
 			if (c === " ") {
@@ -469,10 +488,19 @@ export class Lexer {
 			} else if (c === "\t") {
 				indent += 8; // Tab counts as 8 spaces
 				this.advance();
+			} else if (c === "\f") {
+				// A form feed resets the column count, as in CPython.
+				indent = 0;
+				this.advance();
+			} else if (c === "\\" && this.peekNext() === "\n") {
+				continuationIndent ||= indent;
+				this.advance();
+				this.advance();
 			} else {
 				break;
 			}
 		}
+		indent = continuationIndent || indent;
 
 		// Skip empty lines and comment-only lines
 		const c = this.peek();
@@ -481,7 +509,7 @@ export class Lexer {
 		}
 
 		// Skip indentation tracking when inside parentheses, brackets, or braces
-		if (this.parenLevel > 0 || this.bracketLevel > 0 || this.braceLevel > 0) {
+		if (this.insideBrackets()) {
 			return;
 		}
 
@@ -615,151 +643,48 @@ export class Lexer {
 	 * — is captured as a single `STRING` token's value; nested expressions
 	 * are not tokenized separately.
 	 *
-	 * Brace nesting is tracked via a local `braceLevel` so that the closing
-	 * quote is only recognized outside of a `{...}` field (e.g. a quote
-	 * character used inside the expression doesn't terminate the literal).
-	 *
 	 * @param prefixChar The single prefix letter already identified (`f`/`F`
 	 *   for f-strings, `t`/`T` for t-strings/PEP 750 template strings).
-	 * @throws {Error} If a single-quoted literal contains a raw newline
-	 *   outside of a replacement field, or if it is unterminated at end of
-	 *   source.
+	 * @throws {Error} If the literal is unterminated.
 	 */
 	private scanInterpolatedStringLiteral(prefixChar: string): void {
-		const start = { ...this.position }; // Create a copy
-
-		// Consume prefix letter ('f' or 't')
-		let value = this.peek();
+		const start = { ...this.position };
 		this.advance();
-		const literalKind =
-			prefixChar.toLowerCase() === "t" ? "t-string" : "f-string";
+		this.scanInterpolatedRest(prefixChar, start);
+	}
 
-		// Get the quote character
-		const quote = this.peek();
-		value += quote;
-		this.advance();
-
-		// Check for triple quotes
-		const isTripleQuote = this.peek() === quote && this.peekNext() === quote;
-		if (isTripleQuote) {
-			value += quote + quote;
-			this.advance(); // consume second quote
-			this.advance(); // consume third quote
+	/**
+	 * Scans the rest of an f-string/t-string literal once its prefix has
+	 * been consumed and the current character is its opening quote, emitting
+	 * the whole literal as one `STRING` token. Where the literal ends is
+	 * decided by {@link scanInterpolatedBody}, which understands nested
+	 * strings, comments, and format specs inside replacement fields (PEP 701).
+	 *
+	 * @param prefix The literal's prefix letters (e.g. `"f"`, `"rT"`).
+	 * @param start The position where the prefix began.
+	 * @throws {Error} If the literal is unterminated (end of source, a raw
+	 *   newline in a single-quoted literal's text, or an unclosed field).
+	 */
+	private scanInterpolatedRest(prefix: string, start: Position): void {
+		const ctx = quoteContextAt(this.source, this.position.index, prefix);
+		const literalKind = /t/i.test(prefix) ? "t-string" : "f-string";
+		const end = scanInterpolatedBody(
+			this.source,
+			this.position.index + (ctx.triple ? 3 : 1),
+			ctx,
+		);
+		if (end === -1) {
+			const tripleQuoted = ctx.triple ? "triple-quoted " : "";
+			throw new Error(
+				`Unterminated ${tripleQuoted}${literalKind} literal at line ${start.line}`,
+			);
 		}
-
-		let braceLevel = 0;
-		let stringClosed = false;
-
-		while (this.position.index < this.source.length) {
-			const c = this.peek();
-
-			// Handle escape sequences. `\{`/`\}` are not a recognized Python
-			// escape (CPython leaves the backslash literal, with just a
-			// deprecation warning) and, critically, does NOT stop the brace
-			// from opening/closing a field — e.g. `f'\{x}'` still
-			// interpolates `x`. So a backslash must not swallow a following
-			// brace; only consume the pair for any other character, where
-			// pairing prevents that character (e.g. the closing quote) from
-			// being separately recognized.
-			if (c === "\\") {
-				value += c;
-				this.advance();
-				if (
-					this.position.index < this.source.length &&
-					this.peek() !== "{" &&
-					this.peek() !== "}"
-				) {
-					value += this.peek();
-					this.advance();
-				}
-				continue;
-			}
-
-			// Track braces to handle nested expressions. Outside of any
-			// field (`braceLevel === 0`), `{{`/`}}` is an escaped literal
-			// brace — not part of the grammar's rule for the literal text,
-			// so it must NOT open/close a field either, or a literal brace
-			// pair before the closing quote (as in `f'{{"[{x} '`) reads as
-			// unbalanced nesting and the literal looks unterminated. Inside
-			// a field (`braceLevel > 0`), braces are real Python syntax
-			// (e.g. a dict/set display) and always nest normally — the
-			// doubling escape only applies to the outer literal text.
-			if (c === "{") {
-				if (braceLevel === 0 && this.peekNext() === "{") {
-					value += c + this.peekNext();
-					this.advance();
-					this.advance();
-					continue;
-				}
-				braceLevel++;
-				value += c;
-				this.advance();
-				continue;
-			}
-
-			if (c === "}") {
-				if (braceLevel === 0 && this.peekNext() === "}") {
-					value += c + this.peekNext();
-					this.advance();
-					this.advance();
-					continue;
-				}
-				if (braceLevel > 0) {
-					braceLevel--;
-				}
-				value += c;
-				this.advance();
-				continue;
-			}
-
-			// Check for closing quote only when not inside braces
-			if (braceLevel === 0) {
-				if (isTripleQuote) {
-					if (
-						c === quote &&
-						this.peekNext() === quote &&
-						this.peek(2) === quote
-					) {
-						value += quote + quote + quote;
-						this.advance(); // consume first quote
-						this.advance(); // consume second quote
-						this.advance(); // consume third quote
-						stringClosed = true;
-						break;
-					}
-				} else {
-					if (c === quote) {
-						value += quote;
-						this.advance();
-						stringClosed = true;
-						break;
-					}
-					if (c === "\n") {
-						throw new Error(
-							`Unterminated ${literalKind} literal at line ${this.position.line}`,
-						);
-					}
-				}
-			}
-
-			value += c;
-			this.advance();
-		}
-
-		// If we reached end of source without closing the literal, it's an error
-		if (!stringClosed) {
-			if (isTripleQuote) {
-				throw new Error(
-					`Unterminated triple-quoted ${literalKind} literal at line ${start.line}`,
-				);
-			} else {
-				throw new Error(
-					`Unterminated ${literalKind} literal at line ${start.line}`,
-				);
-			}
-		}
-
-		this.addTokenAt(TokenType.STRING, value, start);
+		while (this.position.index < end) this.advance();
+		this.addTokenAt(
+			TokenType.STRING,
+			this.source.slice(start.index, end),
+			start,
+		);
 	}
 
 	/**
@@ -889,12 +814,10 @@ export class Lexer {
 		const start = { ...this.position }; // Create a copy
 		let value = "";
 
-		while (
-			this.position.index < this.source.length &&
-			(this.isAlphaNumeric(this.peek()) || this.peek() === "_")
-		) {
-			value += this.peek();
-			this.advance();
+		while (this.isAlphaNumeric(this.peekCodePoint())) {
+			const codePoint = this.peekCodePoint();
+			value += codePoint;
+			for (let i = 0; i < codePoint.length; i++) this.advance();
 		}
 
 		// Check if this is a string prefix (f, r, b, u, fr, rf, br, rb)
@@ -907,8 +830,14 @@ export class Lexer {
 			return;
 		}
 
+		// CPython matches keywords against the raw spelling, then NFKC-
+		// normalizes identifiers (PEP 3131), so `ｗｉｄｔｈ` names `width`.
 		const tokenType = KEYWORDS.get(value) || TokenType.NAME;
-		this.addTokenAt(tokenType, value, start);
+		this.addTokenAt(
+			tokenType,
+			tokenType === TokenType.NAME ? value.normalize("NFKC") : value,
+			start,
+		);
 	}
 
 	/**
@@ -962,6 +891,11 @@ export class Lexer {
 	 *   newline.
 	 */
 	private scanPrefixedString(prefix: string, start: Position): void {
+		if (/[ft]/i.test(prefix)) {
+			this.scanInterpolatedRest(prefix, start);
+			return;
+		}
+
 		const quote = this.peek();
 		this.advance(); // consume opening quote
 
@@ -977,88 +911,41 @@ export class Lexer {
 			value += quote + quote;
 		}
 
-		const tracksBraces = /[ft]/i.test(prefix);
-		let braceLevel = 0;
-
 		while (this.position.index < this.source.length) {
 			const c = this.peek();
 
 			if (c === "\\") {
 				value += c;
 				this.advance();
-				// See scanInterpolatedStringLiteral's comment: `\{`/`\}`
-				// isn't a recognized escape, so the brace must still be
-				// free to open/close a field when tracksBraces is set.
-				if (
-					this.position.index < this.source.length &&
-					(!tracksBraces || (this.peek() !== "{" && this.peek() !== "}"))
-				) {
+				if (this.position.index < this.source.length) {
 					value += this.peek();
 					this.advance();
 				}
 				continue;
 			}
 
-			if (tracksBraces) {
-				// Mirrors scanInterpolatedStringLiteral's `{{`/`}}` escape
-				// handling: outside a field, a doubled brace is a literal
-				// brace and must not affect nesting, or a literal brace pair
-				// before the closing quote misreads as unbalanced nesting
-				// and the string is never seen as closed (see
-				// scanInterpolatedStringLiteral's comment for the failure
-				// mode this avoids).
-				if (c === "{") {
-					if (braceLevel === 0 && this.peekNext() === "{") {
-						value += c + this.peekNext();
-						this.advance();
-						this.advance();
-						continue;
-					}
-					braceLevel++;
-					value += c;
-					this.advance();
-					continue;
+			if (isTripleQuote) {
+				if (
+					c === quote &&
+					this.peekNext() === quote &&
+					this.peek(2) === quote
+				) {
+					value += quote + quote + quote;
+					this.advance(); // consume first quote
+					this.advance(); // consume second quote
+					this.advance(); // consume third quote
+					break;
 				}
-				if (c === "}") {
-					if (braceLevel === 0 && this.peekNext() === "}") {
-						value += c + this.peekNext();
-						this.advance();
-						this.advance();
-						continue;
-					}
-					if (braceLevel > 0) {
-						braceLevel--;
-					}
-					value += c;
+			} else {
+				if (c === quote) {
+					value += quote;
 					this.advance();
-					continue;
+					break;
 				}
-			}
-
-			if (braceLevel === 0) {
-				if (isTripleQuote) {
-					if (
-						c === quote &&
-						this.peekNext() === quote &&
-						this.peek(2) === quote
-					) {
-						value += quote + quote + quote;
-						this.advance(); // consume first quote
-						this.advance(); // consume second quote
-						this.advance(); // consume third quote
-						break;
-					}
-				} else {
-					if (c === quote) {
-						value += quote;
-						this.advance();
-						break;
-					}
-					if (c === "\n") {
-						throw new Error(
-							`Unterminated string literal at line ${this.position.line}`,
-						);
-					}
+				if (c === "\n") {
+					throw new Error(
+						`Unterminated string literal at line ${this.position.line}`,
+					);
 				}
 			}
 
@@ -1321,6 +1208,18 @@ export class Lexer {
 	private peek(offset: number = 0): string {
 		const index = this.position.index + offset;
 		return index < this.source.length ? this.source[index] : "";
+	}
+
+	/**
+	 * Returns the full code point at the current position without consuming
+	 * it: two UTF-16 units for a character outside the Basic Multilingual
+	 * Plane (e.g. `𝒞`), so it can be classified as a whole.
+	 *
+	 * @returns The code point as a string, or `""` at end of source.
+	 */
+	private peekCodePoint(): string {
+		const codePoint = this.source.codePointAt(this.position.index);
+		return codePoint === undefined ? "" : String.fromCodePoint(codePoint);
 	}
 
 	/**

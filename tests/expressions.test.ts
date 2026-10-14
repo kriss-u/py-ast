@@ -776,17 +776,15 @@ describe("F-string Parsing Edge Cases", () => {
 		expect(ast.body[0].nodeType).toBe("Expr");
 	});
 
-	test("unterminated nested string literal throws", () => {
-		expect(() => parseCode('f"{\'a}"\n')).toThrow(
-			/Unterminated string starting at position/,
-		);
-	});
-
-	test("unterminated nested f-string throws", () => {
-		expect(() => parseCode('f"{f\'{x}}"\n')).toThrow(
-			/Unterminated f-string\/t-string starting at position/,
-		);
-	});
+	test.each([
+		["string literal", 'f"{\'a}"\n'],
+		["f-string", 'f"{f\'{x}}"\n'],
+	])(
+		"an unterminated nested %s makes the whole f-string unterminated",
+		(_, src) => {
+			expect(() => parseCode(src)).toThrow(/Unterminated f-string literal/);
+		},
+	);
 
 	test("brace-containing dict literal inside interpolation", () => {
 		const ast = parseCode('f"{ {1: 2} }"\n');

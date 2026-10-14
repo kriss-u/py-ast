@@ -674,14 +674,6 @@ describe("Call argument ordering (verified against CPython 3.13)", () => {
 	});
 });
 
-describe("Comprehension unpacking (verified against CPython 3.13)", () => {
-	test("starred iterable unpacking in a list comprehension is rejected", () => {
-		expect(() => parseCode("[*x for x in y]")).toThrow(
-			/iterable unpacking cannot be used in comprehension/,
-		);
-	});
-});
-
 describe("Performance and Stress Tests", () => {
 	test("a 1000-element list literal parses fully", () => {
 		const items = Array.from({ length: 1000 }, (_, i) => i).join(", ");

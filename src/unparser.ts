@@ -10,6 +10,7 @@ import type {
 	OperatorNode,
 	StmtNode,
 	UnaryOpNode,
+	WithItem,
 } from "./types.js";
 import { PyComplex } from "./types.js";
 import { NodeVisitor } from "./visitor.js";
@@ -69,6 +70,8 @@ interface UnparseContext {
 	indent: number;
 	indentString: string;
 	isFirstStatement: boolean;
+	/** An expression statement's value, the one place a `yield` may render unparenthesized. */
+	bareYieldValue?: ExprNode;
 	// For handling inline comments during unparsing
 	inlineComments?: Comment[];
 	commentsByLine?: Map<number, Comment[]>;
@@ -312,11 +315,7 @@ class Unparser extends NodeVisitor {
 				// get double-wrapped, `*(())`, once by `visit_Tuple` itself
 				// and once more by the caller's precedence check.
 				return Precedence.ATOM;
-			case "Yield":
-			case "YieldFrom":
-				return Precedence.YIELD;
 			case "IfExp":
-			case "NamedExpr":
 			case "Lambda":
 				return Precedence.TEST;
 			case "BoolOp":
@@ -749,16 +748,7 @@ class Unparser extends NodeVisitor {
 	/** Renders an expression-statement (an expression evaluated for its side effects). */
 	visit_Expr(node: Extract<StmtNode, { nodeType: "Expr" }>): void {
 		this.fill();
-		// A bare `x := 1` expression statement is a syntax error in CPython
-		// (the walrus target needs enclosing parens outside of contexts like
-		// `if`/`while` conditions and comprehensions) — match `ast.unparse`,
-		// which always parenthesizes a top-level `NamedExpr` statement.
-		if (node.value.nodeType === "NamedExpr") {
-			this.write("(");
-			this.visit(node.value);
-			this.write(")");
-			return;
-		}
+		this.context.bareYieldValue = node.value;
 		this.visit(node.value);
 	}
 
@@ -903,7 +893,7 @@ class Unparser extends NodeVisitor {
 	/** Renders a `with item, ...:` statement and its indented body. */
 	visit_With(node: Extract<StmtNode, { nodeType: "With" }>): void {
 		this.fill("with ");
-		this.interleave(", ", (item) => this.visit(item), node.items);
+		this.writeWithItems(node.items);
 		this.write(":");
 		this.context.indent++;
 		for (const stmt of node.body) {
@@ -915,7 +905,7 @@ class Unparser extends NodeVisitor {
 	/** Renders an `async with item, ...:` statement and its indented body. */
 	visit_AsyncWith(node: Extract<StmtNode, { nodeType: "AsyncWith" }>): void {
 		this.fill("async with ");
-		this.interleave(", ", (item) => this.visit(item), node.items);
+		this.writeWithItems(node.items);
 		this.write(":");
 		this.context.indent++;
 		for (const stmt of node.body) {
@@ -972,7 +962,12 @@ class Unparser extends NodeVisitor {
 	/** Renders an annotated assignment (`target: annotation[ = value]`). */
 	visit_AnnAssign(node: Extract<StmtNode, { nodeType: "AnnAssign" }>): void {
 		this.fill();
+		// A non-simple `Name` target was parenthesized in the source
+		// (`(x): int`); keeping the parens preserves `simple`, as CPython does.
+		const parenthesize = !node.simple && node.target.nodeType === "Name";
+		if (parenthesize) this.write("(");
 		this.visit(node.target);
+		if (parenthesize) this.write(")");
 		this.write(": ");
 		this.visit(node.annotation);
 		if (node.value) {
@@ -1192,11 +1187,20 @@ class Unparser extends NodeVisitor {
 		this.visitParenthesizedIfNeeded(Precedence.ATOM, node);
 	}
 
-	/** Renders a walrus/named expression (`target := value`). */
+	/**
+	 * Renders a walrus/named expression, always parenthesized
+	 * (`(target := value)`) like CPython's `ast.unparse`: that's valid in
+	 * every context, whereas a bare walrus is a syntax error in many (an
+	 * expression statement, a with-item) and changes meaning in others (an
+	 * f-string field, where `:` would start a format spec). Since it's
+	 * self-delimited, {@link getPrecedence} reports it as an atom.
+	 */
 	visit_NamedExpr(node: Extract<ExprNode, { nodeType: "NamedExpr" }>): void {
+		this.write("(");
 		this.visit(node.target);
 		this.write(" := ");
 		this.visit(node.value);
+		this.write(")");
 	}
 
 	/** Renders a `lambda [params]: body` expression. */
@@ -1210,6 +1214,7 @@ class Unparser extends NodeVisitor {
 	visit_Lambda(node: Extract<ExprNode, { nodeType: "Lambda" }>): void {
 		this.write("lambda");
 		if (
+			node.args.posonlyargs.length > 0 ||
 			node.args.args.length > 0 ||
 			node.args.vararg ||
 			node.args.kwarg ||
@@ -1242,25 +1247,51 @@ class Unparser extends NodeVisitor {
 		this.withPrecedence(Precedence.TEST, node.orelse);
 	}
 
-	/** Renders an `await value` expression. */
+	/**
+	 * Renders an `await value` expression. CPython's grammar only allows a
+	 * primary after `await` (`await_primary: 'await' primary`), so any other
+	 * operand — including another `await` — is parenthesized.
+	 */
 	visit_Await(node: Extract<ExprNode, { nodeType: "Await" }>): void {
 		this.write("await ");
-		this.withPrecedence(Precedence.AWAIT, node.value);
+		this.visitParenthesizedIfNeeded(Precedence.ATOM, node.value);
 	}
 
-	/** Renders a `yield [value]` expression. */
+	/**
+	 * Renders a `yield [value]` expression, parenthesized unless it is an
+	 * expression statement's whole value — like CPython's `ast.unparse`,
+	 * since a bare `yield` is a syntax error in most expression contexts
+	 * (call arguments, conditions, tuple items, `return` values).
+	 */
 	visit_Yield(node: Extract<ExprNode, { nodeType: "Yield" }>): void {
-		this.write("yield");
-		if (node.value) {
-			this.write(" ");
-			this.visit(node.value);
-		}
+		this.writeYield(node, "yield", node.value);
 	}
 
-	/** Renders a `yield from value` expression. */
+	/** Renders a `yield from value` expression; see {@link visit_Yield}. */
 	visit_YieldFrom(node: Extract<ExprNode, { nodeType: "YieldFrom" }>): void {
-		this.write("yield from ");
-		this.visit(node.value);
+		this.writeYield(node, "yield from", node.value);
+	}
+
+	/**
+	 * Writes a `yield`/`yield from` expression, parenthesized unless it's
+	 * the current expression statement's value.
+	 * @param node - The `Yield`/`YieldFrom` node.
+	 * @param keyword - `"yield"` or `"yield from"`.
+	 * @param value - The yielded value, if any.
+	 */
+	private writeYield(
+		node: ExprNode,
+		keyword: string,
+		value: ExprNode | undefined,
+	): void {
+		const bare = this.context.bareYieldValue === node;
+		if (!bare) this.write("(");
+		this.write(keyword);
+		if (value) {
+			this.write(" ");
+			this.visit(value);
+		}
+		if (!bare) this.write(")");
 	}
 
 	/** Renders a starred expression (`*value`), e.g. in call args or assignment targets. */
@@ -1290,8 +1321,54 @@ class Unparser extends NodeVisitor {
 		}
 	}
 
-	/** Renders an f-string (`JoinedStr`), preserving its original quote style. */
+	/**
+	 * Renders an f-string (`JoinedStr`), preserving its original quote style.
+	 *
+	 * A literal part with `kind: "u"` came from a `u"..."` string concatenated
+	 * into the f-string (`f"{a}" u"b"`), so it's written back as its own `u`
+	 * string, split out of the surrounding f-string parts, for `kind` to
+	 * survive a round trip. An `f""` is appended if nothing else would make
+	 * the result an f-string.
+	 */
 	visit_JoinedStr(node: Extract<ExprNode, { nodeType: "JoinedStr" }>): void {
+		const isUnicodeLiteral = (value: ExprNode) =>
+			value.nodeType === "Constant" && value.kind === "u";
+		if (!node.values.some(isUnicodeLiteral)) {
+			this.writeJoinedStr(node);
+			return;
+		}
+		let pending: ExprNode[] = [];
+		let wroteAny = false;
+		let wroteFString = false;
+		const separate = () => {
+			if (wroteAny) this.write(" ");
+			wroteAny = true;
+		};
+		const flush = () => {
+			if (pending.length === 0) return;
+			separate();
+			this.writeJoinedStr({ ...node, values: pending });
+			wroteFString = true;
+			pending = [];
+		};
+		for (const value of node.values) {
+			if (value.nodeType === "Constant" && value.kind === "u") {
+				flush();
+				separate();
+				const literal = { ...value, quote_style: undefined };
+				this.write("u", this.formatString(String(value.value), literal));
+			} else {
+				pending.push(value);
+			}
+		}
+		flush();
+		if (!wroteFString) this.write(' f""');
+	}
+
+	/** Renders an f-string's parts as a single `f"..."` literal. */
+	private writeJoinedStr(
+		node: Extract<ExprNode, { nodeType: "JoinedStr" }>,
+	): void {
 		const [openQuote, closeQuote] = this.chooseInterpolatedStringQuotes(
 			node,
 			'f"',
@@ -1349,15 +1426,21 @@ class Unparser extends NodeVisitor {
 	 *
 	 * @param values - The `JoinedStr`/`TemplateStr` node's `values` to render.
 	 * @param style - The enclosing f-string/t-string's raw/triple/quote-char style, for escaping literal segments.
+	 * @param inFormatSpec - Whether `values` are a format spec's (see {@link escapeInterpolatedStringLiteral}).
 	 */
 	private writeInterpolatedStringContent(
 		values: ExprNode[],
 		style: InterpolatedStringLiteralStyle,
+		inFormatSpec = false,
 	): void {
 		for (const value of values) {
 			if (value.nodeType === "Constant") {
 				this.write(
-					this.escapeInterpolatedStringLiteral(String(value.value), style),
+					this.escapeInterpolatedStringLiteral(
+						String(value.value),
+						style,
+						inFormatSpec,
+					),
 				);
 			} else if (
 				value.nodeType === "FormattedValue" ||
@@ -1368,6 +1451,7 @@ class Unparser extends NodeVisitor {
 					value.conversion,
 					value.format_spec,
 					style,
+					value.nodeType === "Interpolation" ? value.str : undefined,
 				);
 			} else {
 				this.visit(value);
@@ -1385,16 +1469,23 @@ class Unparser extends NodeVisitor {
 	 * are already exactly the original source text); non-raw literals go
 	 * through the same backslash/control-character escaping as a plain
 	 * string ({@link escapeString}/{@link escapeTripleQuoted}).
+	 *
+	 * Inside a format spec `{{` isn't an escape (every `{` opens a nested
+	 * field), so a literal brace there is written as `\x7b`/`\x7d` instead
+	 * — the only way to spell one, which a raw literal can't express at all.
 	 */
 	private escapeInterpolatedStringLiteral(
 		value: string,
 		{ isRaw, isTriple, quoteChar }: InterpolatedStringLiteralStyle,
+		inFormatSpec: boolean,
 	): string {
-		const braceDoubled = value.replace(/\{/g, "{{").replace(/\}/g, "}}");
-		if (isRaw) return braceDoubled;
-		return isTriple
-			? this.escapeTripleQuoted(braceDoubled, quoteChar)
-			: this.escapeString(braceDoubled, quoteChar);
+		if (isRaw) return value.replace(/\{/g, "{{").replace(/\}/g, "}}");
+		const escaped = isTriple
+			? this.escapeTripleQuoted(value, quoteChar)
+			: this.escapeString(value, quoteChar);
+		return inFormatSpec
+			? escaped.replace(/\{/g, "\\x7b").replace(/\}/g, "\\x7d")
+			: escaped.replace(/\{/g, "{{").replace(/\}/g, "}}");
 	}
 
 	/**
@@ -1406,12 +1497,18 @@ class Unparser extends NodeVisitor {
 	 * `conversion` field holds the ASCII code point of the conversion letter
 	 * (115 = `s`, 114 = `r`, 97 = `a`) as produced by CPython's `ast` module;
 	 * `-1` means no conversion.
+	 *
+	 * `exprText` is a t-string `Interpolation.str`: like CPython's
+	 * `ast.unparse`, a non-empty one is written verbatim in place of
+	 * re-rendering `value`, so the original expression text (spacing, line
+	 * breaks, comments) survives a round trip.
 	 */
 	private writeReplacementField(
 		value: ExprNode,
 		conversion: number,
 		formatSpec: ExprNode | undefined,
 		style: InterpolatedStringLiteralStyle,
+		exprText?: string,
 	): void {
 		this.write("{");
 		// If `value` renders starting with its own literal `{` (a `Dict`,
@@ -1422,7 +1519,16 @@ class Unparser extends NodeVisitor {
 		// looks like. A space between them disambiguates, matching what
 		// CPython requires source-side for the same expression.
 		const exprStart = this.context.source.length;
-		this.visit(value);
+		if (exprText) {
+			this.write(exprText);
+		} else if (value.nodeType === "Lambda") {
+			// A bare lambda's `:` would start the field's format spec.
+			this.write("(");
+			this.visit(value);
+			this.write(")");
+		} else {
+			this.visit(value);
+		}
 		if (this.context.source[exprStart]?.startsWith("{")) {
 			this.context.source.splice(exprStart, 0, " ");
 		}
@@ -1434,7 +1540,7 @@ class Unparser extends NodeVisitor {
 		if (formatSpec) {
 			this.write(":");
 			if (formatSpec.nodeType === "JoinedStr") {
-				this.writeInterpolatedStringContent(formatSpec.values, style);
+				this.writeInterpolatedStringContent(formatSpec.values, style, true);
 			} else {
 				this.visit(formatSpec);
 			}
@@ -1469,11 +1575,13 @@ class Unparser extends NodeVisitor {
 	visit_Interpolation(
 		node: Extract<ExprNode, { nodeType: "Interpolation" }>,
 	): void {
-		this.writeReplacementField(node.value, node.conversion, node.format_spec, {
-			isRaw: false,
-			isTriple: false,
-			quoteChar: '"',
-		});
+		this.writeReplacementField(
+			node.value,
+			node.conversion,
+			node.format_spec,
+			{ isRaw: false, isTriple: false, quoteChar: '"' },
+			node.str,
+		);
 	}
 
 	/**
@@ -1549,7 +1657,9 @@ class Unparser extends NodeVisitor {
 		if (value === null) return "None";
 		if (value === true) return "True";
 		if (value === false) return "False";
-		if (value === "...") return "..."; // Handle ellipsis
+		// The parser represents `Ellipsis` as the bare string `"..."`; a real
+		// `"..."` string literal is told apart by its recorded `quote_style`.
+		if (value === "..." && node.quote_style === undefined) return "...";
 		if (typeof value === "string") {
 			return this.formatString(value, node);
 		}
@@ -1563,8 +1673,7 @@ class Unparser extends NodeVisitor {
 			// constant, so `visit_UnaryOp` supplies the `-` and only the
 			// positive form needs handling here.
 			if (Number.isNaN(value)) return "(1e309-1e309)";
-			if (value === Infinity) return "1e309";
-			if (value === -Infinity) return "-1e309";
+			if (!Number.isFinite(value)) return this.formatInfinity(value);
 			const text = value.toString();
 			// A whole-number float beyond the safe-integer range (e.g.
 			// `1e20`) still renders via `toString()` as bare digits with no
@@ -1588,9 +1697,25 @@ class Unparser extends NodeVisitor {
 			return text;
 		}
 		if (value instanceof PyComplex) {
+			// An imaginary literal too large for a float (`1e1000j`) holds an
+			// infinite part, which `PyComplex.toString` spells `Infinity`.
+			if (Object.is(value.real, 0) && !Number.isFinite(value.imag)) {
+				return `${this.formatInfinity(value.imag)}j`;
+			}
 			return value.toString();
 		}
 		return String(value);
+	}
+
+	/**
+	 * Spells an infinite float as `1e309` (a literal that overflows to `inf`
+	 * at parse time), like CPython's `ast.unparse`, since Python has no
+	 * infinity literal.
+	 * @param value - `Infinity` or `-Infinity`.
+	 * @returns `"1e309"` or `"-1e309"`.
+	 */
+	private formatInfinity(value: number): string {
+		return value > 0 ? "1e309" : "-1e309";
 	}
 
 	/**
@@ -1750,9 +1875,12 @@ class Unparser extends NodeVisitor {
 		// different things (a plain index vs. a 1-tuple index), whereas
 		// `visit_Tuple`'s own comma-adding logic doesn't apply here since
 		// this branch deliberately skips the wrapping parens it would add.
+		// A lone starred item is the exception: `a[*Ts]` already parses as
+		// a 1-tuple, so it needs no comma.
 		if (node.slice.nodeType === "Tuple" && node.slice.elts.length > 0) {
+			const [onlyElt] = node.slice.elts;
 			this.interleave(", ", (elt) => this.visit(elt), node.slice.elts);
-			if (node.slice.elts.length === 1) {
+			if (node.slice.elts.length === 1 && onlyElt.nodeType !== "Starred") {
 				this.write(",");
 			}
 		} else {
@@ -1839,12 +1967,20 @@ class Unparser extends NodeVisitor {
 		this.write("}");
 	}
 
-	/** Renders a dict comprehension (`{key: value for ... }`). */
+	/**
+	 * Renders a dict comprehension (`{key: value for ... }`), or a PEP 798
+	 * unpacking one (`{**key for ... }`) when there's no `value`.
+	 */
 	visit_DictComp(node: Extract<ExprNode, { nodeType: "DictComp" }>): void {
 		this.write("{");
-		this.visit(node.key);
-		this.write(": ");
-		this.visit(node.value);
+		if (node.value) {
+			this.visit(node.key);
+			this.write(": ");
+			this.visit(node.value);
+		} else {
+			this.write("**");
+			this.visitParenthesizedIfNeeded(Precedence.EXPR, node.key);
+		}
 		for (const generator of node.generators) {
 			this.visit(generator);
 		}
@@ -1933,6 +2069,24 @@ class Unparser extends NodeVisitor {
 	}
 
 	/** Renders one `context_expr [as optional_vars]` entry of a `with`/`async with` clause. */
+	/**
+	 * Writes a `with` statement's items. A lone tuple item with no `as`
+	 * target gets an extra pair of parens: `with (a, b):` would reparse as
+	 * two items, so the tuple is written `with ((a, b)):`.
+	 * @param items - The statement's with-items.
+	 */
+	private writeWithItems(items: WithItem[]): void {
+		const [only] = items;
+		const loneTuple =
+			items.length === 1 &&
+			!only.optional_vars &&
+			only.context_expr.nodeType === "Tuple" &&
+			only.context_expr.elts.length > 0;
+		if (loneTuple) this.write("(");
+		this.interleave(", ", (item) => this.visit(item), items);
+		if (loneTuple) this.write(")");
+	}
+
 	visit_WithItem(
 		node: Extract<import("./types.js").WithItem, { nodeType: "WithItem" }>,
 	): void {
@@ -2105,7 +2259,12 @@ class Unparser extends NodeVisitor {
 		node: Extract<import("./types.js").PatternNode, { nodeType: "MatchAs" }>,
 	): void {
 		if (node.pattern) {
+			// `(p as x) as y` keeps its parens: `p as x as y` doesn't parse.
+			const nested =
+				node.pattern.nodeType === "MatchAs" && !!node.pattern.pattern;
+			if (nested) this.write("(");
 			this.visit(node.pattern);
+			if (nested) this.write(")");
 			this.write(" as ");
 		}
 		this.write(node.name ?? "_");
@@ -2126,8 +2285,10 @@ class Unparser extends NodeVisitor {
 		this.interleave(
 			" | ",
 			(pattern) => {
+				// A nested `MatchOr` keeps its grouping (`(0 | 1) | 2`), as in CPython.
 				const needsParens =
-					pattern.nodeType === "MatchAs" && pattern.pattern !== undefined;
+					(pattern.nodeType === "MatchAs" && pattern.pattern !== undefined) ||
+					pattern.nodeType === "MatchOr";
 				if (needsParens) this.write("(");
 				this.visit(pattern);
 				if (needsParens) this.write(")");

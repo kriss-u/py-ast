@@ -8,6 +8,7 @@ import type {
 	Module,
 	StmtNode,
 } from "../src/types.js";
+import { PyComplex } from "../src/types.js";
 import { unparse } from "../src/unparser.js";
 
 /**
@@ -214,4 +215,90 @@ export function countNodeTypes(node: unknown): Record<string, number> {
 
 	visit(node);
 	return counts;
+}
+
+/** CPython's lowercase names for the ASDL product types py-ast PascalCases. */
+const CPYTHON_NODE_NAMES: Record<string, string> = {
+	Alias: "alias",
+	Arg: "arg",
+	Arguments: "arguments",
+	Comprehension: "comprehension",
+	Keyword: "keyword",
+	MatchCase: "match_case",
+	WithItem: "withitem",
+};
+
+/** py-ast fields with no counterpart in CPython's `ast.dump` output. */
+const NON_CPYTHON_FIELDS = new Set([
+	"nodeType",
+	"lineno",
+	"col_offset",
+	"end_lineno",
+	"end_col_offset",
+	"quote_style",
+	"inlineComment",
+	"comments",
+]);
+
+/**
+ * Renders a string the way Python's `repr` does for the characters these
+ * tests use: single quotes unless only double quotes avoid escaping, with
+ * backslashes, the quote, and `\n`/`\r`/`\t` escaped.
+ */
+function pythonStringRepr(value: string, prefix = ""): string {
+	const quote = value.includes("'") && !value.includes('"') ? '"' : "'";
+	const body = value
+		.replace(/\\/g, "\\\\")
+		.replace(new RegExp(quote, "g"), `\\${quote}`)
+		.replace(/\n/g, "\\n")
+		.replace(/\r/g, "\\r")
+		.replace(/\t/g, "\\t");
+	return `${prefix}${quote}${body}${quote}`;
+}
+
+/** Renders a `Constant`'s value as CPython's `ast.dump` would. */
+function pythonConstantRepr(
+	node: Extract<ExprNode, { nodeType: "Constant" }>,
+): string {
+	const { value } = node;
+	if (value === null) return "None";
+	if (value === true) return "True";
+	if (value === false) return "False";
+	if (value instanceof PyComplex) return `${value.imag}j`;
+	if (typeof value !== "string") return String(value);
+	if (value === "..." && node.quote_style === undefined) return "Ellipsis";
+	return /^[a-z]*b/i.test(node.quote_style ?? "")
+		? pythonStringRepr(value, "b")
+		: pythonStringRepr(value);
+}
+
+/**
+ * Renders a py-ast node in the format of CPython 3.15's `ast.dump(node)`
+ * (no attributes), so tests can compare against output pasted verbatim from
+ * CPython. Like `ast.dump`, it leaves out `None`/empty-list fields and the
+ * default `ctx=Load()`. Supports the constant types the tests use (no floats,
+ * which a JS number can't tell apart from ints).
+ */
+export function cpythonDump(node: unknown): string {
+	if (Array.isArray(node)) return `[${node.map(cpythonDump).join(", ")}]`;
+	if (typeof node === "string") return pythonStringRepr(node);
+	if (!node || typeof node !== "object" || !("nodeType" in node)) {
+		return String(node);
+	}
+	const astNode = node as ASTNodeUnion;
+	const name = CPYTHON_NODE_NAMES[astNode.nodeType] ?? astNode.nodeType;
+	const fields: string[] = [];
+	for (const [key, value] of Object.entries(astNode)) {
+		if (NON_CPYTHON_FIELDS.has(key) || value === undefined || value === null) {
+			continue;
+		}
+		if (Array.isArray(value) && value.length === 0) continue;
+		if (key === "ctx" && value.nodeType === "Load") continue;
+		const rendered =
+			astNode.nodeType === "Constant" && key === "value"
+				? pythonConstantRepr(astNode)
+				: cpythonDump(value);
+		fields.push(`${key}=${rendered}`);
+	}
+	return `${name}(${fields.join(", ")})`;
 }
