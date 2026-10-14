@@ -1067,6 +1067,11 @@ TypeScript/JavaScript, with no Python runtime involved:
    not a JavaScript-tooling-inspired format
 5. **No Python runtime required** - Runs entirely in Node.js/browser
 
+Where JavaScript can't represent something the way Python does (bytes,
+`Ellipsis`, int vs float, ...), py-ast uses a documented workaround. It also
+accepts the syntax of every supported Python version at once. See
+[DIFFERENCES.md](DIFFERENCES.md) for the full list.
+
 ## Development
 
 ```bash
