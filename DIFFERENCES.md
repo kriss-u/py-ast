@@ -79,24 +79,18 @@ be written back, and `ast.unparse` has the same limitation.
 
 ## Leniency
 
-Some code that CPython rejects, py-ast accepts. Most of these errors come
-from CPython's compiler rather than its grammar, so they're out of scope for
-a parser. The others are grammar-level cases that could be tightened later.
+Syntax errors are rejected when **every** supported Python version rejects
+them. That's checked against CPython 3.9, 3.10, 3.12, and 3.15, so py-ast
+never refuses something some supported version accepts. This includes
+CPython's restrictions on where an unparenthesized walrus may appear,
+`yield` outside its allowed positions, `try` with no `except`/`finally`, an
+unparenthesized generator that isn't the only argument, `(*a)`, mixing
+bytes with str literals, and a compound statement after `;`.
 
-Out of scope:
+What py-ast still accepts are errors CPython raises outside its grammar:
 
 - an unknown `from __future__ import` feature, and `lazy from __future__ import`;
 - encoding problems: a bad or unknown coding declaration, invalid UTF-8,
-  or a null byte;
+  or a null byte (decoding is the caller's job, see above);
 - unknown `\N{...}` character names (see above);
 - a non-ASCII character in a bytes literal.
-
-Grammar-level gaps:
-
-- a `try` with no `except` or `finally`;
-- a walrus used directly as an operand (`a + b := c`, `a < b := c`);
-- an unparenthesized generator that isn't the only call argument
-  (`f(x for x in y, z)`);
-- a starred expression where none is allowed (`(*a)`, some call forms);
-- concatenating bytes with non-bytes literals;
-- a handful of `invalid syntax` cases such as `yield, x`.

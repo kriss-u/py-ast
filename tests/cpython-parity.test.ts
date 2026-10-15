@@ -355,6 +355,162 @@ describe("identifiers, form feeds, and line continuations", () => {
 	]);
 });
 
+describe("valid neighbours of rejected syntax", () => {
+	checkParity([
+		[
+			"{(x := 1): y}",
+			"Expr(value=Dict(keys=[NamedExpr(target=Name(id='x', ctx=Store()), value=Constant(value=1))], values=[Name(id='y')]))",
+		],
+		[
+			"{(c := a): b for a in d}",
+			"Expr(value=DictComp(key=NamedExpr(target=Name(id='c', ctx=Store()), value=Name(id='a')), value=Name(id='b'), generators=[comprehension(target=Name(id='a', ctx=Store()), iter=Name(id='d'), is_async=0)]))",
+		],
+		[
+			"x[(a := 0):]",
+			"Expr(value=Subscript(value=Name(id='x'), slice=Slice(lower=NamedExpr(target=Name(id='a', ctx=Store()), value=Constant(value=0)))))",
+		],
+		[
+			"x[(a := 0):(b := 1)]",
+			"Expr(value=Subscript(value=Name(id='x'), slice=Slice(lower=NamedExpr(target=Name(id='a', ctx=Store()), value=Constant(value=0)), upper=NamedExpr(target=Name(id='b', ctx=Store()), value=Constant(value=1)))))",
+		],
+		[
+			"if x := 1: pass",
+			"If(test=NamedExpr(target=Name(id='x', ctx=Store()), value=Constant(value=1)), body=[Pass()])",
+		],
+		[
+			"while x := f(): pass",
+			"While(test=NamedExpr(target=Name(id='x', ctx=Store()), value=Call(func=Name(id='f'))), body=[Pass()])",
+		],
+		[
+			"@x := f\ndef g(): pass",
+			"FunctionDef(name='g', args=arguments(), body=[Pass()], decorator_list=[NamedExpr(target=Name(id='x', ctx=Store()), value=Name(id='f'))])",
+		],
+		[
+			"f(x := 1)",
+			"Expr(value=Call(func=Name(id='f'), args=[NamedExpr(target=Name(id='x', ctx=Store()), value=Constant(value=1))]))",
+		],
+		[
+			"class A(x := B): pass",
+			"ClassDef(name='A', bases=[NamedExpr(target=Name(id='x', ctx=Store()), value=Name(id='B'))], body=[Pass()])",
+		],
+		[
+			"[x := 1, y]",
+			"Expr(value=List(elts=[NamedExpr(target=Name(id='x', ctx=Store()), value=Constant(value=1)), Name(id='y')]))",
+		],
+		[
+			"{x := 1, y}",
+			"Expr(value=Set(elts=[NamedExpr(target=Name(id='x', ctx=Store()), value=Constant(value=1)), Name(id='y')]))",
+		],
+		[
+			"{*a, x := 1}",
+			"Expr(value=Set(elts=[Starred(value=Name(id='a')), NamedExpr(target=Name(id='x', ctx=Store()), value=Constant(value=1))]))",
+		],
+		[
+			"(x := 1, y)",
+			"Expr(value=Tuple(elts=[NamedExpr(target=Name(id='x', ctx=Store()), value=Constant(value=1)), Name(id='y')]))",
+		],
+		[
+			"a[x := 1]",
+			"Expr(value=Subscript(value=Name(id='a'), slice=NamedExpr(target=Name(id='x', ctx=Store()), value=Constant(value=1))))",
+		],
+		[
+			"a[x := 1, y]",
+			"Expr(value=Subscript(value=Name(id='a'), slice=Tuple(elts=[NamedExpr(target=Name(id='x', ctx=Store()), value=Constant(value=1)), Name(id='y')])))",
+		],
+		[
+			"[y := f(x) for x in z]",
+			"Expr(value=ListComp(elt=NamedExpr(target=Name(id='y', ctx=Store()), value=Call(func=Name(id='f'), args=[Name(id='x')])), generators=[comprehension(target=Name(id='x', ctx=Store()), iter=Name(id='z'), is_async=0)]))",
+		],
+		[
+			"match x := 1:\n    case _: pass",
+			"Match(subject=NamedExpr(target=Name(id='x', ctx=Store()), value=Constant(value=1)), cases=[match_case(pattern=MatchAs(), body=[Pass()])])",
+		],
+		[
+			"match x:\n    case _ if y := 1: pass",
+			"Match(subject=Name(id='x'), cases=[match_case(pattern=MatchAs(), guard=NamedExpr(target=Name(id='y', ctx=Store()), value=Constant(value=1)), body=[Pass()])])",
+		],
+		[
+			"match a, b := 1:\n    case _: pass",
+			"Match(subject=Tuple(elts=[Name(id='a'), NamedExpr(target=Name(id='b', ctx=Store()), value=Constant(value=1))]), cases=[match_case(pattern=MatchAs(), body=[Pass()])])",
+		],
+		[
+			"def f(a, /): pass",
+			"FunctionDef(name='f', args=arguments(posonlyargs=[arg(arg='a')]), body=[Pass()])",
+		],
+		[
+			"lambda a, /: a",
+			"Expr(value=Lambda(args=arguments(posonlyargs=[arg(arg='a')]), body=Name(id='a')))",
+		],
+		["a; b", "Expr(value=Name(id='b'))"],
+		["try: pass\nfinally: pass", "Try(body=[Pass()], finalbody=[Pass()])"],
+		[
+			"try: pass\nexcept E: pass\nelse: pass",
+			"Try(body=[Pass()], handlers=[ExceptHandler(type=Name(id='E'), body=[Pass()])], orelse=[Pass()])",
+		],
+		[
+			"f(a := 1)",
+			"Expr(value=Call(func=Name(id='f'), args=[NamedExpr(target=Name(id='a', ctx=Store()), value=Constant(value=1))]))",
+		],
+		[
+			"[y := 1, 2]",
+			"Expr(value=List(elts=[NamedExpr(target=Name(id='y', ctx=Store()), value=Constant(value=1)), Constant(value=2)]))",
+		],
+		["(*a,)", "Expr(value=Tuple(elts=[Starred(value=Name(id='a'))]))"],
+		[
+			"x = *a,",
+			"Assign(targets=[Name(id='x', ctx=Store())], value=Tuple(elts=[Starred(value=Name(id='a'))]))",
+		],
+		[
+			"def f(): yield x,",
+			"FunctionDef(name='f', args=arguments(), body=[Expr(value=Yield(value=Tuple(elts=[Name(id='x')])))])",
+		],
+		[
+			"def f(): x = yield",
+			"FunctionDef(name='f', args=arguments(), body=[Assign(targets=[Name(id='x', ctx=Store())], value=Yield())])",
+		],
+		[
+			"def f(): x = y = yield z",
+			"FunctionDef(name='f', args=arguments(), body=[Assign(targets=[Name(id='x', ctx=Store()), Name(id='y', ctx=Store())], value=Yield(value=Name(id='z')))])",
+		],
+		[
+			"def f(): x += yield",
+			"FunctionDef(name='f', args=arguments(), body=[AugAssign(target=Name(id='x', ctx=Store()), op=Add(), value=Yield())])",
+		],
+		[
+			"def f(): x: int = yield",
+			"FunctionDef(name='f', args=arguments(), body=[AnnAssign(target=Name(id='x', ctx=Store()), annotation=Name(id='int'), value=Yield(), simple=1)])",
+		],
+		[
+			"def f(): f((yield))",
+			"FunctionDef(name='f', args=arguments(), body=[Expr(value=Call(func=Name(id='f'), args=[Yield()]))])",
+		],
+		[
+			"def f(): yield from g()",
+			"FunctionDef(name='f', args=arguments(), body=[Expr(value=YieldFrom(value=Call(func=Name(id='g'))))])",
+		],
+		[
+			"def f(): yield; x",
+			"FunctionDef(name='f', args=arguments(), body=[Expr(value=Yield()), Expr(value=Name(id='x'))])",
+		],
+		[
+			'def f(): f"{yield}"',
+			"FunctionDef(name='f', args=arguments(), body=[Expr(value=JoinedStr(values=[FormattedValue(value=Yield(), conversion=-1)]))])",
+		],
+		[
+			"f(x for x in y)",
+			"Expr(value=Call(func=Name(id='f'), args=[GeneratorExp(elt=Name(id='x'), generators=[comprehension(target=Name(id='x', ctx=Store()), iter=Name(id='y'), is_async=0)])]))",
+		],
+		[
+			'x = b"a" b"b"',
+			"Assign(targets=[Name(id='x', ctx=Store())], value=Constant(value=b'ab'))",
+		],
+		[
+			'x = "a" f"{b}" "c"',
+			"Assign(targets=[Name(id='x', ctx=Store())], value=JoinedStr(values=[Constant(value='a'), FormattedValue(value=Name(id='b'), conversion=-1), Constant(value='c')]))",
+		],
+	]);
+});
+
 describe("syntax CPython rejects", () => {
 	test.each([
 		[
@@ -366,7 +522,7 @@ describe("syntax CPython rejects", () => {
 		['f"{x!r=}"', /f-string: invalid conversion character/],
 		["for f() in y: pass", /cannot assign to expression/],
 		["[x for f() in y]", /cannot assign to expression/],
-		["with a := b: pass", /invalid syntax/],
+		["with a := b: pass", /Expected ':' after with clause/],
 		["match *a:\n case _: pass", /cannot assign to expression/],
 		["async def f(): await await x", /Unexpected token/],
 		["async def f(): await -x", /Unexpected token/],
@@ -376,6 +532,40 @@ describe("syntax CPython rejects", () => {
 		["f\"{'a\n'}\"", /Unterminated f-string literal/],
 		['f"{x:\n}"', /Unterminated f-string literal/],
 		["f\"{rf'{x'}\"", /Unterminated f-string literal/],
+		["try:\n    pass\nx = 1", /expected 'except' or 'finally' block/],
+		[
+			"try: pass\nelse: pass\nfinally: pass",
+			/expected 'except' or 'finally' block/,
+		],
+		["(a + b := c)", /cannot use assignment expressions with expression/],
+		["(a < b := c)", /cannot use assignment expressions with expression/],
+		["(x.y := 1)", /cannot use assignment expressions with expression/],
+		["f(x for x in y, z)", /Generator expression must be parenthesized/],
+		["f(z, x for x in y)", /Generator expression must be parenthesized/],
+		["f(x for x in y,)", /Generator expression must be parenthesized/],
+		["f(a=1, x for x in y)", /positional argument follows keyword argument/],
+		["(*a)", /cannot use starred expression here/],
+		['b"a" "b"', /cannot mix bytes and nonbytes literals/],
+		['"a" b"b"', /cannot mix bytes and nonbytes literals/],
+		['f"{a}" b"b"', /cannot mix bytes and nonbytes literals/],
+		["def f():\n    yield, x", /Unexpected token/],
+		["def f():\n    return 1 + yield x", /Unexpected token/],
+		["[yield]", /Unexpected token/],
+		["call(**x := 1)", /Expected '\)' after arguments/],
+		["lst[x:=1:-1]", /invalid syntax/],
+		["{x := 1: y}", /invalid syntax/],
+		["{x: y := 1}", /Expected '}' after dictionary/],
+		["def f():\n    yield x := 1", /invalid syntax/],
+		["match x:\n    case [(*rest)]: pass", /invalid syntax/],
+		["@x def foo(): ...", /Expected newline after decorator/],
+		["def foo(/): ...", /at least one argument must precede \//],
+		["lambda /: 1", /at least one argument must precede \//],
+		["a; if b: pass", /invalid syntax/],
+		["a; def f(): pass", /invalid syntax/],
+		["x := 1", /invalid syntax/],
+		["def f():\n    return x := 1", /invalid syntax/],
+		["f(a=x := 1)", /Expected '\)' after arguments/],
+		["assert x := 1", /invalid syntax/],
 	])("rejects %j", (source, error) => {
 		expect(() => parse(source)).toThrow(error);
 	});

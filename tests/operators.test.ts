@@ -227,18 +227,6 @@ describe("Walrus Operator", () => {
 		},
 	);
 
-	test("setContext no-op branch: a non-target-shaped walrus target is left structurally unchanged", () => {
-		// The parser (like this walrus production specifically) doesn't
-		// restrict `:=`'s target to a bare NAME the way CPython does;
-		// setContext's fallback branch simply leaves non-Name/Attribute/
-		// Subscript/Starred/List/Tuple nodes untouched rather than crashing.
-		const expr = parseExpression("(a + b := 5)");
-		expect(expr.nodeType).toBe("NamedExpr");
-		if (expr.nodeType === "NamedExpr") {
-			expect(expr.target.nodeType).toBe("BinOp");
-		}
-	});
-
 	test("walrus RHS containing 'or' isn't split across the enclosing BoolOp", () => {
 		// Verified against CPython 3.13: `not c and (s := w or r)` binds
 		// the whole `w or r` as the NamedExpr's value; a prior bug parsed

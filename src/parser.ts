@@ -394,7 +394,7 @@ export class Parser {
 			// `subject_expr`: a single expression, or an unparenthesized tuple
 			// that may contain `*` items (`match a, *b:`) — a lone `*x` isn't
 			// a valid subject.
-			subject = this.parseTestListWithStar();
+			subject = this.parseTestListWithStar(true);
 			if (subject.nodeType === "Starred" || !this.check(TokenType.COLON)) {
 				throw this.error("not a match statement");
 			}
@@ -429,6 +429,24 @@ export class Parser {
 		// statement loop, which invokes parseStatement()/parseSimpleStmt()
 		// again.
 		const hadSemi = this.match(TokenType.SEMI);
+
+		// Only simple statements can follow a `;` on the same line.
+		if (
+			hadSemi &&
+			[
+				TokenType.IF,
+				TokenType.WHILE,
+				TokenType.FOR,
+				TokenType.TRY,
+				TokenType.WITH,
+				TokenType.DEF,
+				TokenType.CLASS,
+				TokenType.ASYNC,
+				TokenType.AT,
+			].some((type) => this.check(type))
+		) {
+			throw this.error("invalid syntax");
+		}
 
 		if (
 			!hadSemi &&
@@ -720,7 +738,7 @@ export class Parser {
 			// Handle parenthesized import lists
 			const hasParens = this.match(TokenType.LPAR);
 
-			if (this.match(TokenType.STAR)) {
+			if (!hasParens && this.match(TokenType.STAR)) {
 				const starToken = this.previous();
 				names.push({
 					name: "*",
@@ -906,14 +924,14 @@ export class Parser {
 		}
 
 		// Expression statement (including assignments)
-		const expr = this.parseTestListWithStar();
+		const expr = this.parseYieldOrStarExpressions();
 
 		// Check for assignment operators
 		if (this.match(TokenType.EQUAL)) {
 			// Regular assignment - handle multiple assignment
 			const targets = [expr];
 			this.validateAssignmentTarget(expr);
-			let value = this.parseTestListWithStar();
+			let value = this.parseYieldOrStarExpressions();
 
 			// Collect any comments that were gathered during value parsing
 			const expressionComments: Comment[] = [];
@@ -926,7 +944,7 @@ export class Parser {
 			while (this.match(TokenType.EQUAL)) {
 				this.validateAssignmentTarget(value);
 				targets.push(value);
-				value = this.parseTestListWithStar();
+				value = this.parseYieldOrStarExpressions();
 
 				// Collect any additional comments from chained assignment parsing
 				if (this.includeComments && this.pendingComments.length > 0) {
@@ -972,7 +990,7 @@ export class Parser {
 			this.validateAugAssignTarget(expr);
 			this.setContext(expr, this.createStore());
 			const op = this.parseAugAssignOp();
-			const value = this.parseTestListWithStar();
+			const value = this.parseYieldOrStarExpressions();
 			return {
 				nodeType: "AugAssign",
 				target: expr,
@@ -991,7 +1009,7 @@ export class Parser {
 			let value: ExprNode | undefined;
 
 			if (this.match(TokenType.EQUAL)) {
-				value = this.parseTestListWithStar();
+				value = this.parseYieldOrStarExpressions();
 			}
 
 			return {
@@ -1116,8 +1134,8 @@ export class Parser {
 		const decorators: ExprNode[] = [];
 
 		while (this.match(TokenType.AT)) {
-			const decorator = this.parseTest();
-			decorators.push(decorator);
+			decorators.push(this.parseNamedExpression());
+			this.consume(TokenType.NEWLINE, "Expected newline after decorator");
 			while (this.match(TokenType.NEWLINE)) {
 				// Consume extra NEWLINEs left behind by blank lines or
 				// comment-only lines between the decorator and its target.
@@ -1135,7 +1153,7 @@ export class Parser {
 	 * @throws {ParseError} On malformed statement syntax.
 	 */
 	private parseIfStmt(start: Token): StmtNode {
-		const test = this.parseTest();
+		const test = this.parseNamedExpression();
 		this.consume(TokenType.COLON, "Expected ':' after if condition");
 		const body = this.parseSuite();
 
@@ -1167,7 +1185,7 @@ export class Parser {
 	 * @throws {ParseError} On malformed statement syntax.
 	 */
 	private parseWhileStmt(start: Token): StmtNode {
-		const test = this.parseTest();
+		const test = this.parseNamedExpression();
 		this.consume(TokenType.COLON, "Expected ':' after while condition");
 		const body = this.parseSuite();
 
@@ -1371,11 +1389,11 @@ export class Parser {
 						} else {
 							// This is a base class, rewind and parse as expression
 							this.current = savedPos;
-							bases.push(this.parseTest());
+							bases.push(this.parseNamedExpression());
 						}
 					} else {
 						// Not a name, parse as base class expression
-						bases.push(this.parseTest());
+						bases.push(this.parseNamedExpression());
 					}
 				} while (this.match(TokenType.COMMA));
 			}
@@ -1470,6 +1488,15 @@ export class Parser {
 		if (this.match(TokenType.FINALLY)) {
 			this.consume(TokenType.COLON, "Expected ':' after finally");
 			finalbody = this.parseSuite();
+		}
+
+		// An `else` needs an `except` before it, and a `try` needs at least
+		// one `except` or a `finally`.
+		if (
+			handlers.length === 0 &&
+			(finalbody.length === 0 || orelse.length > 0)
+		) {
+			throw this.error("expected 'except' or 'finally' block");
 		}
 
 		// The last handler's own end (not its raw `body` array) is used here:
@@ -1607,16 +1634,10 @@ export class Parser {
 		do {
 			if (allowTrailingComma && this.check(TokenType.RPAR)) break;
 
-			// A with-item is an `expression`, which excludes an unparenthesized
-			// walrus: `with (a := 1, b):` is one tuple context expression.
-			const itemStart = this.peek();
+			// A with-item is an `expression`, which (unlike a named expression)
+			// excludes a bare walrus, so `with (a := 1, b):` falls back to one
+			// tuple context expression.
 			const context_expr = this.parseTest();
-			if (
-				context_expr.nodeType === "NamedExpr" &&
-				itemStart.type !== TokenType.LPAR
-			) {
-				throw this.error("invalid syntax");
-			}
 			let optional_vars: ExprNode | undefined;
 
 			if (this.match(TokenType.AS)) {
@@ -1708,7 +1729,7 @@ export class Parser {
 
 				let guard: ExprNode | undefined;
 				if (this.match(TokenType.IF)) {
-					guard = this.parseTest();
+					guard = this.parseNamedExpression();
 				}
 
 				this.consume(TokenType.COLON, "Expected ':' after case pattern");
@@ -2016,7 +2037,10 @@ export class Parser {
 
 			if (!sawComma) {
 				// A single pattern in parens with no trailing comma is just
-				// a grouping.
+				// a grouping, which a star pattern can't be (`(*rest)`).
+				if (patterns[0].nodeType === "MatchStar") {
+					throw this.error("invalid syntax");
+				}
 				return patterns[0];
 			}
 
@@ -2222,6 +2246,60 @@ export class Parser {
 	// ==== Expression parsers ====
 
 	/**
+	 * Parses a `named_expression`: a `test`, or a walrus `NAME := test`.
+	 * CPython only allows an unparenthesized walrus in specific places
+	 * (conditions, decorators, match subjects and guards, positional call
+	 * arguments, display and comprehension elements, groups, and a lone
+	 * subscript), so only those call this rather than {@link parseTest}.
+	 * @returns The parsed expression, or a `NamedExpr` node.
+	 * @throws {ParseError} On malformed syntax, or a walrus target that isn't a name.
+	 */
+	private parseNamedExpression(): ExprNode {
+		const start = this.peek();
+		return this.finishNamedExpression(start, this.parseTest());
+	}
+
+	/**
+	 * Completes a {@link parseNamedExpression} once its leading `test` has been
+	 * parsed: wraps it in a `NamedExpr` if a `:=` follows. Sites where a
+	 * walrus is only valid in some continuations (a dict key or a slice
+	 * bound must be parenthesized) parse the `test` first and decide.
+	 * @param start The expression's first token, for the node position.
+	 * @param expr The already-parsed `test`.
+	 * @returns `expr`, or a `NamedExpr` assigning to it.
+	 * @throws {ParseError} On malformed syntax, or a walrus target that isn't a name.
+	 */
+	private finishNamedExpression(start: Token, expr: ExprNode): ExprNode {
+		if (!this.match(TokenType.COLONEQUAL)) return expr;
+		if (expr.nodeType !== "Name") {
+			throw this.error("cannot use assignment expressions with expression");
+		}
+		this.setContext(expr, this.createStore());
+		const value = this.parseTest();
+		return {
+			nodeType: "NamedExpr",
+			target: expr,
+			value,
+			lineno: start.lineno,
+			col_offset: start.col_offset,
+			end_lineno: this.previous().end_lineno,
+			end_col_offset: this.previous().end_col_offset,
+		};
+	}
+
+	/**
+	 * Parses a `star_named_expression`: a `*expr`, or a {@link parseNamedExpression}
+	 * (the form list/set/tuple display elements take).
+	 * @returns The parsed expression.
+	 * @throws {ParseError} On malformed syntax.
+	 */
+	private parseStarNamedExpression(): ExprNode {
+		return this.check(TokenType.STAR)
+			? this.parseTestOrStarred()
+			: this.parseNamedExpression();
+	}
+
+	/**
 	 * Parses a `test`: an or-test, optionally followed by a conditional
 	 * expression (`X if COND else Y`).
 	 * @returns The parsed expression, or an `IfExp` node.
@@ -2266,6 +2344,9 @@ export class Parser {
 	private parseArgument(callParen: Token, expr: ExprNode): ExprNode {
 		if (this.isComprehensionStart()) {
 			const generators = this.parseComprehensions();
+			if (this.check(TokenType.COMMA)) {
+				throw this.error("Generator expression must be parenthesized");
+			}
 
 			return {
 				nodeType: "GeneratorExp",
@@ -2348,8 +2429,7 @@ export class Parser {
 	}
 
 	/**
-	 * Parses an `and_test`: a `not_test`, optionally a named expression
-	 * (`:=` walrus target), or a chain of `not_test`s joined by `and`
+	 * Parses an `and_test`: a `not_test`, or a chain of `not_test`s joined by `and`
 	 * (collapsed into a single `BoolOp` when more than one).
 	 * @returns The parsed expression.
 	 * @throws {ParseError} On malformed expression syntax.
@@ -2357,23 +2437,6 @@ export class Parser {
 	private parseAndTest(): ExprNode {
 		const start = this.peek();
 		const expr = this.parseNotTest();
-
-		// Check for named expression (walrus operator :=). CPython's RHS is a
-		// full `test` (`x := a or b`, `x := a if b else c`, `x := lambda: 1`
-		// all bind the whole expression to `value`), not just an `and_test`.
-		if (this.match(TokenType.COLONEQUAL)) {
-			this.setContext(expr, this.createStore());
-			const value = this.parseTest();
-			return {
-				nodeType: "NamedExpr",
-				target: expr,
-				value,
-				lineno: start.lineno,
-				col_offset: start.col_offset,
-				end_lineno: this.previous().end_lineno,
-				end_col_offset: this.previous().end_col_offset,
-			};
-		}
 
 		if (this.match(TokenType.AND)) {
 			const values = [expr];
@@ -2876,7 +2939,9 @@ export class Parser {
 									"positional argument follows keyword argument",
 								);
 							}
-							args.push(this.parseArgument(callParen, this.parseTest()));
+							args.push(
+								this.parseArgument(callParen, this.parseNamedExpression()),
+							);
 						}
 					} while (this.match(TokenType.COMMA));
 				}
@@ -2891,15 +2956,22 @@ export class Parser {
 				// `callParen` exactly, which only happens via that path: an
 				// explicitly-parenthesized generator argument's position
 				// always starts at its own (later) paren instead.
-				const soleArg =
-					args.length === 1 && keywords.length === 0 ? args[0] : null;
-				if (
-					soleArg?.nodeType === "GeneratorExp" &&
-					soleArg.lineno === callParen.lineno &&
-					soleArg.col_offset === callParen.col_offset
-				) {
-					soleArg.end_lineno = closeParen.end_lineno;
-					soleArg.end_col_offset = closeParen.end_col_offset;
+				const bareGenerator = args.find(
+					(arg) =>
+						arg.nodeType === "GeneratorExp" &&
+						arg.lineno === callParen.lineno &&
+						arg.col_offset === callParen.col_offset,
+				);
+				if (bareGenerator) {
+					// Unparenthesized, it can only be the call's sole argument.
+					if (args.length + keywords.length > 1) {
+						throw this.errorAt(
+							callParen,
+							"Generator expression must be parenthesized",
+						);
+					}
+					bareGenerator.end_lineno = closeParen.end_lineno;
+					bareGenerator.end_col_offset = closeParen.end_col_offset;
 				}
 
 				result = {
@@ -2923,50 +2995,70 @@ export class Parser {
 	}
 
 	/**
+	 * Parses a `yield_expr` (`yield [star_expressions]` or `yield from
+	 * expression`), starting at the `yield` keyword. CPython only allows one
+	 * as a whole expression statement, an assignment's value, the sole
+	 * content of parentheses, or an f-string field, so callers check for
+	 * `yield` in exactly those places rather than it being an atom.
+	 * @returns The parsed `Yield` or `YieldFrom` node.
+	 * @throws {ParseError} On malformed syntax.
+	 */
+	private parseYieldExpr(): ExprNode {
+		const start = this.advance();
+		if (this.match(TokenType.FROM)) {
+			const value = this.parseTest();
+			return {
+				nodeType: "YieldFrom",
+				value,
+				lineno: start.lineno,
+				col_offset: start.col_offset,
+				end_lineno: this.previous().end_lineno,
+				end_col_offset: this.previous().end_col_offset,
+			};
+		}
+		let value: ExprNode | undefined;
+		if (
+			!this.check(TokenType.NEWLINE) &&
+			!this.check(TokenType.SEMI) &&
+			!this.check(TokenType.RPAR) &&
+			!this.check(TokenType.RBRACE) &&
+			!this.check(TokenType.EQUAL) &&
+			!this.isAtEnd()
+		) {
+			value = this.parseTestListWithStar();
+		}
+		return {
+			nodeType: "Yield",
+			value,
+			lineno: start.lineno,
+			col_offset: start.col_offset,
+			end_lineno: this.previous().end_lineno,
+			end_col_offset: this.previous().end_col_offset,
+		};
+	}
+
+	/**
+	 * Parses `yield_expr | star_expressions`: the forms an expression
+	 * statement, an assignment's value, and an f-string field take.
+	 * @returns The parsed expression.
+	 * @throws {ParseError} On malformed syntax.
+	 */
+	private parseYieldOrStarExpressions(): ExprNode {
+		return this.check(TokenType.YIELD)
+			? this.parseYieldExpr()
+			: this.parseTestListWithStar();
+	}
+
+	/**
 	 * Parses an `atom`: the base case of the expression grammar — names,
 	 * numeric/string/f-string/boolean/`None`/ellipsis literals, parenthesized
-	 * expressions, tuples, list/dict/set displays and comprehensions, or
-	 * `yield`/`yield from`.
+	 * expressions (including a parenthesized `yield`), tuples, and list/dict/
+	 * set displays and comprehensions.
 	 * @returns The parsed atomic expression node.
 	 * @throws {ParseError} On malformed or unrecognized atom syntax.
 	 */
 	private parseAtom(): ExprNode {
 		const start = this.peek();
-
-		// Handle yield expressions
-		if (this.match(TokenType.YIELD)) {
-			if (this.match(TokenType.FROM)) {
-				const value = this.parseTest();
-				return {
-					nodeType: "YieldFrom",
-					value,
-					lineno: start.lineno,
-					col_offset: start.col_offset,
-					end_lineno: this.previous().end_lineno,
-					end_col_offset: this.previous().end_col_offset,
-				};
-			} else {
-				let value: ExprNode | undefined;
-				if (
-					!this.check(TokenType.NEWLINE) &&
-					!this.check(TokenType.RPAR) &&
-					!this.check(TokenType.RSQB) &&
-					!this.check(TokenType.RBRACE) &&
-					!this.check(TokenType.COMMA) &&
-					!this.isAtEnd()
-				) {
-					value = this.parseTestListWithStar();
-				}
-				return {
-					nodeType: "Yield",
-					value,
-					lineno: start.lineno,
-					col_offset: start.col_offset,
-					end_lineno: this.previous().end_lineno,
-					end_col_offset: this.previous().end_col_offset,
-				};
-			}
-		}
 
 		if (this.match(TokenType.NAME)) {
 			const token = this.previous();
@@ -3059,7 +3151,16 @@ export class Parser {
 				};
 			}
 
-			const expr = this.parseTestOrStarred();
+			if (this.check(TokenType.YIELD)) {
+				const yieldExpr = this.parseYieldExpr();
+				this.consume(TokenType.RPAR, "Expected ')' after yield expression");
+				return yieldExpr;
+			}
+
+			const expr = this.parseStarNamedExpression();
+			if (expr.nodeType === "Starred" && this.check(TokenType.RPAR)) {
+				throw this.error("cannot use starred expression here");
+			}
 
 			// Check for generator expression
 			if (this.isComprehensionStart()) {
@@ -3082,7 +3183,7 @@ export class Parser {
 				const elts = [expr];
 
 				while (!this.check(TokenType.RPAR) && !this.isAtEnd()) {
-					elts.push(this.parseTestOrStarred());
+					elts.push(this.parseStarNamedExpression());
 					if (!this.match(TokenType.COMMA)) break;
 				}
 
@@ -3261,6 +3362,9 @@ export class Parser {
 					if (seenSlash) {
 						throw this.error("/ may appear only once");
 					}
+					if (args.length === 0) {
+						throw this.error("at least one argument must precede /");
+					}
 					seenSlash = true;
 					// Move all current args to posonlyargs
 					posonlyargs.push(...args);
@@ -3420,6 +3524,9 @@ export class Parser {
 				}
 				if (seenSlash) {
 					throw this.error("/ may appear only once");
+				}
+				if (args.length === 0) {
+					throw this.error("at least one argument must precede /");
 				}
 				seenSlash = true;
 				posonlyargs.push(...args);
@@ -3688,8 +3795,10 @@ export class Parser {
 		}
 
 		const firstStart = this.peek();
-		const first = this.parseTest();
+		const firstTest = this.parseTest();
 
+		// A slice bound is a plain `expression` (only a parenthesized walrus),
+		// while a lone subscript may be a bare walrus.
 		if (this.match(TokenType.COLON)) {
 			// Slice
 			let upper: ExprNode | undefined;
@@ -3711,7 +3820,7 @@ export class Parser {
 
 			return {
 				nodeType: "Slice",
-				lower: first,
+				lower: firstTest,
 				upper,
 				step,
 				lineno: firstStart.lineno,
@@ -3721,7 +3830,11 @@ export class Parser {
 			};
 		}
 
-		return first;
+		const named = this.finishNamedExpression(firstStart, firstTest);
+		if (named !== firstTest && this.check(TokenType.COLON)) {
+			throw this.error("invalid syntax");
+		}
+		return named;
 	}
 
 	/**
@@ -3746,7 +3859,7 @@ export class Parser {
 			};
 		}
 
-		const first = this.parseTestOrStarred();
+		const first = this.parseStarNamedExpression();
 
 		// Check for list comprehension (PEP 798 allows a `*expr` element)
 		if (this.isComprehensionStart()) {
@@ -3768,7 +3881,7 @@ export class Parser {
 		const elts = [first];
 		while (this.match(TokenType.COMMA)) {
 			if (this.check(TokenType.RSQB)) break;
-			elts.push(this.parseTestOrStarred());
+			elts.push(this.parseStarNamedExpression());
 		}
 
 		this.consume(TokenType.RSQB, "Expected ']' after list");
@@ -3867,7 +3980,7 @@ export class Parser {
 			}
 			while (this.match(TokenType.COMMA)) {
 				if (this.check(TokenType.RBRACE)) break;
-				elts.push(this.parseTestOrStarred());
+				elts.push(this.parseStarNamedExpression());
 			}
 
 			this.consume(TokenType.RBRACE, "Expected '}' after set");
@@ -3882,7 +3995,17 @@ export class Parser {
 			};
 		}
 
-		const first = this.parseTest();
+		const firstStart = this.peek();
+		const firstTest = this.parseTest();
+
+		// A dict key is a plain `expression` (only a parenthesized walrus),
+		// while a set element may be a bare walrus.
+		const first = this.check(TokenType.COLON)
+			? firstTest
+			: this.finishNamedExpression(firstStart, firstTest);
+		if (first !== firstTest && this.check(TokenType.COLON)) {
+			throw this.error("invalid syntax");
+		}
 
 		if (this.match(TokenType.COLON)) {
 			// Dictionary
@@ -3943,7 +4066,7 @@ export class Parser {
 			const elts = [first];
 			while (this.match(TokenType.COMMA)) {
 				if (this.check(TokenType.RBRACE)) break;
-				elts.push(this.parseTestOrStarred());
+				elts.push(this.parseStarNamedExpression());
 			}
 
 			this.consume(TokenType.RBRACE, "Expected '}' after set");
@@ -4186,8 +4309,6 @@ export class Parser {
 				for (const elt of expr.elts) {
 					this.setContext(elt, ctx);
 				}
-				break;
-			default:
 				break;
 		}
 	}
@@ -4534,6 +4655,7 @@ export class Parser {
 		const parts: ExprNode[] = [];
 		let anyFString = false;
 		let anyTemplateStr = false;
+		let bytesParts = 0;
 
 		while (this.match(TokenType.STRING)) {
 			const token = this.previous();
@@ -4547,6 +4669,7 @@ export class Parser {
 				parts.push(this.parseTemplateStr(token));
 			} else {
 				const quoteStyle = this.getStringQuoteStyle(token.value);
+				if (/^[a-z]*b/i.test(quoteStyle)) bytesParts++;
 				const constant: Constant = {
 					nodeType: "Constant",
 					value: this.parseString(token.value),
@@ -4568,6 +4691,9 @@ export class Parser {
 			throw new Error(
 				"cannot mix t-string literals with string or bytes literals",
 			);
+		}
+		if (bytesParts > 0 && bytesParts < parts.length) {
+			throw new Error("cannot mix bytes and nonbytes literals");
 		}
 
 		if (parts.length === 1) {
@@ -5271,7 +5397,7 @@ export class Parser {
 			tempParser.tokens = new Lexer(exprText, { implicitLineJoining: true })
 				.tokenize()
 				.filter((t) => t.type !== TokenType.COMMENT);
-			expr = tempParser.parseTestListWithStar();
+			expr = tempParser.parseYieldOrStarExpressions();
 		} catch (_error) {
 			throw this.errorAt(
 				token,
@@ -5688,12 +5814,17 @@ export class Parser {
 	 * collapsing into a `Tuple` when more than one element is present
 	 * (trailing comma allowed). Used for expression statements and
 	 * assignment left-hand sides that may include starred targets.
+	 * @param allowNamed Whether items may be unparenthesized walruses
+	 * (`star_named_expressions`, as in a match subject) rather than plain
+	 * `star_expressions`.
 	 * @returns The single expression, or a `Tuple` node.
 	 * @throws {ParseError} On malformed expression syntax.
 	 */
-	private parseTestListWithStar(): ExprNode {
+	private parseTestListWithStar(allowNamed = false): ExprNode {
 		const start = this.peek();
-		const expr = this.parseTestOrStarred();
+		const parseItem = () =>
+			allowNamed ? this.parseStarNamedExpression() : this.parseTestOrStarred();
+		const expr = parseItem();
 
 		if (this.match(TokenType.COMMA)) {
 			const elts = [expr];
@@ -5711,7 +5842,7 @@ export class Parser {
 				!this.check(TokenType.EQUAL) &&
 				!this.check(TokenType.COLON)
 			) {
-				elts.push(this.parseTestOrStarred());
+				elts.push(parseItem());
 				if (!this.match(TokenType.COMMA)) break;
 			}
 
