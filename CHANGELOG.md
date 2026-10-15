@@ -1,3 +1,54 @@
+# [2.0.0](https://github.com/kriss-u/py-ast/compare/v1.16.0...v2.0.0) (2026-10-15)
+
+
+* fix(parser)!: match CPython 3.15 on real-world code and tighten syntax errors ([#35](https://github.com/kriss-u/py-ast/issues/35)) ([26bc7a4](https://github.com/kriss-u/py-ast/commit/26bc7a4da88cf57aa02f2b3cac388ad7f8fe75da))
+
+
+### Bug Fixes
+
+* **playground:** use comfortable spacing in flow analysis ([df7dbf1](https://github.com/kriss-u/py-ast/commit/df7dbf1f75effeca692c5d172feeebe7d13edfda))
+
+
+### BREAKING CHANGES
+
+* `DictComp.value` is now optional (`value?: ExprNode`).
+A PEP 798 unpacking comprehension (`{**d for d in ds}`) has no value,
+matching CPython, so TypeScript code reading `.value` directly needs to
+handle `undefined`.
+
+* docs: document differences from CPython's ast
+
+DIFFERENCES.md lists where py-ast's tree differs from CPython's and why:
+JavaScript-side workarounds (Ellipsis, bytes, int vs float, complex),
+extra fields, source decoding, where unparse deliberately differs from
+ast.unparse, and which invalid code is still accepted. It also states
+the version policy: accept the syntax of every supported Python
+version, and never drop syntax a later version removes.
+
+* fix(parser): reject syntax that every supported Python version rejects
+
+Tighten parsing to CPython's grammar where every supported version
+(checked against 3.9, 3.10, 3.12, and 3.15) agrees the code is invalid,
+so nothing a supported version accepts is refused:
+
+- an unparenthesized walrus outside named_expression positions
+  (conditions, decorators, match subjects and guards, positional call
+  arguments, display and comprehension elements, a lone subscript), and
+  a walrus target that isn't a name
+- `yield` outside its allowed positions (expression statement,
+  assignment value, parentheses, f-string field)
+- `try` with no `except`/`finally`, or `else` without `except`
+- an unparenthesized generator that isn't the sole call argument
+- `(*a)`, `case [(*rest)]`, `from x import (*)`, `def f(/)`
+- mixing bytes and non-bytes literals
+- a decorator with no newline after it, and a compound statement
+  after `;`
+
+The real-world corpus still parses and round-trips in full. The
+remaining accepted-but-invalid inputs are errors CPython raises outside
+its grammar (unknown __future__ features, encodings, unknown \N{} names),
+listed in DIFFERENCES.md.
+
 # [1.16.0](https://github.com/kriss-u/py-ast/compare/v1.15.1...v1.16.0) (2026-08-18)
 
 
