@@ -230,7 +230,7 @@ const ROUNDTRIP_SAMPLE = [
 	"await func()",
 	"yield 42",
 	"yield from generator",
-	"x := 42",
+	"(x := 42)",
 	"[]",
 	"[1, 2, 3]",
 	"(1, 2, 3)",

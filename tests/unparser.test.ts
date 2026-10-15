@@ -807,12 +807,9 @@ describe("Unparser", () => {
 		});
 
 		test("named expression (walrus operator)", () => {
-			// A bare `x := 42` statement is invalid in CPython (the walrus
-			// target needs enclosing parens outside contexts like `if`/`while`
-			// conditions), so `ast.unparse` always parenthesizes a top-level
-			// `NamedExpr` — matched here even though this parser is more
-			// permissive than CPython about accepting the bare form.
-			testUnparse("x := 42", "(x := 42)");
+			// A bare `x := 42` statement is invalid in CPython, so a
+			// `NamedExpr` statement is always written parenthesized.
+			testUnparse("(x := 42)", "(x := 42)");
 			testRoundtrip("if (n := len(items)) > 0:\n    print(n)");
 		});
 	});

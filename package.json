@@ -36,6 +36,7 @@
 		"py2json": "node demo/py2json.mjs",
 		"corpus": "node scripts/corpus/run.mjs",
 		"corpus:roundtrip": "node scripts/corpus/roundtrip.mjs",
+		"corpus:fetch": "node scripts/corpus/fetch.mjs",
 		"release": "semantic-release",
 		"release:dry": "semantic-release --dry-run",
 		"release:local": "node scripts/release-local.mjs",

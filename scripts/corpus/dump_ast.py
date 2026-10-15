@@ -20,8 +20,21 @@ without per-file interpreter startup cost.
 """
 
 import ast
+import io
 import json
 import sys
+import tokenize
+
+
+def encode_float(value):
+    """Encode a float as JSON, spelling non-finite values as "nan"/"inf"/"-inf" (JSON has no literal for them)."""
+    if value != value:  # NaN
+        return "nan"
+    if value == float("inf"):
+        return "inf"
+    if value == float("-inf"):
+        return "-inf"
+    return value
 
 
 def encode_constant(value):
@@ -36,15 +49,9 @@ def encode_constant(value):
         # Stringified: JS numbers lose precision beyond 2**53.
         return {"$type": "int", "$value": str(value)}
     if isinstance(value, float):
-        if value != value:  # NaN
-            return {"$type": "float", "$value": "nan"}
-        if value == float("inf"):
-            return {"$type": "float", "$value": "inf"}
-        if value == float("-inf"):
-            return {"$type": "float", "$value": "-inf"}
-        return {"$type": "float", "$value": value}
+        return {"$type": "float", "$value": encode_float(value)}
     if isinstance(value, complex):
-        return {"$type": "complex", "$value": {"real": value.real, "imag": value.imag}}
+        return {"$type": "complex", "$value": {"real": encode_float(value.real), "imag": encode_float(value.imag)}}
     if isinstance(value, str):
         return {"$type": "str", "$value": value}
     if isinstance(value, bytes):
@@ -99,11 +106,20 @@ def node_to_dict(node):
 
 
 def dump_file(path):
-    """Parse `path` and return its normalized AST dict, or raise SyntaxError/UnicodeDecodeError/OSError."""
+    """Parse `path`, returning `(ast_dict, decoded_source_or_None)`.
+
+    py-ast only accepts already-decoded text, so for a file that isn't plain
+    UTF-8 (a BOM, or a PEP 263 coding declaration like latin-1) the text
+    CPython decoded is returned too, letting the runner hand py-ast exactly
+    what CPython parsed rather than a lossy UTF-8 read of the same bytes.
+    Raises SyntaxError/UnicodeDecodeError/OSError on failure.
+    """
     with open(path, "rb") as f:
         source = f.read()
     tree = ast.parse(source, filename=path)
-    return node_to_dict(tree)
+    encoding, _ = tokenize.detect_encoding(io.BytesIO(source).readline)
+    decoded = None if encoding == "utf-8" else source.decode(encoding)
+    return node_to_dict(tree), decoded
 
 
 def main():
@@ -112,11 +128,13 @@ def main():
         if not path:
             continue
         try:
-            ast_dict = dump_file(path)
+            ast_dict, decoded = dump_file(path)
             record = {"file": path, "ok": True, "ast": ast_dict}
+            if decoded is not None:
+                record["source"] = decoded
         except Exception as exc:  # noqa: BLE001 - report any failure, keep the batch alive
             record = {"file": path, "ok": False, "error": f"{type(exc).__name__}: {exc}"}
-        sys.stdout.write(json.dumps(record) + "\n")
+        sys.stdout.write(json.dumps(record, allow_nan=False) + "\n")
         sys.stdout.flush()
 
 

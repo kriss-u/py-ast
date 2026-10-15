@@ -263,11 +263,10 @@ describe("Import with Parentheses", () => {
 			expect(stmt.names[1].asname).toBe("alias2");
 		});
 
-		test("star import with parentheses", () => {
-			const stmt = parseStatement(`from module import (*)`);
-			assertNodeType(stmt, "ImportFrom");
-			expect(stmt.names).toHaveLength(1);
-			expect(stmt.names[0].name).toBe("*");
+		test("star import with parentheses is rejected, as in CPython", () => {
+			expect(() => parseStatement(`from module import (*)`)).toThrow(
+				/Expected name/,
+			);
 		});
 	});
 

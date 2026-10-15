@@ -30,24 +30,10 @@ import { createInterface } from "node:readline";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { diffTrees, stripCpythonNoise, stripExtensions } from "./compare.mjs";
-import { collectPyFiles, defaultCorpusDirs } from "./discover.mjs";
+import { collectPyFiles, parseCorpusArgs, pythonCommand, resolveCorpusDirs } from "./discover.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
-
-function parseArgs(argv) {
-	const opts = { limit: Infinity, maxDiffs: 5, report: path.join(__dirname, "report.json"), stdlibOnly: false, quiet: false, dirs: [] };
-	for (let i = 0; i < argv.length; i++) {
-		const arg = argv[i];
-		if (arg === "--limit") opts.limit = Number(argv[++i]);
-		else if (arg === "--max-diffs") opts.maxDiffs = Number(argv[++i]);
-		else if (arg === "--report") opts.report = path.resolve(argv[++i]);
-		else if (arg === "--stdlib-only") opts.stdlibOnly = true;
-		else if (arg === "--quiet") opts.quiet = true;
-		else opts.dirs.push(path.resolve(argv[i]));
-	}
-	return opts;
-}
 
 /**
  * Spawns a single long-lived `dump_ast.py` process for `files` and returns
@@ -58,7 +44,7 @@ function parseArgs(argv) {
  * AST dump in memory simultaneously runs the Node heap out of memory.
  */
 async function* dumpWithPython(files) {
-	const child = spawn("python3", [path.join(__dirname, "dump_ast.py")]);
+	const child = spawn(pythonCommand(), [path.join(__dirname, "dump_ast.py")]);
 	let stderr = "";
 	child.stderr.on("data", (d) => {
 		stderr += d;
@@ -84,7 +70,7 @@ async function* dumpWithPython(files) {
 }
 
 async function main() {
-	const opts = parseArgs(process.argv.slice(2));
+	const opts = parseCorpusArgs(process.argv.slice(2), path.join(__dirname, "report.json"));
 
 	const distPath = path.join(REPO_ROOT, "dist", "index.esm.js");
 	if (!existsSync(distPath)) {
@@ -93,7 +79,7 @@ async function main() {
 	}
 	const { parse, PyComplex } = await import(distPath);
 
-	const corpusDirs = opts.dirs.length > 0 ? opts.dirs : await defaultCorpusDirs(opts.stdlibOnly);
+	const corpusDirs = await resolveCorpusDirs(opts);
 	console.log("Corpus directories:");
 	for (const d of corpusDirs) console.log(`  ${d}`);
 
@@ -128,7 +114,7 @@ async function main() {
 
 		let pyastTree;
 		try {
-			const source = await readFile(file, "utf8");
+			const source = cpy.source ?? (await readFile(file, "utf8"));
 			pyastTree = stripExtensions(parse(source, { filename: file }));
 		} catch (err) {
 			summary.pyAstParseError++;

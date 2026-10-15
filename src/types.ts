@@ -451,8 +451,10 @@ export interface SetComp extends Located {
 /** A dict comprehension, e.g. `{k: v for k, v in items}`. */
 export interface DictComp extends Located {
 	nodeType: "DictComp";
+	/** The key, or for a PEP 798 unpacking element (`{**d for d in ds}`, Python 3.15+) the unpacked mapping. */
 	key: ExprNode;
-	value: ExprNode;
+	/** The value; absent for a PEP 798 unpacking element, whose `key` is the unpacked mapping. */
+	value?: ExprNode;
 	generators: Comprehension[];
 }
 
@@ -538,7 +540,11 @@ export interface JoinedStr extends Located {
 export interface Interpolation extends Located {
 	nodeType: "Interpolation";
 	value: ExprNode;
-	/** Verbatim source text of the interpolated expression, exactly as written. */
+	/**
+	 * Verbatim source text of the interpolated expression, whitespace and line
+	 * breaks included but `#` comments removed (as in CPython). `unparse`
+	 * writes a non-empty `str` back as-is instead of re-rendering `value`.
+	 */
 	str: string;
 	/** Conversion code applied before formatting: -1 = none, 115 = `!s`, 114 = `!r`, 97 = `!a` (ASCII codes of s/r/a). */
 	conversion: number;
